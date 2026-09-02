@@ -1,0 +1,97 @@
+# Dependencies
+node_modules/
+node_modules
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+!bun.lock
+!backend/bun.lock
+!frontend/bun.lock
+bun.lockb
+!backend/bun.lockb
+!frontend/bun.lockb
+
+# Build outputs
+dist/
+dist-build/
+dist-old-root/
+dist.root.bak/
+build/
+.next/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor / IDE
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# Build tool caches
+.turbo/
+.cache/
+
+# Prisma dev artifacts
+backend/prisma/migrations/dev.db*
+
+# Claude Code / plugins
+.claude/
+.claude-workspace/
+
+# Internal docs (scratchpad) — kept outside VCS by preference.
+# Exception: docs/superpowers/ holds versioned specs and plans we DO want in git.
+# Pattern `docs/*` (not `docs/`) allows whitelisting subdirectories.
+docs/*
+!docs/superpowers/
+
+# Generated SDKs (regenerable from OpenAPI)
+frontend/src/api/generated/
+
+# Local backups
+*.bak
+*.bkp
+*.orig
+
+# Editor temp
+*~
+
+# TDD enforcer state (managed by hooks — never commit)
+.tdd-paused
+.tdd-state
+.tdd-state-*
+.tdd-cycles
+.tdd-cycles-*
+.tdd-log.jsonl
+.tdd-snapshots/
+
+# OS junk
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.superpowers/
+
+# SSH keys / secrets — never commit
+.secrets/
+
+# Dev scratch file (kept locally, must never enter the build: a .ts at the
+# backend root changes tsc rootDir and moves dist/main.js to dist/src/main.js)
+backend/demo-seed.ts
+
+# worktrees locais dos agentes (nunca versionar)
+.worktrees/

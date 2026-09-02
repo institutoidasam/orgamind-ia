@@ -1,0 +1,132 @@
+name: E2E
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: picoa
+          POSTGRES_PASSWORD: picoa
+          POSTGRES_DB: picoa_e2e
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U picoa"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://picoa:picoa@localhost:5432/picoa_e2e?schema=public
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      JWT_SECRET: e2e-test-secret-with-at-least-32-chars!
+      # Mirror production, which runs on the Evolution provider. Env validation
+      # fails fast at boot without a fully-configured provider group (schema
+      # superRefine), and ConfigModule validates eagerly at module-definition
+      # time, so even importing AppModule/WorkerModule needs them. Dummy
+      # values — no real Evolution server is contacted during e2e (no sends
+      # are triggered).
+      EVOLUTION_BASE_URL: http://localhost:8080
+      EVOLUTION_API_KEY: e2e-test-evolution-key
+      EVOLUTION_INSTANCE_NAME: e2e-test-instance
+      # GOZAP_* is an all-or-nothing group too (env.schema superRefine); dummy
+      # values here so any test that exercises GoZap registration/env parsing
+      # sees a complete group. No real GoZap host is contacted.
+      GOZAP_BASE_URL: https://dummy.gozap.dev
+      GOZAP_ADMIN_TOKEN: dummy
+      GOZAP_WEBHOOK_TOKEN: dummy
+      GOZAP_TOKEN_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      APP_BASE_URL: http://localhost:5173
+      WEBHOOK_BASE_URL: http://localhost:3000
+      CORS_ORIGIN: http://localhost:5173
+      NODE_ENV: test
+      LOG_LEVEL: error
+      BULL_BOARD_USER: admin
+      BULL_BOARD_PASSWORD: admin-test-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install backend deps
+        run: cd backend && bun install
+      - name: Generate Prisma client
+        run: cd backend && bun run prisma generate
+      - name: Run migrations + seed
+        run: |
+          cd backend
+          bun run prisma migrate deploy
+          bun run prisma db seed
+      - name: Build backend
+        run: cd backend && bun run build
+      - name: Start backend
+        run: |
+          cd backend
+          node dist/main.js &
+          echo $! > /tmp/backend.pid
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:3000/health/live >/dev/null; then
+              echo "backend ready"; break
+            fi
+            sleep 1
+          done
+      - name: Start worker
+        run: |
+          cd backend
+          node dist/worker.js &
+          echo $! > /tmp/worker.pid
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:3001/health/live >/dev/null; then
+              echo "worker ready"; break
+            fi
+            sleep 1
+          done
+
+      - name: Install frontend deps
+        run: cd frontend && bun install
+      - name: Generate fixtures
+        run: cd frontend && bun run e2e:fixtures
+      - name: Install Playwright browsers
+        run: cd frontend && bunx playwright install --with-deps chromium
+      - name: Build frontend
+        run: cd frontend && bun run build
+
+      - name: Run E2E tests
+        run: cd frontend && bun run test:e2e
+        env:
+          CI: true
+
+      - name: Stop backend + worker
+        if: always()
+        run: |
+          if [ -f /tmp/backend.pid ]; then
+            kill "$(cat /tmp/backend.pid)" 2>/dev/null || true
+          fi
+          if [ -f /tmp/worker.pid ]; then
+            kill "$(cat /tmp/worker.pid)" 2>/dev/null || true
+          fi
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7

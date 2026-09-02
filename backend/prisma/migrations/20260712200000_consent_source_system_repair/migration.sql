@@ -1,0 +1,17 @@
+-- fix/meta-optout-codes: fonte `SYSTEM_REPAIR` no ConsentSource.
+--
+-- webhooks.service.ts tinha `META_OPT_OUT_CODES = ['131026', '131047']`, que
+-- disparava REVOKE GLOBAL de consentimento para dois códigos que NÃO são
+-- opt-out (131026 = "Message Undeliverable" — preferência de plataforma;
+-- 131047 = janela de 24h expirada). Isso suprimiu contatos indevidamente
+-- (inclusive de UTILITY, que eles queriam receber).
+--
+-- O reparo (scripts/repair-provider-optout-misclassification.ts) precisa
+-- gravar um GRANT de REVERSÃO para cada contato indevidamente suprimido. Rotular
+-- essa reversão como PROVIDER_OPTOUT (a fonte do REVOKE errado) ou como
+-- MANUAL_ADMIN (que documenta "pedido feito por telefone/presencialmente" —
+-- não é isso: ninguém pediu nada) mentiria na trilha, e a trilha é a prova
+-- (art. 8º §2º). É uma correção de BUG do orgamind, não um ato do titular nem do
+-- operador — precisa de uma proveniência própria para o painel de opt-in
+-- (spec §7) não confundir "canal que funciona" com "reparo de dados".
+ALTER TYPE "ConsentSource" ADD VALUE IF NOT EXISTS 'SYSTEM_REPAIR';

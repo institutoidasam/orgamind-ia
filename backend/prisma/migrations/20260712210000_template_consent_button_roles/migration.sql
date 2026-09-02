@@ -1,0 +1,13 @@
+-- ZB — a declaração do operador sobre o papel de cada botão de resposta rápida
+-- de um template ZERNIO: [{ "text": "Sim, quero receber", "role": "OPT_IN" }, …].
+--
+-- O Zernio não transporta payload de quick_reply: o clique chega como o RÓTULO,
+-- e o reconhecimento é uma lista fechada. Do rótulo sozinho é indecidível se um
+-- botão é o "sim" de um opt-in. Sem esta coluna, um template importado do painel
+-- do Zernio com um rótulo não reconhecido chega APROVADO à campanha e colhe zero
+-- consentimento, em silêncio.
+--
+-- NULL = não declarado. É o estado seguro: o gate de campanha BLOQUEIA um
+-- template ZERNIO com quick reply de rótulo não reconhecido e papel não
+-- declarado, em vez de deixá-lo disparar.
+ALTER TABLE "Template" ADD COLUMN "consentButtonRoles" JSONB;

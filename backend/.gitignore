@@ -1,0 +1,13 @@
+node_modules
+# Keep environment variables out of version control
+.env
+
+/generated/prisma
+
+# Build output
+dist
+# Stale local-only build artifacts left over from past root-owned builds.
+# Kept gitignored until the host can rm them; harmless to include.
+dist-old-root
+dist.root.bak
+dist.root-owned

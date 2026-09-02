@@ -1,0 +1,1379 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// A organização TITULAR deste deploy — SINGLETON (id fixo `singleton`).
+///
+/// O orgamind é single-tenant POR INSTALAÇÃO: um deploy por cliente, uma
+/// organização por deploy. Esta linha existe porque a identidade da organização
+/// é o que vai para o TITULAR DOS DADOS — no texto de consentimento, na landing
+/// pública `/opt-in` e no texto pré-preenchido do wa.me/QR. Ela era HARDCODED, e
+/// um titular do cliente A autorizando "a organização B" é um consentimento
+/// incoerente: a Meta exige que o texto nomeie o negócio e a LGPD exige
+/// controlador determinado (art. 8º).
+///
+/// Semeada do env (`ORG_NAME`, `ORG_LEGAL_NAME`, `ORG_PRIVACY_POLICY_URL`,
+/// `ORG_SUPPORT_CONTACT`) e editável em Configurações — a tela vence o env: o
+/// seed roda em todo deploy e NÃO sobrescreve o que o operador ajustou.
+///
+/// Trocar a identidade NÃO reescreve consentimento já colhido: `ConsentText` é
+/// versionado e imutável, e os `ConsentEvent` seguem apontando para a versão que
+/// a pessoa leu. Para colher sob o nome novo, publica-se uma versão NOVA do texto.
+model Organization {
+  id               String   @id @default("singleton")
+  /// Nome curto, o rótulo do dia a dia. Ex.: "CONTINUUM".
+  name             String
+  /// Razão social por extenso — é ela que a Meta quer dentro do texto de
+  /// opt-in ("clearly state the business's name"). Conferir contra o CNPJ.
+  legalName        String
+  /// Resolve o `{url}` do texto canônico quando presente; senão, cai em
+  /// `APP_BASE_URL/privacidade`.
+  privacyPolicyUrl String?
+  /// Por onde o titular fala com a organização (e-mail, telefone, endereço).
+  supportContact   String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model User {
+  id                    String         @id @default(cuid())
+  email                 String         @unique
+  password              String
+  name                  String?
+  role                  Role           @default(OPERATOR)
+  mustChangePassword    Boolean        @default(true)
+  lastLoginAt           DateTime?
+  createdAt             DateTime       @default(now())
+  updatedAt             DateTime       @updatedAt
+  createdById           String?
+  createdBy             User?          @relation("UserInvites", fields: [createdById], references: [id])
+  invitedUsers          User[]         @relation("UserInvites")
+  ownedInstances        Channel[]      @relation("UserInstances")
+  assignedConversations Conversation[] @relation("AssignedConversations")
+  segments              Segment[]      @relation("SegmentAuthor")
+  optInLinks            OptInLink[]    @relation("OptInLinkAuthor")
+}
+
+enum Role {
+  ADMIN
+  OPERATOR
+}
+
+model Contact {
+  id                String               @id @default(cuid())
+  phoneE164         String               @unique
+  name              String?
+  city              String?
+  group             String?
+  tags              String[]
+  customFields      Json?
+  // CACHE DERIVADO de SuppressionList — nunca escrito à mão. true = existe
+  // REVOKE global ativo (o phoneHash está na SuppressionList). A fonte da
+  // verdade é a SuppressionList, que sobrevive à exclusão do contato e à
+  // reimportação de XLSX; este boolean existe só para filtro/UI e como defesa
+  // em profundidade no gate. Escrito exclusivamente por ConsentService.
+  optedOut          Boolean              @default(false)
+  // C1 — CACHE DERIVADO de ContactConsent, nunca escrito à mão (o único ponto
+  // de escrita é ConsentService.record()):
+  //   optInAt     = grantedAt do GRANT ativo mais recente de QUALQUER finalidade
+  //   optInSource = source desse mesmo evento
+  // Servem para listagem/filtro/UI e para o fast-path do gate. NENHUM gate de
+  // campanha decide só com eles: a decisão é por finalidade (ContactConsent).
+  // Inbound genérico NÃO escreve mais aqui — inbound abre JANELA de atendimento
+  // (Conversation.lastInboundAt), nunca consentimento de marketing.
+  optInAt           DateTime?
+  optInSource       String?
+  // C5 — AUDITORIA DA BASE (spec §6.2). Coorte de PROCEDÊNCIA, não de
+  // consentimento: diz de onde este contato veio, o que é a pergunta que a base
+  // de 13k nunca respondeu. null = ainda não classificado. Reescrito a cada
+  // execução do classificador (SourceOriginService) — é uma projeção dos sinais
+  // que já existem no banco, nunca uma entrada manual.
+  sourceOrigin      ContactSourceOrigin?
+  // POR QUE o classificador decidiu isso (o lote, a coluna, o inbound). Sem a
+  // nota, a coorte é um veredito sem prova — e o ponto do §6 é justamente ter a
+  // prova antes de tocar em qualquer botão de envio.
+  sourceOriginNote  String?
+  /// Quando a classificação rodou pela última vez.
+  sourceOriginAt    DateTime?
+  // Última INTERAÇÃO real do titular (max de Conversation.lastInboundAt e da
+  // última Message INBOUND). É o sinal da coorte C1 — e, de novo: relação
+  // demonstrável NÃO é consentimento (spec §1).
+  lastInteractionAt DateTime?
+
+  // ZE — INALCANÇÁVEL PARA MARKETING (ver marketing-reachability.ts).
+  // Alimentado pelo webhook de status e pelo caminho fatal do envio quando a
+  // Meta devolve 131026 ("desligou mensagens de marketing") ou 130472
+  // ("experimento de marketing"). Medido ao vivo: 30% da base.
+  //
+  // NÃO é consentimento (isso é ContactConsent/SuppressionList) — é
+  // ENTREGABILIDADE: a Meta não entrega template de MARKETING a este número.
+  // Campanhas UTILITY continuam alcançando (a própria Meta diz "UTILITY
+  // TEMPLATES ARE NOT AFFECTED"), por isso a exclusão é condicionada à
+  // categoria do template da campanha, e não global.
+  marketingUndeliverableAt     DateTime?
+  /// Código da Meta que gerou a marcação (131026 | 130472) — a prova.
+  marketingUndeliverableCode   String?
+  /// Motivo em PT-BR mostrado ao operador na tela da campanha.
+  marketingUndeliverableReason String?
+
+  // F2 — flag durável de falha DEFINITIVA (classifyFailure), no mesmo molde
+  // do marketingUndeliverable* acima: sobrevive ao retry (resetForRetry/
+  // resetForRedispatch não apagam mais isso), e é o que a tela do contato e o
+  // filtro de campanha leem. failureCount é monotônico e conta TODA falha
+  // (inclusive transitória), não só a definitiva.
+  lastFailureReason FailureReason?
+  lastFailureCode   String?
+  lastFailureAt     DateTime?
+  failureCount      Int            @default(0)
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+  imports           ImportItem[]
+  messages          Message[]
+  conversations     Conversation[]
+  consents          ContactConsent[]
+
+  // WhatsApp validation cache (populated by /chat/whatsappNumbers + fetchProfilePictureUrl).
+  // null = never checked. We refresh on demand or in batch — there's no automatic
+  // re-validation, so a contact whose WA presence flips becomes stale until the
+  // operator hits "Validar".
+  whatsappValid     Boolean?
+  whatsappCheckedAt DateTime?
+  profilePictureUrl String?
+  // Mirror of native WhatsApp Business labels assigned to this contact.
+  // Updated when the operator changes labels in the ORGAMIND UI; one-way for now
+  // (we don't ingest label changes the operator makes inside the WhatsApp app).
+  waLabels          String[]
+
+  @@index([city, group])
+  @@index([optedOut])
+  @@index([whatsappValid])
+  @@index([sourceOrigin])
+  // ZE — todo lote de campanha MARKETING filtra por este campo, e a tela conta
+  // os inalcançáveis da audiência. Sem índice, é seq scan na tabela mais quente.
+  @@index([marketingUndeliverableAt])
+  // F2 — filtro de campanha e tela de contatos leem "última falha definitiva".
+  @@index([lastFailureReason])
+}
+
+/// C5 — as coortes de procedência da base (spec §6.2). A classificação é
+/// ORDENADA: C5 exclui; depois C1 > C2 > C3 > C4. Um contato pode exibir sinais
+/// de duas coortes (interagiu E veio de uma ficha assinada) — vence a primeira.
+///
+/// O objetivo NÃO é "converter 13k". É descobrir o que a base realmente é: sob a
+/// política da Meta, número sem declaração de recebimento é "só um telefone", e
+/// contato de procedência desconhecida é literalmente o caso Telekall (primeira
+/// multa da ANPD, disparada por UMA denúncia).
+enum ContactSourceOrigin {
+  /// C1 — tem inbound (Message INBOUND ou Conversation.lastInboundAt). Relação
+  /// demonstrável, MAS NÃO É CONSENTIMENTO. Ação: pedir permissão dentro da
+  /// janela (grátis) ou convidar por link/QR.
+  INTERAGIU
+  /// C2 — a linha da planilha comprova que a pessoa deu o telefone E aceitou
+  /// receber comunicações do IDASAM. Ação: backfill de GRANT (IMPORT_LEGACY) com
+  /// a evidência anexa — resolve sem enviar nada.
+  DOCUMENTADA_COM_DECLARACAO
+  /// C3 — lista de inscrição/presença que só coletou o telefone. NÃO é opt-in,
+  /// nem para a Meta nem para a LGPD. Ação: recoleta por canal iniciado pela
+  /// pessoa. Nunca cold blast.
+  DOCUMENTADA_SEM_DECLARACAO
+  /// C4 — sem ImportItem, ou lote sem origem rastreável. Ação: não enviar NADA
+  /// por WhatsApp. Considerar arquivamento: uma base de 2.000 que quer ouvir vale
+  /// mais que 13.000 que denunciam.
+  DESCONHECIDA
+  /// C5 — `whatsappValid = false`. Disparar para número morto queima cota do tier
+  /// e a Twilio marca o tráfego como lower-quality.
+  INVALIDO_NAO_WHATSAPP
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// C1 — Núcleo do consentimento (LGPD art. 5º XII / 8º §§2º,4º,5º + política Meta)
+//
+// Consentimento é HISTÓRICO (ConsentEvent, append-only), escopado POR FINALIDADE
+// (ConsentPurpose) e provado pelo TEXTO exibido (evidenceText, por valor).
+// ContactConsent é o estado denormalizado que o gate lê; Contact.optInAt/
+// optedOut são caches. Único ponto de escrita: ConsentService.record().
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum ConsentAction {
+  GRANT
+  REVOKE
+}
+
+enum ConsentState {
+  GRANTED
+  REVOKED
+}
+
+enum ConsentSource {
+  WA_BUTTON // payload optin_yes / optout, dentro da janela de 24h
+  WA_KEYWORD // PARAR / VOLTAR (texto)
+  WA_LINK // wa.me com texto pré-preenchido que casa com a declaração
+  QR_CODE // idem, via QR (mesmo wa.me, com token de origem)
+  CTWA_AD // Click-to-WhatsApp Ad (referral no payload)
+  WEB_FORM // landing pública /opt-in
+  PAPER_FORM // ficha assinada em campo/evento, importada
+  MANUAL_ADMIN // operador registrando pedido feito por telefone/presencialmente
+  IMPORT_LEGACY // backfill auditado da base histórica
+  /// Titular bloqueou/parou DENTRO do WhatsApp e quem nos conta é o provedor
+  /// (Meta 131050 "recipient stopped receiving marketing messages", Twilio
+  /// 21610/63020/63024/63032…) — não um keyword nem um botão nosso.
+  /// NÃO inclui 131026 ("Message Undeliverable" — preferência de plataforma,
+  /// não dirigida à organização) nem 131047 (janela de 24h expirada, não
+  /// opt-out) — ver fix/meta-optout-codes.
+  PROVIDER_OPTOUT
+  /// Reversão automática de um REVOKE indevido, gravada por um script de
+  /// reparo de dados (ex.: fix/meta-optout-codes) — NÃO é um ato do titular
+  /// nem do operador, é uma correção de BUG do orgamind. Ver
+  /// scripts/repair-provider-optout-misclassification.ts.
+  SYSTEM_REPAIR
+}
+
+/// Finalidades do tratamento. TABELA (não enum) para o IDASAM criar finalidade
+/// nova sem migração. `key` é o slug estável usado no gate e nas campanhas.
+/// Autorização genérica é NULA (art. 8º §4º) — toda campanha declara UMA
+/// finalidade, e consentir para uma não autoriza as outras.
+model ConsentPurpose {
+  key         String   @id
+  label       String
+  description String
+  /// art. 11 — dado sensível exige consentimento específico e destacado; o
+  /// legítimo interesse não se aplica. O gate RECUSA override em finalidade
+  /// sensível (não é aviso de UI, é recusa).
+  isSensitive Boolean  @default(false)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  campaigns  Campaign[]
+  consents   ContactConsent[]
+  texts      ConsentText[]
+  optInLinks OptInLink[]
+}
+
+/// APPEND-ONLY (trigger `ConsentEvent_append_only` nega UPDATE/DELETE no
+/// Postgres — não é convenção de code review). Toda a trilha de quem entrou →
+/// saiu → voltou vive aqui; é ela que prova a licitude de cada disparo passado
+/// (art. 8º §2º: o ônus da prova é do controlador).
+///
+/// `contactId` NÃO tem foreign key, de propósito: (a) o evento precisa
+/// sobreviver à exclusão/recriação do contato — a chave durável é `phoneHash`;
+/// (b) uma FK com ON DELETE SET NULL emitiria um UPDATE nesta tabela, que o
+/// trigger append-only rejeitaria, tornando impossível apagar um Contact.
+model ConsentEvent {
+  id                 String        @id @default(cuid())
+  contactId          String?
+  /// sha256(E164 + PICOA_CONSENT_SALT). Sempre presente — sobrevive ao contato.
+  phoneHash          String
+  /// FK → ConsentPurpose.key, EXCETO o sentinela '*' (REVOKE global: PARAR,
+  /// botão optout, código de opt-out do provedor). Por isso não há constraint.
+  purposeKey         String
+  action             ConsentAction
+  source             ConsentSource
+  channelId          String?
+  /// Remetente concreto que exibiu/recebeu (snapshot por valor).
+  senderE164         String?
+  /// O TEXTO RENDERIZADO que a pessoa viu. É a prova — não o botão. A Meta
+  /// permite editar templates; guardar só o nome não prova, em 2028, o que foi
+  /// exibido em 2026. Obrigatório em GRANT.
+  evidenceText       String        @db.Text
+  consentTextVersion String?
+  /// Evidência por fonte (spec §2.4): inboundWamid, outboundWamid, ip,
+  /// userAgent, originToken, referralCtwaClid, scanSha256, rawRow…
+  evidence           Json?
+  /// Quando a PESSOA agiu (na ficha de papel: a data da assinatura).
+  occurredAt         DateTime
+  /// Quando o orgamind gravou.
+  recordedAt         DateTime      @default(now())
+  /// Quem registrou (import/manual). null = ato do próprio titular.
+  actorUserId        String?
+  createdAt          DateTime      @default(now())
+
+  @@index([contactId, purposeKey, occurredAt])
+  @@index([phoneHash, occurredAt])
+  @@index([source, occurredAt])
+}
+
+/// Estado denormalizado por (contato, finalidade) — o gate roda dentro de um
+/// loop de dispatch paginado e não pode reduzir eventos a cada contato.
+/// Recomputado na MESMA transação que insere o ConsentEvent.
+model ContactConsent {
+  contactId   String
+  contact     Contact        @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  purposeKey  String
+  purpose     ConsentPurpose @relation(fields: [purposeKey], references: [key], onDelete: Restrict)
+  state       ConsentState
+  lastEventId String
+  grantedAt   DateTime?
+  revokedAt   DateTime?
+  /// source do último GRANT ativo.
+  source      ConsentSource?
+  updatedAt   DateTime       @updatedAt
+
+  @@id([contactId, purposeKey])
+  @@index([purposeKey, state])
+  @@index([lastEventId])
+}
+
+/// Revogação DURÁVEL, desacoplada de Contact. Se o opt-out morasse só na linha
+/// de Contact, um contato que deu PARAR e fosse reimportado por XLSX voltaria a
+/// receber. Consultada no gate de envio E no pipeline de importação.
+/// Revogar ≠ apagar (art. 8º §5º ressalva os tratamentos já realizados).
+model SuppressionList {
+  phoneHash    String   @id
+  /// Guardado para listagem/diagnóstico do operador. A CHAVE é o phoneHash.
+  phoneE164    String?  @unique
+  suppressedAt DateTime @default(now())
+  /// 'keyword_parar' | 'button_optout' | 'manual' | 'provider_optout_code'
+  reason       String
+  /// 'ALL' (hoje só global).
+  scope        String   @default("ALL")
+  lastEventId  String?
+}
+
+/// Texto canônico de consentimento, VERSIONADO (spec §3.0). O corpo é a prova,
+/// e a razão social do IDASAM precisa ser confirmada contra o CNPJ antes do
+/// go-live — corrigir isso deve ser uma correção de DADO (nova versão), não de
+/// código. `body` é um template: `{url}` é resolvido no ponto de coleta e o
+/// corpo RENDERIZADO vai para ConsentEvent.evidenceText.
+model ConsentText {
+  id         String         @id @default(cuid())
+  version    String
+  purposeKey String
+  purpose    ConsentPurpose @relation(fields: [purposeKey], references: [key], onDelete: Restrict)
+  body       String         @db.Text
+  activeFrom DateTime       @default(now())
+  createdAt  DateTime       @default(now())
+
+  @@unique([version, purposeKey])
+  @@index([purposeKey, activeFrom])
+}
+
+/// C3 — um ponto de coleta wa.me/QR (spec §3.1).
+///
+/// O link é `https://wa.me/<senderDigits>?text=<expectedText>` e o QR é esse
+/// MESMO link. O texto pré-preenchido É a declaração de consentimento: quem
+/// aperta "enviar" pratica o ato afirmativo, e o inbound chega com um `wamid`
+/// verificável na Twilio — evidência de terceiro, não auto-declarada.
+///
+/// `expectedText` é um SNAPSHOT POR VALOR (declaração do ConsentText vigente +
+/// `[token]`), pela mesma razão que `ConsentEvent.evidenceText` é: o corpo é a
+/// prova. Publicar uma versão nova do texto canônico não pode reescrever o que
+/// os cartazes já impressos dizem — os links antigos continuam casando com o
+/// texto que ELES carregam, e cada GRANT cita a versão que gerou o link.
+model OptInLink {
+  id                 String         @id @default(cuid())
+  /// Token de origem LEGÍVEL (`FEIRA-MANAUS-2026`): é o sufixo `[...]` do texto
+  /// pré-preenchido, o que resolve o link no casamento do inbound e o que dá o
+  /// funil por ponto de coleta (§7). Um token por cartaz/evento/canal.
+  token              String         @unique
+  purposeKey         String
+  purpose            ConsentPurpose @relation(fields: [purposeKey], references: [key], onDelete: Restrict)
+  /// Versão do ConsentText que gerou `expectedText` — vai para todo GRANT.
+  /// String, e NÃO uma FK: é um snapshot por valor, igual ao `expectedText`.
+  /// Amarrar o link à linha viva do ConsentText permitiria que uma edição futura
+  /// mudasse retroativamente aquilo que o titular declarou ter lido.
+  consentTextVersion String
+  /// O texto que o wa.me pré-preenche = o que o inbound tem de casar.
+  expectedText       String         @db.Text
+  /// Dígitos do remetente no formato do wa.me (sem `+`, sem `00`).
+  senderDigits       String
+  /// Canal que recebe o inbound. SetNull: apagar o canal não pode apagar a
+  /// trilha de um ponto de coleta que já produziu consentimentos.
+  channelId          String?
+  channel            Channel?       @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  /// Onde este link foi distribuído, em português ("Cartaz da feira de Manaus").
+  description        String?
+  /// Desativar TIRA o link de circulação para inbounds futuros; não invalida
+  /// nenhum consentimento já colhido por ele (revogar ≠ apagar).
+  active             Boolean        @default(true)
+  createdById        String?
+  createdBy          User?          @relation("OptInLinkAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt          DateTime       @default(now())
+  updatedAt          DateTime       @updatedAt
+
+  @@index([active, createdAt])
+  @@index([purposeKey])
+  @@index([channelId])
+  @@index([createdById])
+}
+
+/// Saved, named, reusable contact filter. DYNAMIC: filters are re-evaluated on
+/// every use (live count). Reuses FilterGroup (schemas/contracts/filter.schema.ts)
+/// + filter.converter (which always excludes optedOut). Powers segment-targeted
+/// broadcasts (Campaign.segmentId).
+model Segment {
+  id            String     @id @default(cuid())
+  name          String     @unique
+  description   String?
+  filters       Json
+  createdById   String?
+  createdBy     User?      @relation("SegmentAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  lastCount     Int?
+  lastCountedAt DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  campaigns     Campaign[]
+
+  @@index([createdById])
+}
+
+model ImportBatch {
+  id           String            @id @default(cuid())
+  filename     String
+  totalRows    Int               @default(0)
+  importedRows Int               @default(0)
+  // Lifecycle of the async (BullMQ) import (A8 deeper fix). The upload endpoint
+  // creates the row PENDING and returns immediately; the worker flips it to
+  // PROCESSING, then COMPLETED (with `summary`) or FAILED (with `errors`).
+  status       ImportBatchStatus @default(PENDING)
+  // Per-batch outcome counts (created/updated/invalid/duplicates/total) recorded
+  // on COMPLETED. Null until the worker finishes.
+  summary      Json?
+  errors       Json?
+  createdAt    DateTime          @default(now())
+  items        ImportItem[]
+}
+
+enum ImportBatchStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model ImportItem {
+  id          String           @id @default(cuid())
+  importBatch ImportBatch      @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batchId     String
+  contact     Contact?         @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  contactId   String?
+  rawRow      Json
+  status      ImportItemStatus
+}
+
+enum ImportItemStatus {
+  CREATED
+  UPDATED
+  INVALID
+  DUPLICATE
+}
+
+model Template {
+  id        String           @id @default(cuid())
+  // NÃO é mais @unique GLOBAL. O catálogo de templates é POR WABA: duas contas
+  // WhatsApp diferentes podem ter, cada uma, um `boas_vindas` — com corpos e ids
+  // da Meta distintos. Com o unique global, o sync do 2º canal ou COLIDIA ou
+  // SOBRESCREVIA o template do 1º. A identidade real é
+  // (provider, channelId, metaName, language) — ver o @@unique no fim do model.
+  metaName  String
+  language  String
+  body      String
+  variables String[]
+  status    TemplateStatus
+  category  TemplateCategory
+  createdAt DateTime         @default(now())
+  campaigns Campaign[]
+
+  // Interactive-message support (Evolution provider only).
+  // TEXT keeps `body` semantic and ignores `interactiveConfig`. Other kinds
+  // require `interactiveConfig` to define the structure (list sections,
+  // button rows, poll options) — see schemas/contracts/template.schema.ts.
+  kind              TemplateKind @default(TEXT)
+  interactiveConfig Json?
+
+  // Twilio Content template link. When set (an approved `HX…` Content SID),
+  // cold/business-initiated Twilio sends reference this instead of `metaName`
+  // (which is lowercase-only and cannot hold an uppercase SID). See
+  // send-message.processor.ts and schemas/contracts/template.schema.ts.
+  twilioContentSid String?
+
+  // Provider the template targets (multi-provider channels). Backfilled to
+  // TWILIO for rows that already had a twilioContentSid; EVOLUTION otherwise.
+  provider ChannelProvider @default(EVOLUTION)
+
+  // Twilio Content approval sync (template-approval-sync job):
+  // - twilioApprovalStatus: status BRUTO reportado pela Twilio (received,
+  //   pending, approved, rejected, paused, disabled, in_appeal, ...) — o enum
+  //   `status` é um mapeamento com perda; o raw preserva o diagnóstico.
+  // - twilioRejectionReason: rejection_reason da Meta (ou "Template removido
+  //   na Twilio" quando o HX sumiu do catálogo).
+  // - lastTwilioSyncAt: quando o sync tocou a row pela última vez.
+  twilioApprovalStatus  String?
+  twilioRejectionReason String?
+  lastTwilioSyncAt      DateTime?
+
+  // ── ZC — catálogo de templates do Zernio ──────────────────────────────────
+  // O canal (WABA) de onde este template veio. NULL nos templates que não são de
+  // um canal específico (EVOLUTION manual, catálogo Meta/Twilio da organização
+  // inteira) — daí ser opcional, e daí o @@unique abaixo só morder de verdade
+  // quando há canal (no Postgres, NULLs são DISTINCT num índice único).
+  channelId String?
+  channel   Channel? @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  // O `message_template_id` da META (numérico, ex. "833669913010819") — não é
+  // ObjectId do Zernio. É a chave por onde o webhook `template.status_updated`
+  // casa o evento com a row.
+  zernioTemplateId String?
+
+  // Os `components` crus da Meta (HEADER/BODY/FOOTER/BUTTONS). Guardados porque
+  // `body` + `variables[]` PERDEM a estrutura — e sem a estrutura não dá para
+  // montar o array POSICIONAL de `templateParams` (header de texto consome a 1ª
+  // posição, header de mídia não consome nenhuma, botão URL consome uma no fim).
+  components Json?
+
+  // Espelho do trio da Twilio (acima), pelo mesmo motivo:
+  // - zernioStatusRaw: o status BRUTO da Meta. O enum `status` é um mapeamento
+  //   COM PERDA (DISABLED e PENDING_DELETION viram PAUSED); o raw preserva o
+  //   diagnóstico e sobrevive a status que a Meta invente amanhã.
+  // - zernioRejectionReason: o `reason` da Meta (vem no webhook).
+  // - lastZernioSyncAt: quando o sync tocou a row (o "sincronizado há X" da UI).
+  zernioStatusRaw       String?
+  zernioRejectionReason String?
+  lastZernioSyncAt      DateTime?
+
+  // ZB — a DECLARAÇÃO do operador sobre o papel de cada botão de resposta rápida:
+  // `[{ "text": "Sim, quero receber", "role": "OPT_IN" }, …]`.
+  //
+  // Existe porque o Zernio NÃO transporta payload de quick_reply: o clique só
+  // chega como o RÓTULO, e o reconhecedor é uma LISTA FECHADA
+  // (schemas/contracts/consent-button.schema.ts). Do rótulo sozinho é
+  // INDECIDÍVEL se um "Bora, quero!" é o "sim" de um opt-in (e portanto 13.400
+  // cliques indo para o lixo) ou um botão comum inofensivo. Quem decide é o
+  // operador — e o gate de campanha RECUSA um template ZERNIO cujos quick
+  // replies não têm papel declarado nem rótulo reconhecido.
+  //
+  // Preenchida na criação pelo orgamind (POST /templates/zernio) e por
+  // PATCH /templates/:id/consent-buttons nos templates importados do painel do
+  // Zernio. O sync RECONCILIA: rótulo que a Meta mudou perde a declaração e
+  // volta a bloquear (é a proteção contra uma row aprovada que colhe zero).
+  consentButtonRoles Json?
+
+  // A identidade REAL de um template: o mesmo nome pode existir em WABAs
+  // diferentes, e o mesmo nome pode existir em idiomas diferentes na mesma WABA.
+  @@unique([provider, channelId, metaName, language])
+  @@index([zernioTemplateId])
+}
+
+enum TemplateKind {
+  TEXT
+  LIST
+  BUTTONS
+  POLL
+}
+
+model Campaign {
+  id              String         @id @default(cuid())
+  name            String
+  template        Template       @relation(fields: [templateId], references: [id])
+  templateId      String
+  filters         Json
+  variableMap     Json
+  totalRecipients Int
+  status          CampaignStatus @default(DRAFT)
+  scheduledAt     DateTime?
+  startedAt       DateTime?
+  finishedAt      DateTime?
+  messages        Message[]
+  createdAt       DateTime       @default(now())
+
+  // Scheduling / recurrence
+  scheduleType    ScheduleType @default(IMMEDIATE)
+  scheduleConfig  Json? // shape varies per scheduleType (see schedule.schema.ts)
+  scheduleEnabled Boolean      @default(true)
+  nextRunAt       DateTime?
+  lastRunAt       DateTime?
+  runCount        Int          @default(0)
+  // C2: o IDASAM opera em MANAUS (UTC-4, sem horário de verão). O default
+  // anterior (America/Sao_Paulo) fazia toda campanha agendada disparar 1h mais
+  // cedo. É um default de COLUNA: campanhas já gravadas mantêm o fuso delas.
+  timezone        String       @default("America/Manaus")
+
+  defaultInstanceId String
+  defaultInstance   Channel @relation("CampaignDefaultInstance", fields: [defaultInstanceId], references: [id])
+
+  // Per-campaign typing-indicator delay applied to every outbound send.
+  // 0 = disabled (default, current behaviour). Operators can bump it to
+  // ~1.5–2.5 s for small campaigns to look more like a human typing.
+  presenceDelayMs Int @default(0)
+
+  // LEGADO — só campanhas criadas antes de 2026-08; novas usam lotes.
+  //
+  // "Limitar aos N primeiros contatos", por ORDEM DE CADASTRO (Contact.id asc).
+  // O recorte é aplicado ANTES de qualquer exclusão (ver applyAudienceLimit),
+  // então numa campanha nova ele cai sempre sobre as MESMAS N pessoas mais
+  // antigas — a armadilha que fez o cliente reenviar para os mesmos 500 três
+  // vezes. O contrato de criação (createCampaignSchema) hoje RECUSA o campo;
+  // a coluna fica porque campanhas recorrentes antigas dependem dela para não
+  // mudar de público de repente. NULL = sem limite.
+  limit Int?
+
+  // C1 — finalidade declarada da campanha (art. 8º §4º: autorização genérica é
+  // nula). O gate exige ContactConsent(contato, purposeKey) = GRANTED. Nullable
+  // no banco só porque a migração é aditiva sobre linhas legadas: campanha SEM
+  // purposeKey em canal oficial não passa NINGUÉM (fail-safe — sem finalidade
+  // não há consentimento válido a checar).
+  purposeKey String?
+  purpose    ConsentPurpose? @relation(fields: [purposeKey], references: [key], onDelete: Restrict)
+
+  // Reconhecimento de risco anti-ban pelo operador nos send-checks do create.
+  // Como gate de CONSENTIMENTO ele é INEXPRIMÍVEL em canal oficial (TWILIO/
+  // META/ZERNIO): lá o campo é simplesmente ignorado. Onde sobrevive (EVOLUTION,
+  // base legada) exige três invariantes duras: role ADMIN (já garantida pelo
+  // @Roles('ADMIN') do endpoint), `overrideJustification` não-vazia, e teto de
+  // CONSENT_OVERRIDE_MAX_RECIPIENTS destinatários. NUNCA fura SuppressionList,
+  // optedOut nem finalidade sensível.
+  override              Boolean @default(false)
+  overrideJustification String?
+
+  // ★ Pedido do cliente 2026-08-25 — "excluir quem já recebeu" só bloqueava
+  // quem já estava numa campanha do MESMO template (spec 2026-08-12,
+  // `sameTemplateBlockFilter` em batch-audience.ts): uma campanha nova com um
+  // template DIFERENTE não excluía ninguém, e era isso que o operador via
+  // como "não funciona". Default `false` preserva o comportamento de sempre
+  // (só o mesmo template); `true` amplia a rede para QUALQUER campanha
+  // anterior (ativa ou cancelada, mesma régua de status) — anti-join por
+  // CONTATO, não por template. Ver `CampaignsService#sameTemplateExclusion`.
+  excludeAnyPreviousCampaign Boolean @default(false)
+
+  // ★ Pedido do cliente 2026-08-25 — a janela de horário de envio
+  // (Channel.sendWindow*) só é aplicada pelo worker a canais DE SESSÃO
+  // (unofficial, ex.: EVOLUTION); canais OFICIAIS (hoje só a ZERNIO em
+  // produção) nunca a respeitaram — a Cloud API tem os próprios limites. Este
+  // campo dá ao operador um botão explícito por campanha; default `true`
+  // mantém o comportamento atual onde ele já se aplicava (canal de sessão).
+  // Ver send-message.processor.ts.
+  respeitarJanelaDeEnvio Boolean @default(true)
+
+  // Segment-targeted broadcast: when set, recipients are the segment's CURRENT
+  // members (filters re-resolved at each run → dynamic). When null, the campaign
+  // uses its inline `filters` (current behaviour).
+  segmentId String?
+  segment   Segment? @relation(fields: [segmentId], references: [id], onDelete: SetNull)
+
+  // ZE — os LOTES já executados desta campanha (ver CampaignBatch).
+  batches CampaignBatch[]
+
+  // ZD — o disparo nativo do Zernio que ESTA campanha originou, quando houver.
+  // Hoje está sempre VAZIO, e isso é a informação: o orgamind envia 1-a-1 por
+  // `POST /inbox/conversations` (nunca cria `/broadcasts`), então todo
+  // ZernioBroadcast espelhado veio do PAINEL do Zernio. É exatamente essa
+  // distinção que a tela de métricas mostra — ver ZernioBroadcast.campaignId.
+  zernioBroadcasts ZernioBroadcast[]
+
+  @@index([scheduleEnabled, nextRunAt])
+  @@index([segmentId])
+  @@index([purposeKey])
+}
+
+enum ScheduleType {
+  IMMEDIATE // dispatched once via /run, no recurrence
+  ONCE_AT // one-shot at scheduleConfig.runAt
+  DAILY_AT // every day at scheduleConfig.time (HH:mm)
+  WEEKLY // scheduleConfig.weekdays + time
+  INTERVAL // every scheduleConfig.everyMinutes
+}
+
+model Conversation {
+  id                   String            @id @default(cuid())
+  instanceId           String
+  instance             Channel           @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  remoteJid            String
+  // Nullable: a @lid-addressed contact may be unresolved (no real phone known
+  // yet). Never store the opaque LID as a fake phone — leave null and display a
+  // fallback until the contact is active and we harvest the real number.
+  phoneE164            String?
+  contactId            String?
+  contact              Contact?          @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  waName               String?
+  profilePicUrl        String?
+  // U2: last avatar fetch attempt (success OR null) — throttles the 24h TTL
+  // refresh; stamping failed attempts keeps private/404 profiles at 1 try/day.
+  profilePicFetchedAt  DateTime?
+  lastMessageAt        DateTime?
+  lastMessagePreview   String?
+  lastMessageDirection MessageDirection?
+  // Janela de 24h do WhatsApp (customer service window): timestamp da ÚLTIMA
+  // mensagem INBOUND desta conversa (par contato↔canal). Não existe API para
+  // consultar a janela — persistir e comparar com now() no envio é a única
+  // detecção. Preenchido no ingest para TODOS os providers; só canais TWILIO
+  // usam no guard de envio/countdown do inbox.
+  lastInboundAt        DateTime?
+  unreadCount          Int               @default(0)
+  archivedAt           DateTime?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+  messages             Message[]
+
+  // Optional assignment (team coordination — NOT access control; inbox stays
+  // org-wide shared). Any operator can (re)assign; AuditEvent records who.
+  assignedUserId String?
+  assignedUser   User?     @relation("AssignedConversations", fields: [assignedUserId], references: [id], onDelete: SetNull)
+  assignedAt     DateTime?
+
+  // Dify: contexto isolado por conversa + estado de handoff do bot.
+  difyConversationId String?
+  botPausedAt        DateTime?
+
+  @@unique([instanceId, remoteJid])
+  @@index([instanceId, archivedAt, lastMessageAt(sort: Desc)])
+  @@index([contactId])
+  @@index([phoneE164])
+  @@index([assignedUserId])
+}
+
+/// Learned mapping from a WhatsApp LID (privacy id) to the real phone number.
+/// Harvested opportunistically from inbound message keys (remoteJidAlt /
+/// senderPn) — the only reliable source, since WhatsApp exposes no LID->phone
+/// lookup API. Used to resolve @lid conversations to the real number/name.
+model LidPnMap {
+  id         String   @id @default(cuid())
+  instanceId String
+  lid        String // the LID jid, e.g. "192410374131731@lid"
+  phoneE164  String // resolved real number, e.g. "+559293550101"
+  name       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([instanceId, lid])
+  @@index([instanceId, phoneE164])
+}
+
+model MessageMedia {
+  id            String      @id @default(cuid())
+  messageId     String      @unique
+  message       Message     @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  kind          MessageKind
+  status        MediaStatus @default(PENDING)
+  mimeType      String?
+  fileName      String?
+  sizeBytes     Int?
+  durationSec   Int?
+  width         Int?
+  height        Int?
+  storageKey    String?
+  failureReason String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+}
+
+/// ZE — UMA EXECUÇÃO EM LOTE de uma campanha.
+///
+/// A campanha deixou de ser "dispara tudo de uma vez": o operador escolhe
+/// QUANTOS enviar agora ("enviar 50"), e o lote resolve sozinho PARA QUEM —
+/// só quem ainda não foi contatado NAQUELA campanha e não é inalcançável.
+/// A campanha só termina quando não sobra pendente.
+///
+/// Este model é o HISTÓRICO (quando, quantos foram pedidos, quantos entraram,
+/// quantos o gate pulou). O resultado de cada lote sai das Messages que ele
+/// gerou (Message.campaignBatchId), não de contadores que poderiam divergir.
+model CampaignBatch {
+  id         String   @id @default(cuid())
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  campaignId String
+  /// Sequencial por campanha (1, 2, 3…) — é como o operador chama o lote.
+  /// Atribuído sob o lock 'resend' da campanha; o @@unique é a garantia no banco.
+  seq        Int
+  /// Quantos o operador pediu ("enviar agora para N contatos").
+  requested  Int
+  /// Quantos de fato entraram na fila. Pode ser MENOR que `requested` quando a
+  /// audiência pendente acabou antes — não é erro, é o fim da campanha.
+  queued     Int      @default(0)
+  /// Pulados pelo gate DURANTE este lote (sem consentimento + suprimidos). Eles
+  /// consomem audiência pendente sem consumir cota de envio.
+  skipped    Int      @default(0)
+  startedAt  DateTime @default(now())
+  finishedAt DateTime?
+  /// Quem apertou o botão (auditoria).
+  createdByUserId String?
+  messages   Message[]
+
+  @@unique([campaignId, seq])
+  @@index([campaignId])
+}
+
+model Message {
+  id                String           @id @default(cuid())
+  campaign          Campaign?        @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  campaignId        String?
+  // ZE — o lote que gerou esta mensagem. Null nas mensagens anteriores ao ZE e
+  // nas que não vieram de um lote (retry avulso, redispatch, mensagem de chat).
+  // É o que dá o "resultado" de cada lote no histórico.
+  campaignBatch     CampaignBatch?   @relation(fields: [campaignBatchId], references: [id], onDelete: SetNull)
+  campaignBatchId   String?
+  /// ZB — o BROADCAST do Zernio que carregou esta mensagem. NULL = saiu pelo
+  /// envio 1-a-1 (`POST /inbox/conversations`), que continua sendo o padrão.
+  ///
+  /// É por este vínculo que o polling do `GET /broadcasts/{id}/recipients` acha
+  /// as linhas a atualizar, e que o kill-switch acha os disparos a CANCELAR.
+  /// SetNull: apagar o espelho do disparo não pode apagar a mensagem (que é a
+  /// prova de que a pessoa recebeu — ou de que foi recusada pelo gate).
+  zernioBroadcast   ZernioBroadcast? @relation(fields: [zernioBroadcastId], references: [id], onDelete: SetNull)
+  zernioBroadcastId String?
+  contact           Contact?         @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  contactId         String?
+  conversation      Conversation?    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversationId    String?
+  direction         MessageDirection @default(OUTBOUND)
+  kind              MessageKind      @default(TEXT)
+  content           String?
+  // Speech-to-text transcription for inbound voice notes (when Evolution's
+  // speechToText is enabled on the instance — the transcript arrives on the webhook).
+  transcript        String?
+  media             MessageMedia?
+  providerMessageId String?          @unique
+  status            MessageStatus    @default(QUEUED)
+  errorCode         String?
+  errorMessage      String?
+  /// F2 — motivo normalizado da falha (classifyFailure), gravado nos mesmos
+  /// sites que já escrevem errorCode. NULL no histórico anterior ao F2 (sem
+  /// backfill) e em qualquer status que não seja FAILED.
+  failureReason     FailureReason?
+  variables         Json?
+  quotedWaMessageId String?
+  quotedPreview     String?
+  authorUserId      String?
+  // Setado quando a mensagem OUTBOUND foi gerada por um Bot (auto-resposta).
+  botId             String?
+  bot               Bot?             @relation(fields: [botId], references: [id], onDelete: SetNull)
+  createdAt         DateTime         @default(now())
+  queuedAt          DateTime         @default(now())
+  // Set when the row is claimed QUEUED->SENDING. The reconciler measures
+  // time-in-SENDING from here (NOT queuedAt, which is creation time and stays
+  // fixed across long pacing/daily-limit delays).
+  sendingAt         DateTime?
+  sentAt            DateTime?
+  deliveredAt       DateTime?
+  readAt            DateTime?
+  failedAt          DateTime?
+  receivedAt        DateTime?
+
+  instanceId String
+  instance   Channel @relation(fields: [instanceId], references: [id], onDelete: Restrict)
+
+  @@index([campaignId, status])
+  @@index([contactId])
+  @@index([contactId, sentAt])
+  // F1 — o anti-join do filtro "excluir quem já recebeu" faz
+  // messages:{none:{campaignId:{in},status:{in}}} por contato. Sem este
+  // índice composto, o NOT EXISTS cai no @@index([contactId]) puro e filtra
+  // campanha/status em cima.
+  @@index([contactId, campaignId, status])
+  // F2 — histórico do contato filtra as próprias mensagens por status.
+  @@index([contactId, status])
+  // F2 — agregação GET /campaigns/:id/failure-reasons agrupa por motivo
+  // dentro de uma campanha.
+  @@index([campaignId, failureReason])
+  @@index([instanceId, status])
+  @@index([conversationId, createdAt])
+  // Dashboard metrics scan Message by queuedAt window (sparkline) and by
+  // status within that window (deliveryRate7d). Without these, both go to a
+  // full seq scan on a hot, growing table.
+  @@index([queuedAt])
+  @@index([status, queuedAt])
+  @@index([botId])
+  // ZE — o histórico de lotes agrupa as mensagens por lote para mostrar o
+  // resultado de cada um.
+  @@index([campaignBatchId])
+  // ZB — o polling varre "as mensagens deste disparo". Sem o índice, cada tick
+  // é um seq scan na tabela mais quente do banco.
+  @@index([zernioBroadcastId])
+
+  // ★ TRAVA DE BANCO: UMA LINHA VIVA POR (campaignId, contactId).
+  //
+  // Existe um índice ÚNICO PARCIAL sobre (campaignId, contactId) — restrito a
+  // `direction = OUTBOUND` e aos estados em que uma segunda linha vira uma
+  // segunda ENTREGA (QUEUED, WAITING_INSTANCE, SENDING, SENT, DELIVERED,
+  // READ). Ele NÃO PODE ser declarado aqui: o Prisma não modela índice único
+  // parcial, então ele vive só no SQL da migration
+  // `20260819010000_message_one_live_row_per_campaign_contact` — mesmo padrão
+  // (e mesmo motivo) de `WhatsappInstance_provider_default_key`.
+  //
+  // ⚠️ Ele não aparece no `prisma migrate diff`: uma migration GERADA depois
+  // desta pode conter um DROP INDEX dele. Se aparecer, apague a linha do DROP —
+  // é a trava que impede o mesmo eleitor de receber a mesma campanha duas vezes.
+  //
+  // Por que PARCIAL e não `@@unique([campaignId, contactId])`: FAILED,
+  // CANCELLED e os SKIPPED_* são histórico e podem se repetir de propósito (o
+  // lote seguinte recria a linha de quem teve falha transitória), e a limpeza
+  // da migration precisa NEUTRALIZAR duplicatas de produção sem apagá-las —
+  // uma linha neutralizada continua ocupando o par num único global.
+}
+
+enum TemplateStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  // Meta pausou (feedback negativo) ou desabilitou o template aprovado —
+  // Twilio `paused`|`disabled` mapeiam para cá. Fica FORA do gate de campanha
+  // (que só aceita APPROVED).
+  PAUSED
+}
+
+enum TemplateCategory {
+  MARKETING
+  UTILITY
+  AUTHENTICATION
+}
+
+enum CampaignStatus {
+  DRAFT
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum MessageStatus {
+  QUEUED
+  WAITING_INSTANCE
+  SENDING
+  SENT
+  DELIVERED
+  READ
+  RECEIVED
+  FAILED
+  CANCELLED
+  // T8 (legado): destinatário pulado pelo gate binário de opt-in. NÃO é mais
+  // escrito — permanece no enum para não quebrar linhas históricas.
+  SKIPPED_NO_OPTIN
+  // C1: destinatário sem consentimento ATIVO para a FINALIDADE da campanha
+  // (ContactConsent != GRANTED e sem janela que autorize). Terminal.
+  SKIPPED_NO_CONSENT
+  // C1: destinatário na SuppressionList (REVOKE global). Terminal, absoluto —
+  // nem override de ADMIN fura (art. 8º §5º).
+  SKIPPED_SUPPRESSED
+}
+
+/// F2 — motivo normalizado de uma falha de envio, classificado num ponto
+/// único (classifyFailure(errorCode, provider)) a partir do errorCode cru que
+/// cada provedor devolve. Grava-se em Message.failureReason (todo envio
+/// FAILED) e, quando a falha é DEFINITIVA, também vira estado durável em
+/// Contact.lastFailureReason (sobrevive ao retry).
+enum FailureReason {
+  // Meta/Zernio: número não tem WhatsApp (131021) ou instância não achou o
+  // contato (63003).
+  SEM_WHATSAPP
+  // Titular optou por sair (131050, recipient_opted_out/opted_out/suppressed,
+  // 21610, 63020/63024/63032) — vocabulário varia por provedor.
+  OPT_OUT
+  // Meta: destinatário desligou mensagens de marketing (131026) ou está no
+  // experimento de marketing (130472). NÃO afeta templates UTILITY.
+  MARKETING_DESLIGADO
+  // Backend: gate de consentimento recusou o envio (no_consent).
+  SEM_CONSENTIMENTO
+  // Fora da janela de 24h de serviço (131047, 63016) — precisa de template.
+  FORA_DA_JANELA
+  // Limite diário de mensagens do provedor/conta estourado (131049).
+  LIMITE_DIARIO
+  // Telefone com formato inválido (invalid_field_value, 21211).
+  TELEFONE_INVALIDO
+  // Template rejeitado/indisponível no provedor (132000/132001/132005/
+  // 132007/132012/132015/132016, 63040/63041/63042, template_required).
+  TEMPLATE_INDISPONIVEL
+  // Canal fora do ar / desautorizado (enqueue_failed,
+  // antiban.instance_deleted, campaign_cancelled, 401, 403, 131031,
+  // linked_account_required, account_not_found).
+  CANAL_FORA
+  // Falha transitória/ambígua do provedor (twilio.indeterminate,
+  // twilio.timeout, sending_stuck, zernio.timeout, zernio.unreachable).
+  INDETERMINADO
+  // Qualquer errorCode não mapeado (ou nulo) cai aqui — default seguro.
+  OUTRO
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageKind {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+  STICKER
+  LOCATION
+  CONTACT
+  UNSUPPORTED
+}
+
+enum MediaStatus {
+  PENDING
+  READY
+  FAILED
+}
+
+model AuditEvent {
+  id        String   @id @default(cuid())
+  actorId   String?
+  action    String // e.g. "auth.login", "campaign.run", "contact.delete"
+  entity    String // e.g. "User", "Campaign", "Contact", "ImportBatch"
+  entityId  String?
+  metadata  Json?
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([entity, entityId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([action, createdAt])
+}
+
+model WhatsappConnectionEvent {
+  id         String   @id @default(cuid())
+  instanceId String
+  instance   Channel  @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  state      String
+  reasonCode Int?
+  occurredAt DateTime @default(now())
+
+  @@index([instanceId, occurredAt(sort: Desc)])
+}
+
+enum ChannelProvider {
+  EVOLUTION
+  TWILIO
+  ZERNIO
+  META
+  GOZAP
+}
+
+model Channel {
+  id                        String          @id @default(cuid())
+  name                      String
+  provider                  ChannelProvider @default(EVOLUTION)
+  evolutionInstanceName     String?         @unique
+  apiKey                    String?
+  twilioMessagingServiceSid String?
+  zernioAccountId           String?         @unique
+  // O `profileId._id` da conta no Zernio (o Profile agrupa contas). Capturado do
+  // `GET /accounts`. É campo OBRIGATÓRIO do `POST /broadcasts` — sem ele, a
+  // campanha nativa do Zernio não sai. NULL = canal criado antes deste campo (o
+  // tier-sync o preenche na próxima rodada).
+  zernioProfileId           String?
+  // ZB — este canal manda campanha pelo BROADCAST NATIVO do Zernio?
+  //
+  // FALSE por padrão, e isso é uma decisão, não um descuido: o envio 1-a-1
+  // (`POST /inbox/conversations`, uma chamada por pessoa) continua sendo o
+  // PADRÃO e o FALLBACK até o broadcast provar que funciona contra a API real.
+  // O broadcast é uma OPÇÃO — o que ele compra é APARECER NO PAINEL do Zernio
+  // (hoje a campanha do orgamind é invisível lá); o que ele custa é entregar o
+  // pacing para o Zernio (ver ZernioBroadcastDispatchProcessor).
+  zernioBroadcastEnabled    Boolean         @default(false)
+  // ZB — destinatários por requisição no `POST /broadcasts/{id}/recipients`.
+  //
+  // O site do Zernio anuncia 100/request; o OpenAPI NÃO declara `maxItems` (e a
+  // mesma spec declara `maxItems:1000` em /contacts/bulk — ela SABE declarar, e
+  // aqui não declarou). Ou seja: ninguém sabe o limite real. Este campo existe
+  // para que o valor seja um DADO, não uma constante — e o auto-backoff do
+  // cliente o corrige lendo o corpo do erro. Ver zernio-broadcast-chunk.helper.
+  zernioBroadcastChunk      Int             @default(50)
+  // Quando o zernioAccountId foi conferido contra `GET /accounts` do Zernio.
+  // NULL = nunca validado (ou validado em modo degradado, com o Zernio fora do
+  // ar) → o id pode estar errado, e um id errado faz TODO webhook daquela conta
+  // ser descartado em silêncio. Ver ZernioAccountsService.
+  zernioAccountVerifiedAt   DateTime?
+  phoneE164                 String?
+  // GOZAP — identidade da instância (sessão WhatsApp) no tenant GoZap. Único
+  // globalmente (uma instância = um canal).
+  gozapInstanceId           String?         @unique
+  // GOZAP — token da instância emitido por POST /instance/create. DIFERENTE de
+  // todo o resto do sistema (credencial só em env): o GoZap emite credencial POR
+  // instância, então ela vive aqui. Guardado CIFRADO (AES-256-GCM, ver
+  // gozap-token-cipher). Nunca serializado em resposta de API (omit no repo).
+  gozapInstanceToken        String?
+  profileName               String?
+  profilePictureUrl         String?
+
+  ownerUserId String?
+  ownerUser   User?   @relation("UserInstances", fields: [ownerUserId], references: [id], onDelete: SetNull)
+
+  isDefault Boolean @default(false)
+  isActive  Boolean @default(true)
+
+  rejectCall      Boolean @default(true)
+  msgCall         String  @default("Não atendemos chamadas. Mande uma mensagem.")
+  groupsIgnore    Boolean @default(true)
+  alwaysOnline    Boolean @default(false)
+  readMessages    Boolean @default(false)
+  readStatus      Boolean @default(false)
+  syncFullHistory Boolean @default(false)
+
+  globalPresenceDelayMs Int       @default(4000)
+  globalJitterMaxMs     Int       @default(5000)
+  dailySendLimit        Int       @default(500)
+  // Anti-ban warm-up: set when the number is PAIRED (not row creation — a number
+  // can be re-paired onto an existing instance). The send path ramps the daily
+  // cap up from this timestamp (see warmup.helper.ts). Null = no ramp (full cap).
+  warmupStartedAt       DateTime?
+  sendWindowStartHour   Int       @default(8)
+  sendWindowEndHour     Int       @default(20)
+  sendWindowEnabled     Boolean   @default(true)
+
+  sentToday        Int      @default(0)
+  sentTodayResetAt DateTime @default(now())
+
+  // ZA — qualidade do número na Meta (GREEN | YELLOW | RED | FLAGGED | UNKNOWN),
+  // lida pelo tier-sync do provedor. É o ESTADO ANTERIOR persistido: sem ele não
+  // dá para detectar a TRANSIÇÃO (GREEN → YELLOW/RED), que é o sinal de que a
+  // conta está a caminho da restrição — e é a transição, não o valor, que
+  // dispara o kill-switch de qualidade. NULL = nunca lido.
+  qualityRating String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  messages           Message[]
+  campaignsAsDefault Campaign[]                @relation("CampaignDefaultInstance")
+  connectionEvents   WhatsappConnectionEvent[]
+  conversations      Conversation[]
+  optInLinks         OptInLink[]
+  // Execuções da sincronização de inbox do Zernio (progresso/retomada).
+  zernioSyncRuns     ZernioSyncRun[]
+  // ZC — o catálogo de templates daquela WABA (o catálogo é POR conta).
+  templates          Template[]
+  // ZD — espelho dos disparos do Zernio (inclusive os feitos fora do orgamind).
+  zernioBroadcasts   ZernioBroadcast[]
+  // ZD — fotografia diária do volume de mensagens no lado do Zernio.
+  zernioSnapshots    ZernioAnalyticsSnapshot[]
+
+  botId String?
+  bot   Bot?    @relation(fields: [botId], references: [id], onDelete: SetNull)
+
+  @@index([ownerUserId, isActive])
+  @@index([botId])
+  @@index([provider, isActive])
+  @@map("WhatsappInstance")
+}
+
+model Bot {
+  id              String    @id @default(cuid())
+  /// id do app no Dify (identidade do espelho auto-sincronizado).
+  difyAppId       String?   @unique
+  name            String
+  /// modo do app no Dify (chat | agent-chat | advanced-chat).
+  mode            String?
+  description     String?
+  /// Segredo: NUNCA retornado em respostas de API (omit no repositório).
+  difyApiKey      String
+  /// Opcional; quando null usa o env DIFY_BASE_URL (inclui o sufixo /v1).
+  difyBaseUrl     String?
+  /// Enviada ao contato em caso de falha do Dify, antes do handoff.
+  fallbackMessage String?
+  /// inputs padrão passados ao app Dify (variáveis do app). Default {}.
+  inputs          Json?
+  isActive        Boolean   @default(true)
+  /// Última sincronização (nome/modo/chave) com o Dify.
+  lastSyncedAt    DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  instances Channel[]
+  messages  Message[]
+}
+
+/// Um webhook que CHEGOU, foi AUTENTICADO e mesmo assim não pôde ser
+/// processado — porque nenhum canal ativo corresponde à conta/número que o
+/// enviou. Antes disto, esse caso era só um `logger.warn` e um HTTP 200: o
+/// operador não tinha NENHUMA pista, na interface, de que estava perdendo dados.
+///
+/// Foi exatamente assim que um disparo real de ~100 mensagens sumiu: 24
+/// `message.read`, 5 `message.received` e 4 `message.delivered` chegaram para uma
+/// conta Zernio sem canal configurado e foram descartados em silêncio. Conversas
+/// e dashboard vazios, e ninguém sabia por quê.
+///
+/// Cada linha é um contador por (provedor, conta, evento). A página Canais lê
+/// isto e mostra um banner de alerta com a conta e a contagem. Não é fila de
+/// reprocessamento: o payload não é guardado — é DETECÇÃO, para que a perda pare
+/// de ser invisível.
+model WebhookDrop {
+  id          String          @id @default(cuid())
+  provider    ChannelProvider
+  /// Quem enviou, na identidade do provedor: ZERNIO → o accountId; TWILIO → o
+  /// número `To`. É a chave que deveria ter casado com um canal e não casou.
+  accountRef  String
+  /// O tipo do evento perdido (`message.read`, `message.received`, `status`…).
+  event       String
+  count       Int             @default(1)
+  firstSeenAt DateTime        @default(now())
+  lastSeenAt  DateTime        @default(now())
+
+  @@unique([provider, accountRef, event])
+  @@index([lastSeenAt])
+}
+
+/**
+ * Uma execução do sync do inbox do Zernio — o que dá PROGRESSO e RETOMADA ao
+ * que antes era uma request síncrona de 3 minutos terminando em HTTP 500.
+ * `cursor` é o ponto de retomada: a página de conversas que estava sendo
+ * processada. Uma execução interrompida (deploy, 429 teimoso, worker morto) não
+ * perde o que já importou — o ingest grava conversa a conversa, e a dedupe por
+ * wamid faz a reexecução continuar sem duplicar.
+ */
+model ZernioSyncRun {
+  id                     String              @id @default(cuid())
+  channel                Channel             @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  channelId              String
+  status                 ZernioSyncRunStatus @default(PENDING)
+  /**
+   * Conversas de WhatsApp DESCOBERTAS até agora (o Zernio não dá total).
+   */
+  totalConversations     Int                 @default(0)
+  processedConversations Int                 @default(0)
+  importedMessages       Int                 @default(0)
+  /**
+   * Conversas puladas por erro — falha PARCIAL, não derruba o run.
+   */
+  failedConversations    Int                 @default(0)
+  /**
+   * Página de conversas onde retomar. Null => começa do início.
+   */
+  cursor                 String?
+  error                  String?
+  startedAt              DateTime?
+  finishedAt             DateTime?
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+
+  @@index([channelId, createdAt])
+}
+
+enum ZernioSyncRunStatus {
+  PENDING
+  RUNNING
+  /**
+   * Cedeu o balde para uma campanha em curso — o envio tem prioridade.
+   */
+  PAUSED
+  SUCCEEDED
+  FAILED
+}
+
+/**
+ * ZD — o espelho local de um disparo (`broadcast`) do Zernio.
+ * Por que existe: o cliente dispara PELO PAINEL do Zernio, e o orgamind ficava
+ * cego — não sabia quantas mensagens saíram, quantas chegaram, quantas foram
+ * lidas. Esta tabela é o que torna o orgamind a VISÃO ÚNICA: ela espelha `GET
+ * /broadcasts` inteiro, INCLUSIVE os disparos que nunca passaram por aqui.
+ * ORIGEM (a coluna que o cliente quer ver): `campaignId` NULO = disparado pelo
+ * PAINEL do Zernio. Preenchido = originado por uma Campaign do orgamind. Hoje é
+ * SEMPRE nulo — o orgamind envia 1-a-1 por `POST /inbox/conversations` e nunca
+ * cria `/broadcasts` nativos (decisão do dossiê: o broadcast nativo não tem
+ * consentimento por finalidade, warm-up nem opt-out durável). O campo existe
+ * porque se um dia o orgamind criar um broadcast, o vínculo tem de nascer com ele.
+ * ARMADILHA DOS CONTADORES (verificada ao vivo, e é contraintuitiva): os
+ * contadores NÃO são um funil cumulativo — são uma PARTIÇÃO dos destinatários
+ * pelo status ATUAL de cada um. Um disparo real trouxe
+ * `recipientCount:120, sent:2, delivered:10, read:71, failed:37` — e
+ * 2+10+71+37 = 120 EXATAMENTE. Ou seja, quem foi LIDO não é contado em
+ * `deliveredCount`. Portanto:
+ * entregues (ou melhor) = deliveredCount + readCount   ← NÃO é deliveredCount
+ * taxa de entrega       = (deliveredCount + readCount) / recipientCount
+ * Ler `deliveredCount / sentCount` daria 10/2 = 500%.
+ */
+model ZernioBroadcast {
+  id              String    @id @default(cuid())
+  /**
+   * O `id` do broadcast no Zernio. Chave do upsert idempotente: o sync roda a
+   * cada ~15 min e reescreve os contadores da MESMA linha.
+   */
+  zernioId        String    @unique
+  channel         Channel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  channelId       String
+  /**
+   * A Campaign do orgamind que originou o disparo. NULL = veio do painel do
+   * Zernio. Ver a nota de ORIGEM acima. SetNull: apagar a campanha não pode
+   * apagar o histórico do que o Zernio realmente disparou.
+   */
+  campaign        Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  campaignId      String?
+  name            String
+  /**
+   * Cru do Zernio: draft | scheduled | sending | completed | failed | cancelled.
+   * String (e não enum) de propósito: um status novo do Zernio não pode quebrar
+   * o sync nem exigir migração.
+   */
+  status          String
+  /**
+   * `messagePreview` do Zernio: "Template: bem_vindo_mg" ou um trecho do texto.
+   */
+  messagePreview  String?
+  /**
+   * O nome do template, extraído do `messagePreview` quando ele tem o formato
+   * "Template: <nome>". NULL quando o disparo não foi de template.
+   */
+  templateName    String?
+  scheduledAt     DateTime?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  recipientCount  Int       @default(0)
+  sentCount       Int       @default(0)
+  deliveredCount  Int       @default(0)
+  readCount       Int       @default(0)
+  failedCount     Int       @default(0)
+  /**
+   * Destinatários que o Zernio pulou (sem canal, não inscrito). Não está no
+   * OpenAPI, mas vem na resposta ao vivo — e entra na soma dos contadores.
+   */
+  skippedCount    Int       @default(0)
+  /**
+   * `createdAt` NO ZERNIO — não o desta linha. É por ele que a tela ordena: o
+   * que importa é quando o disparo foi criado lá, não quando o sync o viu.
+   */
+  zernioCreatedAt DateTime?
+  syncedAt        DateTime  @default(now())
+  createdAt       DateTime  @default(now())
+
+  /// ZB — as mensagens do orgamind que ESTE disparo carregou. Vazio quando o
+  /// disparo veio do painel do Zernio (aí o orgamind só espelha os contadores).
+  messages        Message[]
+
+  @@index([channelId, zernioCreatedAt])
+  @@index([campaignId])
+}
+
+/**
+ * ZD — fotografia DIÁRIA do volume de mensagens do lado do Zernio, por canal.
+ * Fonte: `GET /analytics/inbox/volume?accountId=&fromDate=&toDate=` — que é o
+ * endpoint de analytics que de fato serve. (`GET /analytics`, sem sufixo, é
+ * analytics de POSTS de rede social: devolve `{overview:{totalPosts:0}, posts:[]}`
+ * para esta conta. Não tem nada a ver com WhatsApp.)
+ * Por que espelhar em vez de consultar ao vivo: cada consulta bebe do balde de
+ * 60 req/min COMPARTILHADO com o envio. Uma tela que consultasse o Zernio a cada
+ * refresh roubaria vazão da campanha. O job diário paga uma vez; a tela lê o
+ * banco.
+ * O que ele NÃO é: a verdade sobre FALHAS. O `failed` daqui contou 0 no mesmo
+ * período em que um broadcast reportou 37 destinatários com falha — os
+ * destinatários rejeitados nunca viram uma "mensagem" no inbox do Zernio. Para
+ * falha de disparo, a fonte é o ZernioBroadcast; este modelo é VOLUME.
+ */
+model ZernioAnalyticsSnapshot {
+  id        String   @id @default(cuid())
+  channel   Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  channelId String
+  /**
+   * O DIA (UTC, meia-noite) que estes números resumem — o `date` de cada item
+   * do `timeseries` do Zernio. Com o @@unique abaixo, o job diário reescreve o
+   * dia que ainda está mudando em vez de duplicá-lo.
+   */
+  day       DateTime
+  /**
+   * Mensagens que SAÍRAM (todas as origens: painel do Zernio + orgamind).
+   */
+  sent      Int      @default(0)
+  received  Int      @default(0)
+  read      Int      @default(0)
+  failed    Int      @default(0)
+  syncedAt  DateTime @default(now())
+
+  @@unique([channelId, day])
+  @@index([day])
+}

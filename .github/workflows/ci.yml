@@ -1,0 +1,152 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: picoa
+          POSTGRES_PASSWORD: picoa
+          POSTGRES_DB: picoa_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U picoa"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://picoa:picoa@localhost:5432/picoa_test?schema=public
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      JWT_SECRET: ci-test-secret-with-at-least-32-chars!!
+      # Mirror production, which runs on the Evolution provider. Env validation
+      # fails fast at boot without a fully-configured provider group (schema
+      # superRefine), and ConfigModule validates eagerly at module-definition
+      # time, so even importing AppModule/WorkerModule needs them. Dummy
+      # values — no real Evolution server is contacted by the unit/integration
+      # suite.
+      EVOLUTION_BASE_URL: http://localhost:8080
+      EVOLUTION_API_KEY: ci-test-evolution-key
+      EVOLUTION_INSTANCE_NAME: ci-test-instance
+      # GOZAP_* is an all-or-nothing group too (env.schema superRefine); dummy
+      # values here so any test that exercises GoZap registration/env parsing
+      # sees a complete group. No real GoZap host is contacted.
+      GOZAP_BASE_URL: https://dummy.gozap.dev
+      GOZAP_ADMIN_TOKEN: dummy
+      GOZAP_WEBHOOK_TOKEN: dummy
+      GOZAP_TOKEN_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      APP_BASE_URL: http://localhost:5173
+      WEBHOOK_BASE_URL: http://localhost:3000
+      CORS_ORIGIN: http://localhost:5173
+      NODE_ENV: test
+      LOG_LEVEL: error
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: latest }
+      - name: Install backend deps
+        run: cd backend && bun install
+      - name: Generate Prisma client
+        run: cd backend && bun run prisma generate
+      - name: Run migrations
+        run: cd backend && bun run prisma migrate deploy
+      - name: Run tests
+        run: cd backend && bun run test
+      - name: Build
+        run: cd backend && bun run build
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: latest }
+      - name: Install frontend deps
+        run: cd frontend && bun install
+      # ⚠️ ESTE PASSO PRECISA VIR ANTES DO TYPE CHECK E DOS TESTES — não é
+      # ordem estética. `src/routeTree.gen.ts` é GERADO pelo plugin
+      # TanStackRouterVite (vite.config.ts) e é gitignored
+      # (frontend/.gitignore), logo NÃO existe após o checkout. Sem ele,
+      # `tsc -b` falha com "Cannot find module './routeTree.gen'" e mais ~26
+      # erros em cascata (todo `createFileRoute('/x')` vira
+      # "not assignable to parameter of type 'undefined'", porque os tipos de
+      # rota vêm desse arquivo). `vite build` roda o plugin e o gera — por
+      # isso ele abre a sequência. Quem for extrair o build para outro job
+      # precisa levar a geração da árvore de rotas junto.
+      - name: Build (gera src/routeTree.gen.ts)
+        run: cd frontend && bun run build
+      - name: Type check
+        # F1 review fix — o tsconfig da RAIZ do frontend só tem `files:[]` +
+        # `references` (é um ponteiro pros tsconfigs reais); `tsc --noEmit`
+        # nele não checa NADA — passava mesmo com erros de tipo no código.
+        # `bun run typecheck` roda `tsc -b` (build de projeto referenciado),
+        # o typecheck de verdade.
+        run: cd frontend && bun run typecheck
+      # ZB — o CI NUNCA rodou os testes do frontend, embora o package.json os
+      # defina: todo `*.spec.ts` de src/ era decorativo. Um teste que não roda não
+      # protege nada — e a validação de rótulo de consentimento do form depende
+      # de teste para não apodrecer.
+      - name: Run tests
+        run: cd frontend && bun run test
+
+  migration-drift:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: picoa
+          POSTGRES_PASSWORD: picoa
+          POSTGRES_DB: picoa_check
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U picoa"
+          --health-interval 5s
+    env:
+      DATABASE_URL: postgresql://picoa:picoa@localhost:5432/picoa_check?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: latest }
+      - run: cd backend && bun install
+      - run: cd backend && bun run prisma migrate deploy
+      - name: Check schema vs applied migrations
+        run: |
+          cd backend && npx prisma migrate diff \
+            --from-migrations prisma/migrations \
+            --to-schema-datamodel prisma/schema.prisma \
+            --shadow-database-url "$DATABASE_URL" \
+            --exit-code
+
+  audit:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: latest }
+      - name: Install backend deps
+        run: cd backend && bun install
+      - name: Backend audit
+        run: cd backend && bun pm audit || true
+      - name: Install frontend deps
+        run: cd frontend && bun install
+      - name: Frontend audit
+        run: cd frontend && bun pm audit || true

@@ -1,0 +1,178 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_dev:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  evolution-api:
+    image: evoapicloud/evolution-api:latest
+    profiles: ["evolution"]
+    # Host port 8081 to avoid clashing with other local services on 8080
+    # (e.g. Keycloak). The ORGAMIND backend talks to evolution-api over the
+    # internal Docker network on port 8080, so this re-mapping only affects
+    # human access from the host (curl http://localhost:8081/...).
+    ports:
+      - "8081:8080"
+    volumes:
+      - evolution_instances:/evolution/instances
+    environment:
+      SERVER_URL: http://localhost:8081
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
+
+      # Postgres (reuse the project's instance, separate database)
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/evolution?schema=public
+      # Evolution's Prisma migration step reads the standard DATABASE_URL var
+      # (not DATABASE_CONNECTION_URI). Without it, migrations fail with
+      # P1001 "Can't reach database server" before the app ever boots.
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/evolution?schema=public
+      DATABASE_CONNECTION_CLIENT_NAME: evolution
+      # Persist only what the ORGAMIND backend needs (instance auth state +
+      # message status updates for our webhook). Saving the user's full
+      # WhatsApp history here causes massive sync storms that get the
+      # session 401'd by Meta — we don't need history; the system is for
+      # outbound campaigns only.
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      # Recent-history persistence ON (dev only) so findChats/findMessages return
+      # the on-link recent window for the auto history-import on pair.
+      # syncFullHistory stays false (no full-history storm). Prod stays all-false.
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
+      DATABASE_SAVE_MESSAGE_UPDATE: "true"
+      DATABASE_SAVE_DATA_CONTACTS: "true"
+      DATABASE_SAVE_DATA_CHATS: "true"
+      DATABASE_SAVE_DATA_HISTORIC: "true"
+
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379/6
+      CACHE_REDIS_PREFIX_KEY: evolution
+      CACHE_REDIS_SAVE_INSTANCES: "false"
+      CACHE_LOCAL_ENABLED: "false"
+
+      LOG_LEVEL: ERROR,WARN,INFO,DEBUG,VERBOSE,DARK,WEBHOOKS
+      LOG_COLOR: "true"
+      LOG_BAILEYS: warn
+
+      # Browser fingerprint — let Baileys autodetect WA version
+      CONFIG_SESSION_PHONE_CLIENT: ORGAMIND
+      CONFIG_SESSION_PHONE_NAME: Chrome
+
+      DEL_INSTANCE: "false"
+      QRCODE_LIMIT: 30
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    command: ["sh", "-c", "bun run prisma migrate deploy && bun run prisma db seed"]
+    env_file: .env
+    # Bind-mount so the container always sees the current host migrations —
+    # otherwise the baked-in image copy goes stale on every schema change.
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    ports:
+      # Host 3002 (not 3000) to match frontend/.env.local VITE_API_URL and to
+      # leave default ports free for other local projects. Container still
+      # listens on 3000 (PORT env).
+      - "3002:3000"
+    env_file: .env
+    environment:
+      DIFY_BASE_URL: ${DIFY_BASE_URL:-}
+    stop_grace_period: 30s
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    command: npm run worker:dev
+    env_file: .env
+    environment:
+      DIFY_BASE_URL: ${DIFY_BASE_URL:-}
+    stop_grace_period: 60s
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:3001/health/live || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      # Host 5174 (not 5173): 5173 is used by another local project's vite.
+      # Vite's default HMR client uses the page's port, so 5174->5173 works.
+      - "5174:5173"
+    env_file: .env
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - api
+
+volumes:
+  pg_dev:
+  redis_data:
+  evolution_instances:

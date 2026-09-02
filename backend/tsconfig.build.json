@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.json",
+  // `scripts` (like `prisma`) holds standalone operational scripts run with tsx,
+  // never imported by the app. They use `import.meta.url` for main-module
+  // detection, which the CommonJS `nest build` output rejects (TS1470).
+  "exclude": ["node_modules", "test", "dist", "prisma", "scripts", "**/*spec.ts", "vitest.config.ts", "vitest.e2e.config.ts"]
+}

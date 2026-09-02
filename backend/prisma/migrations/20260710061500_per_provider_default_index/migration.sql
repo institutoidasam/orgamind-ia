@@ -1,0 +1,13 @@
+-- The initial migration enforced ONE default channel across the whole table
+-- (`WhatsappInstance_isDefault_unique`). With multi-provider channels the
+-- default is per provider — the router falls back to `findDefault(provider)`
+-- scoped to the campaign's provider, and `setDefault` clears the previous
+-- default only among channels of the same provider.
+--
+-- Left in place, the old global index makes that impossible: marking a TWILIO
+-- channel as default while an EVOLUTION default exists raises a unique
+-- violation (observed as a 500 on PATCH /whatsapp/instances/:id).
+--
+-- The per-provider replacement (`WhatsappInstance_provider_default_key`) was
+-- created in 20260709120000_multi_provider_channel and stays.
+DROP INDEX IF EXISTS "WhatsappInstance_isDefault_unique";

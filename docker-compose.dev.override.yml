@@ -1,0 +1,44 @@
+# Local-only override to coexist with other dev stacks holding the default
+# host ports (e.g. another project on 3000/5432/6379).
+# Usage:
+#   docker compose -f docker-compose.dev.yml -f docker-compose.dev.override.yml up -d
+# Internal container ports stay the same — service-to-service traffic on the
+# Docker network is unchanged.
+services:
+  postgres:
+    # `!override` replaces the base list instead of appending to it.
+    ports: !override
+      - "5433:5432"
+
+  redis:
+    ports: !override
+      - "6380:6379"
+
+  evolution-api:
+    ports: !override
+      - "8082:8080"
+
+  api:
+    ports: !override
+      - "3002:3000"
+    environment:
+      CORS_ORIGIN: http://localhost:5174
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+      - media:/data/media
+
+  worker:
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+      - media:/data/media
+
+  web:
+    ports: !override
+      - "5174:5173"
+    environment:
+      VITE_API_URL: http://localhost:3002
+
+volumes:
+  media:

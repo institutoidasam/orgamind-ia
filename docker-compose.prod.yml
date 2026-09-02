@@ -1,0 +1,469 @@
+# ORGAMIND — Production stack for Dokploy
+#
+# Network strategy: this file declares NO networks. Dokploy auto-injects
+# `dokploy-network` (and the Traefik labels) into any service that has a
+# domain configured in the Dokploy "Domains" tab. Inter-service traffic
+# goes over the default docker-compose network — services reach each other
+# by name (`postgres`, `redis`, `api`, `evolution-api`).
+#
+# Other Dokploy conventions in use:
+#   - No `container_name` (breaks Dokploy logs/metrics).
+#   - No `version:` field (Compose v2 deprecated it).
+#   - No host port mapping; only `expose:` for services that Traefik fronts.
+#   - `restart: unless-stopped` to respect manual stops from the Dokploy UI.
+#   - Bind mounts ONLY via named volumes — Dokploy git-clones fresh on every
+#     deploy, so `./path:/x` from the repo is wiped. For static files, use
+#     "File Mounts" in the Advanced tab and reference them as `../files/x`.
+#   - All secrets read from environment variables set in the Dokploy UI.
+#
+# Build context assumes Dokploy clones the repo and runs compose from the
+# repository root.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # One-shot job: apply Prisma migrations, seed the admin user, reconstruct the
+  # text of campaign messages sent before the worker started persisting it, and
+  # then backfill Conversation rows for pre-existing campaign messages (so past
+  # outbound sends show up in the chat inbox).
+  #
+  # ORDER MATTERS: the repair must run BEFORE the backfill, because the backfill
+  # derives each conversation's preview from the message content — run it first
+  # and the preview is rebuilt from a NULL body, i.e. still blank.
+  #
+  # Finally, close out campaigns left stuck in RUNNING: whoever finishes a
+  # campaign is the WORKER, on the last message it processes — so a campaign
+  # whose audience the consent gate skipped WHOLESALE enqueued no job, and
+  # nothing ever closed it. It sat "Em execução" forever. The code fix only
+  # covers new dispatches; the already-stuck ones need this. It never enqueues
+  # and never sends — it only settles campaign status, and it skips any campaign
+  # with a message still in flight.
+  #
+  # Every step is idempotent (upsert / skip-if-linked / `content: null` guard /
+  # already-terminal campaigns are left alone), so re-running on each deploy is
+  # safe.
+  #
+  # ── O QUE PODE SER `non-fatal`, E O QUE NÃO PODE ────────────────────────────
+  # O critério é o DANO, não a conveniência: script que só LÊ e reescreve dado
+  # DERIVADO (preview de conversa, content reconstruído, status de campanha já
+  # encerrada) pode falhar sem bloquear a subida — é o caso dos três primeiros.
+  # Script que APAGA LINHA DE CONTATO, não. `merge-duplicate-phone-contacts`
+  # saiu do balde dos `|| echo ... continuing`: uma auditoria mostrou que ele
+  # estourava contra o índice único novo, deixava conversa apagada e mensagem
+  # pendurada no contato errado, e o `|| echo` devolvia 0 — deploy VERDE em cima
+  # de corrupção de dado, em todo deploy, sem ninguém saber.
+  # Agora ele funde cada par numa transação própria, PULA o par que falhar e sai
+  # com código != 0 se algum falhou. Encadeado com `&&`, o job `migrate` fica
+  # VERMELHO no painel, api/worker NÃO são recriados (`service_completed_
+  # successfully`) e prod continua no código anterior — que é o estado seguro.
+  # Se um par cronicamente doente estiver travando a subida, a válvula é
+  # MERGE_DUPLICATE_CONTACTS=skip (ver OPERATIONS.md); ela diz em voz alta que o
+  # reparo não rodou, em vez de mentir que rodou.
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    # merge-duplicate-phone-contacts: script DESTRUTIVO (apaga a linha de Contact
+    # duplicada). Ele MIGRA conversas/mensagens/consentimento para o canônico e SÓ
+    # ENTÃO apaga a duplicada; as respostas das pessoas nunca se perdem.
+    # Idempotente: sem duplicata, não faz nada. Com o bug do 9º dígito corrigido,
+    # nenhuma nova nasce — mas ele fica como rede, e é auto-curativo.
+    # ATENÇÃO: a regra de eleição e o ESCOPO da fusão mudaram (agora funde também
+    # os pares antes classificados como "ambíguos", que eram a maioria), então o
+    # dry-run antigo — "28 pares, 0 ambíguos" — NÃO descreve mais o que ele faz.
+    # O procedimento de subida do OPERATIONS.md manda ler um dry-run NOVO antes.
+    # O relatório sai com o telefone MASCARADO (o stdout deste contêiner é o que a
+    # API do Dokploy expõe); `--verbose` mostraria inteiro e não é usado aqui.
+    command: ["sh", "-c", "npx prisma migrate deploy && npx prisma db seed && (npx tsx prisma/repair-campaign-message-content.ts || echo 'repair-campaign-message-content non-fatal failure, continuing') && (npx tsx prisma/backfill-conversations.ts || echo 'backfill-conversations non-fatal failure, continuing') && (npx tsx prisma/backfill-contact-validity.ts --apply || echo 'backfill-contact-validity non-fatal failure, continuing') && (npx tsx scripts/closeout-stuck-campaigns.ts --apply || echo 'closeout-stuck-campaigns non-fatal failure, continuing') && npx tsx prisma/merge-duplicate-phone-contacts.ts --apply"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD}
+      # Seed needs these to upsert the default WhatsappInstance row pointing
+      # at the same Evolution session the running api/worker will use.
+      EVOLUTION_INSTANCE_NAME: ${EVOLUTION_INSTANCE_NAME}
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
+      # ── Identidade da organização titular deste deploy ───────────────────
+      # Vai para o TITULAR dos dados: texto de consentimento, landing /opt-in,
+      # wa.me/QR. A Meta exige que o opt-in nomeie o negócio e a LGPD exige
+      # controlador determinado (art. 8º). Semeia o singleton `Organization` no
+      # primeiro deploy; depois disso a tela de Configurações é a fonte da
+      # verdade e o seed NÃO sobrescreve o que o operador ajustou.
+      ORG_NAME: ${ORG_NAME:-}
+      ORG_LEGAL_NAME: ${ORG_LEGAL_NAME:-}
+      ORG_PRIVACY_POLICY_URL: ${ORG_PRIVACY_POLICY_URL:-}
+      ORG_SUPPORT_CONTACT: ${ORG_SUPPORT_CONTACT:-}
+      # VÁLVULA DE ESCAPE do reparo de contatos duplicados. Vazia = o reparo roda
+      # (e é FATAL se algum par falhar). `skip` = o reparo NÃO roda e o deploy
+      # segue — o log diz isso em voz alta. Só para destravar a subida enquanto se
+      # investiga um par doente; enquanto estiver ligada, gêmeos do 9º dígito
+      # voltam a receber a mesma campanha duas vezes. Ver OPERATIONS.md.
+      MERGE_DUPLICATE_CONTACTS: ${MERGE_DUPLICATE_CONTACTS:-}
+      # VÁLVULA DE ESCAPE do backfill de validade (B.2). Vazia = o backfill roda
+      # (e é NÃO-FATAL: só escreve dado derivado, nunca apaga). `skip` = não roda
+      # e o log diz isso em voz alta — enquanto estiver ligada, quem já recebeu
+      # continua aparecendo como "Não validado" na lista e no filtro.
+      CONTACT_VALIDITY_BACKFILL: ${CONTACT_VALIDITY_BACKFILL:-}
+      # ⚠️ SAL DO CONSENTIMENTO — leia antes de mexer.
+      #
+      # Este valor é usado para gerar hashes de telefone para fins de consentimento.
+      # Ele DEVE ser idêntico entre api, worker e migrate — trocar o sal órfã todos
+      # os consentimentos já hasheados, porque o recálculo exige migração de dados
+      # específica (a tabela de consentimento é append-only com trigger proibindo
+      # UPDATE). Em caso de mudança, todos os hashes já gravados ficariam inválidos
+      # e a validação de consentimento seria recalculada do zero, o que é uma
+      # operação destrutiva.
+      #
+      # O valor é definido uma vez no primeiro deploy e nunca deve ser alterado
+      # em produção sem planejamento de migração de dados.
+      PICOA_CONSENT_SALT: __CHANGE_ME__generate_once_and_never_change__
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  evolution-api:
+    image: evoapicloud/evolution-api:latest
+    restart: unless-stopped
+    volumes:
+      - evolution_instances:/evolution/instances
+    environment:
+      SERVER_URL: ${EVOLUTION_BASE_URL}
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
+
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/evolution?schema=public
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/evolution?schema=public
+      DATABASE_CONNECTION_CLIENT_NAME: evolution
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "false"
+      DATABASE_SAVE_MESSAGE_UPDATE: "true"
+      DATABASE_SAVE_DATA_CONTACTS: "false"
+      DATABASE_SAVE_DATA_CHATS: "false"
+      DATABASE_SAVE_DATA_HISTORIC: "false"
+
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://redis:6379/6
+      CACHE_REDIS_PREFIX_KEY: evolution
+      CACHE_REDIS_SAVE_INSTANCES: "false"
+      CACHE_LOCAL_ENABLED: "false"
+
+      LOG_LEVEL: ERROR,WARN,INFO
+      LOG_COLOR: "false"
+      LOG_BAILEYS: warn
+
+      CONFIG_SESSION_PHONE_CLIENT: ORGAMIND
+      CONFIG_SESSION_PHONE_NAME: Chrome
+
+      DEL_INSTANCE: "false"
+      QRCODE_LIMIT: 30
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://redis:6379
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+
+      APP_BASE_URL: ${APP_BASE_URL}
+      # INTERNA: o endereço que os containers deste compose usam para chamar a
+      # api. NÃO serve para provedor SaaS externo — ver PUBLIC_WEBHOOK_BASE_URL.
+      WEBHOOK_BASE_URL: ${WEBHOOK_BASE_URL}
+      # PÚBLICA: a base que um provedor de terceiro (GoZap) precisa conseguir
+      # chamar pela internet. Inclui o prefixo do proxy — o nginx do `web` faz
+      # `location /api/ → proxy_pass http://api:3000/`, então o valor é
+      # `https://SEU-DOMINIO/api`. Sem ela, o GoZap registra a URL interna,
+      # aceita com 200 e nunca entrega nada (incidente 2026-08-07).
+      PUBLIC_WEBHOOK_BASE_URL: ${PUBLIC_WEBHOOK_BASE_URL:-}
+      # ── Identidade da organização titular deste deploy ───────────────────
+      # Vai para o TITULAR dos dados: texto de consentimento, landing /opt-in,
+      # wa.me/QR. A Meta exige que o opt-in nomeie o negócio e a LGPD exige
+      # controlador determinado (art. 8º). Semeia o singleton `Organization` no
+      # primeiro deploy; depois disso a tela de Configurações é a fonte da
+      # verdade e o seed NÃO sobrescreve o que o operador ajustou.
+      ORG_NAME: ${ORG_NAME:-}
+      ORG_LEGAL_NAME: ${ORG_LEGAL_NAME:-}
+      ORG_PRIVACY_POLICY_URL: ${ORG_PRIVACY_POLICY_URL:-}
+      ORG_SUPPORT_CONTACT: ${ORG_SUPPORT_CONTACT:-}
+      CORS_ORIGIN: ${CORS_ORIGIN}
+
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_EXPIRES_IN: ${JWT_ACCESS_EXPIRES_IN:-15m}
+      JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
+
+      # WhatsApp providers: at least one credential group below must be FULLY
+      # set or the app fails to boot (see backend/src/shared/config/env.schema.ts).
+      # A deploy can run several providers/channels at once — there is no
+      # single "WHATSAPP_PROVIDER" selector anymore.
+      EVOLUTION_BASE_URL: http://evolution-api:8080
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
+      EVOLUTION_INSTANCE_NAME: ${EVOLUTION_INSTANCE_NAME}
+
+      # Outbound proxy for Evolution's Baileys socket (anti-ban: egress from a
+      # residential IP, not the VPS datacenter). Armed on the instance by the
+      # adapter on every provision/heal/restart. Unset = no proxy.
+      EVOLUTION_PROXY_HOST: ${EVOLUTION_PROXY_HOST:-}
+      EVOLUTION_PROXY_PORT: ${EVOLUTION_PROXY_PORT:-}
+      EVOLUTION_PROXY_PROTOCOL: ${EVOLUTION_PROXY_PROTOCOL:-}
+      EVOLUTION_PROXY_USERNAME: ${EVOLUTION_PROXY_USERNAME:-}
+      EVOLUTION_PROXY_PASSWORD: ${EVOLUTION_PROXY_PASSWORD:-}
+
+      # Meta Cloud API — only required to enable the META provider group (all
+      # four vars must be set together)
+      META_ACCESS_TOKEN: ${META_ACCESS_TOKEN:-}
+      META_APP_SECRET: ${META_APP_SECRET:-}
+      META_BUSINESS_ACCOUNT_ID: ${META_BUSINESS_ACCOUNT_ID:-}
+      META_PHONE_NUMBER_ID: ${META_PHONE_NUMBER_ID:-}
+      META_WEBHOOK_VERIFY_TOKEN: ${META_WEBHOOK_VERIFY_TOKEN:-}
+
+      # Twilio WhatsApp (BSP) — only required to enable the TWILIO provider
+      # group (ACCOUNT_SID + AUTH_TOKEN + one of WHATSAPP_FROM/MESSAGING_SERVICE_SID)
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM:-}
+      TWILIO_MESSAGING_SERVICE_SID: ${TWILIO_MESSAGING_SERVICE_SID:-}
+      TWILIO_WEBHOOK_URL: ${TWILIO_WEBHOOK_URL:-}
+
+      # Zernio Cloud API — only required to enable the ZERNIO provider group
+      # (API_KEY + WEBHOOK_SECRET). BASE_URL defaults in the env schema.
+      ZERNIO_API_KEY: ${ZERNIO_API_KEY:-}
+      ZERNIO_BASE_URL: ${ZERNIO_BASE_URL:-}
+      ZERNIO_WEBHOOK_SECRET: ${ZERNIO_WEBHOOK_SECRET:-}
+
+      # GoZap Cloud API — only required to enable the GOZAP provider group,
+      # all four vars together (BASE_URL + ADMIN_TOKEN + WEBHOOK_TOKEN +
+      # TOKEN_ENCRYPTION_KEY). Unlike ZERNIO_BASE_URL, GOZAP_BASE_URL has NO
+      # schema default (per-tenant subdomain) — it is part of the group.
+      GOZAP_BASE_URL: ${GOZAP_BASE_URL:-}
+      GOZAP_ADMIN_TOKEN: ${GOZAP_ADMIN_TOKEN:-}
+      GOZAP_WEBHOOK_TOKEN: ${GOZAP_WEBHOOK_TOKEN:-}
+      GOZAP_TOKEN_ENCRYPTION_KEY: ${GOZAP_TOKEN_ENCRYPTION_KEY:-}
+      # Captura o payload cru dos webhooks do GoZap (o contrato deles é
+      # indocumentado). Estava declarada no env.schema mas NÃO era encaminhada
+      # aqui — ligá-la no painel não tinha efeito nenhum no container.
+      GOZAP_WEBHOOK_DEBUG: ${GOZAP_WEBHOOK_DEBUG:-}
+      # Compatibilidade do segredo do webhook na query (`?t=<segredo>`). Fica
+      # LIGADA enquanto o painel do GoZap mandar o segredo na URL; `false`
+      # fecha essa porta depois que o painel passar a mandar o cabeçalho
+      # (OPERATIONS.md → "Webhook do GoZap: tirar o segredo da URL"). Precisa
+      # estar encaminhada aqui, senão desligá-la no painel do Dokploy não tem
+      # efeito nenhum e o operador acredita ter fechado a porta sem ter fechado
+      # — foi o que já aconteceu com GOZAP_WEBHOOK_DEBUG, logo acima.
+      GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN: ${GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN:-}
+
+      # ── Validação ativa de números (spec B.5) ────────────────────────────
+      # Ritmo do `/chat/check` do GoZap, em consultas por minuto. Padrão 40 no
+      # env schema — lento DE PROPÓSITO: consulta de existência em massa por
+      # cliente não-oficial é sinal conhecido de bloqueio, e este cliente já
+      # perdeu um número. Subir isto aumenta o risco de perder o canal.
+      GOZAP_CHECK_RATE_PER_MIN: ${GOZAP_CHECK_RATE_PER_MIN:-}
+      # Validação automática DIÁRIA (cron `whatsapp.contact-sync.cron`).
+      # DESLIGADA por padrão: ligada, ela varre a base inteira (até 5000 por
+      # noite) sem ninguém clicar em nada. Ligar só com decisão explícita de
+      # quem responde pelo número; ligada, roda no ritmo de
+      # GOZAP_CHECK_RATE_PER_MIN e só dentro da janela de envio do canal.
+      # O caminho normal continua sendo o clique do operador em
+      # "Validar não validados (N)", depois do aviso de risco.
+      CONTACT_SYNC_CRON_ENABLED: ${CONTACT_SYNC_CRON_ENABLED:-}
+
+      # Bull Board (queue dashboard) HTTP basic-auth. The password is REQUIRED
+      # in production — the env schema rejects an unset/placeholder value at
+      # boot — so it MUST be supplied via the Dokploy environment.
+      BULL_BOARD_USER: ${BULL_BOARD_USER:-admin}
+      BULL_BOARD_PASSWORD: ${BULL_BOARD_PASSWORD}
+      MEDIA_DIR: /data/media
+      DIFY_BASE_URL: ${DIFY_BASE_URL:-}
+      # Dify Console API — lista apps e busca/gera chaves automaticamente.
+      # URL deve incluir o sufixo /console/api. Opcional: sem essas vars,
+      # a listagem direta de apps fica inerte (bots continuam funcionando
+      # via DIFY_BASE_URL + chave já gravada no banco).
+      DIFY_CONSOLE_URL: ${DIFY_CONSOLE_URL:-}
+      DIFY_CONSOLE_EMAIL: ${DIFY_CONSOLE_EMAIL:-}
+      DIFY_CONSOLE_PASSWORD: ${DIFY_CONSOLE_PASSWORD:-}
+    volumes:
+      - media:/data/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["node", "dist/worker.js"]
+    restart: unless-stopped
+    stop_grace_period: 60s
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://redis:6379
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+
+      # Worker uses the same shared config module as api, so it requires the
+      # same validated env vars even if it doesn't serve HTTP traffic.
+      APP_BASE_URL: ${APP_BASE_URL}
+      # INTERNA: o endereço que os containers deste compose usam para chamar a
+      # api. NÃO serve para provedor SaaS externo — ver PUBLIC_WEBHOOK_BASE_URL.
+      WEBHOOK_BASE_URL: ${WEBHOOK_BASE_URL}
+      # PÚBLICA: a base que um provedor de terceiro (GoZap) precisa conseguir
+      # chamar pela internet. Inclui o prefixo do proxy — o nginx do `web` faz
+      # `location /api/ → proxy_pass http://api:3000/`, então o valor é
+      # `https://SEU-DOMINIO/api`. Sem ela, o GoZap registra a URL interna,
+      # aceita com 200 e nunca entrega nada (incidente 2026-08-07).
+      PUBLIC_WEBHOOK_BASE_URL: ${PUBLIC_WEBHOOK_BASE_URL:-}
+      # ── Identidade da organização titular deste deploy ───────────────────
+      # Vai para o TITULAR dos dados: texto de consentimento, landing /opt-in,
+      # wa.me/QR. A Meta exige que o opt-in nomeie o negócio e a LGPD exige
+      # controlador determinado (art. 8º). Semeia o singleton `Organization` no
+      # primeiro deploy; depois disso a tela de Configurações é a fonte da
+      # verdade e o seed NÃO sobrescreve o que o operador ajustou.
+      ORG_NAME: ${ORG_NAME:-}
+      ORG_LEGAL_NAME: ${ORG_LEGAL_NAME:-}
+      ORG_PRIVACY_POLICY_URL: ${ORG_PRIVACY_POLICY_URL:-}
+      ORG_SUPPORT_CONTACT: ${ORG_SUPPORT_CONTACT:-}
+      CORS_ORIGIN: ${CORS_ORIGIN}
+
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_ACCESS_EXPIRES_IN: ${JWT_ACCESS_EXPIRES_IN:-15m}
+      JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
+
+      # WhatsApp providers — same rules as the api service (see the comment
+      # there): at least one credential group must be FULLY set.
+      EVOLUTION_BASE_URL: http://evolution-api:8080
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
+      EVOLUTION_INSTANCE_NAME: ${EVOLUTION_INSTANCE_NAME}
+
+      # Same proxy config as the api — the worker also provisions/heals instances.
+      EVOLUTION_PROXY_HOST: ${EVOLUTION_PROXY_HOST:-}
+      EVOLUTION_PROXY_PORT: ${EVOLUTION_PROXY_PORT:-}
+      EVOLUTION_PROXY_PROTOCOL: ${EVOLUTION_PROXY_PROTOCOL:-}
+      EVOLUTION_PROXY_USERNAME: ${EVOLUTION_PROXY_USERNAME:-}
+      EVOLUTION_PROXY_PASSWORD: ${EVOLUTION_PROXY_PASSWORD:-}
+
+      META_ACCESS_TOKEN: ${META_ACCESS_TOKEN:-}
+      META_APP_SECRET: ${META_APP_SECRET:-}
+      META_BUSINESS_ACCOUNT_ID: ${META_BUSINESS_ACCOUNT_ID:-}
+      META_PHONE_NUMBER_ID: ${META_PHONE_NUMBER_ID:-}
+      META_WEBHOOK_VERIFY_TOKEN: ${META_WEBHOOK_VERIFY_TOKEN:-}
+
+      # Twilio WhatsApp (BSP) — only required to enable the TWILIO provider group
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM:-}
+      TWILIO_MESSAGING_SERVICE_SID: ${TWILIO_MESSAGING_SERVICE_SID:-}
+      TWILIO_WEBHOOK_URL: ${TWILIO_WEBHOOK_URL:-}
+
+      # Zernio Cloud API — same rule as the api service: only required to
+      # enable the ZERNIO provider group (API_KEY + WEBHOOK_SECRET).
+      ZERNIO_API_KEY: ${ZERNIO_API_KEY:-}
+      ZERNIO_BASE_URL: ${ZERNIO_BASE_URL:-}
+      ZERNIO_WEBHOOK_SECRET: ${ZERNIO_WEBHOOK_SECRET:-}
+
+      # GoZap Cloud API — same rule as the api service: only required to
+      # enable the GOZAP provider group (all four vars together).
+      GOZAP_BASE_URL: ${GOZAP_BASE_URL:-}
+      GOZAP_ADMIN_TOKEN: ${GOZAP_ADMIN_TOKEN:-}
+      GOZAP_WEBHOOK_TOKEN: ${GOZAP_WEBHOOK_TOKEN:-}
+      GOZAP_TOKEN_ENCRYPTION_KEY: ${GOZAP_TOKEN_ENCRYPTION_KEY:-}
+      # Captura o payload cru dos webhooks do GoZap (o contrato deles é
+      # indocumentado). Estava declarada no env.schema mas NÃO era encaminhada
+      # aqui — ligá-la no painel não tinha efeito nenhum no container.
+      GOZAP_WEBHOOK_DEBUG: ${GOZAP_WEBHOOK_DEBUG:-}
+      # Mesma var do serviço api: o worker valida o MESMO schema no boot, e uma
+      # env presente num serviço e ausente no outro produz dois processos com
+      # crenças diferentes sobre a mesma porta.
+      GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN: ${GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN:-}
+
+      # ── Validação ativa de números (spec B.5) ────────────────────────────
+      # Mesmas vars do serviço api, e aqui é onde elas de fato MORDEM: o cron e
+      # o processor de validação rodam NO WORKER. Uma env presente num serviço
+      # e ausente no outro produz dois processos com crenças diferentes sobre a
+      # mesma coisa — o api mostrando "cron desligado" e o worker varrendo a
+      # base toda noite, por exemplo.
+      GOZAP_CHECK_RATE_PER_MIN: ${GOZAP_CHECK_RATE_PER_MIN:-}
+      CONTACT_SYNC_CRON_ENABLED: ${CONTACT_SYNC_CRON_ENABLED:-}
+
+      # Bull Board basic-auth — see note on the api service. The worker boots
+      # the same env schema, so it requires BULL_BOARD_PASSWORD to validate too.
+      BULL_BOARD_USER: ${BULL_BOARD_USER:-admin}
+      BULL_BOARD_PASSWORD: ${BULL_BOARD_PASSWORD}
+      MEDIA_DIR: /data/media
+      DIFY_BASE_URL: ${DIFY_BASE_URL:-}
+    volumes:
+      - media:/data/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-/api}
+        VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
+    restart: unless-stopped
+    expose:
+      - "80"
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  redis_data:
+  evolution_instances:
+  media:

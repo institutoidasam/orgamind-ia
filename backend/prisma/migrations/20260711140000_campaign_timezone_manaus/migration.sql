@@ -1,0 +1,13 @@
+-- C2: fuso padrão da campanha passa a ser America/Manaus (UTC-4).
+--
+-- O IDASAM — e quem opera o orgamind — está em MANAUS, que é UTC-4 e não observa
+-- horário de verão. Com o default anterior (America/Sao_Paulo, UTC-3), toda
+-- campanha agendada para, digamos, "09:00" disparava às 08:00 locais: uma hora
+-- mais cedo, todo dia.
+--
+-- ATENÇÃO — isto altera SÓ O DEFAULT DA COLUNA, para linhas NOVAS. Nenhuma
+-- campanha já gravada é reescrita: `Campaign.timezone` é gravado POR CAMPANHA
+-- (o wizard/API sempre envia um valor explícito) e mudar o fuso de uma campanha
+-- existente moveria o próximo disparo dela sem ninguém ter pedido. Quem quiser
+-- corrigir uma campanha antiga edita o agendamento dela.
+ALTER TABLE "Campaign" ALTER COLUMN "timezone" SET DEFAULT 'America/Manaus';

@@ -1,0 +1,14 @@
+-- C1: fonte `PROVIDER_OPTOUT` no ConsentSource.
+--
+-- A spec §2.7 (regra 3) lista o "código de opt-out do provedor" entre os atos
+-- que revogam globalmente e inserem na SuppressionList — e a própria spec §2.6
+-- já nomeia o motivo ('provider_optout_code'). Mas o enum ConsentSource (§2.3)
+-- não tinha um valor para ele: o titular bloqueou/parou DENTRO do WhatsApp, e
+-- quem nos conta é a Meta/Twilio (códigos 131026/131047, 63020…), não um
+-- keyword nem um botão nosso.
+--
+-- Rotular esse REVOKE como WA_KEYWORD seria mentir na trilha — e a trilha é a
+-- prova (art. 8º §2º). Pior: o painel de opt-in (§7) agrupa GRANTs/REVOKEs por
+-- `source` justamente para dizer QUAL canal funciona; um provider opt-out
+-- contado como keyword corrompe esse gráfico.
+ALTER TYPE "ConsentSource" ADD VALUE IF NOT EXISTS 'PROVIDER_OPTOUT';

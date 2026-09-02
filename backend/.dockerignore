@@ -1,0 +1,14 @@
+# Never copy host node_modules into the image: it shadows the freshly
+# generated Prisma client (RUN npx prisma generate) when `COPY . .` runs,
+# and may carry host-OS-specific native binaries. The image builds its own
+# via `bun install` + `prisma generate`.
+node_modules
+
+# Build artifacts and local-only files
+dist
+coverage
+*.log
+.env
+.env.local
+.git
+.tdd-snapshots-*

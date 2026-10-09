@@ -44,7 +44,7 @@ export function EventsList({ messages, activeId, onActive }: Props) {
               style={{
                 background: isActive ? "var(--surface-hover)" : "transparent",
                 borderLeft: isActive
-                  ? "3px solid var(--brand-purple)"
+                  ? "3px solid var(--brand-orange)"
                   : "3px solid transparent",
               }}
             >

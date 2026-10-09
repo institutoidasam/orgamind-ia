@@ -25,6 +25,14 @@ describe('RELEASE_NOTES', () => {
     expect(RELEASE_NOTES.length).toBeGreaterThan(0);
   });
 
+  it('registra o rebrand visual de outubro como a novidade mais recente', () => {
+    expect(RELEASE_NOTES[0]).toMatchObject({
+      version: '2026.10.08',
+      date: '2026-10-08',
+    });
+    expect(RELEASE_NOTES[0].title).toMatch(/nova identidade visual/i);
+  });
+
   it('está em ordem decrescente por version (mais nova primeiro)', () => {
     for (let i = 0; i < RELEASE_NOTES.length - 1; i++) {
       expect(

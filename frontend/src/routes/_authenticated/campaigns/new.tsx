@@ -80,6 +80,75 @@ const DRAFT_KEY = 'picoa:campaign-wizard-draft';
 /** Mesmo teto de `sendCampaignBatchSchema` (backend) e do `<Input max=…>` do 1º lote. */
 const MAX_BATCH_SIZE = 5000;
 
+const CAMPAIGN_STEPS = [
+  { label: 'Configurar', detail: 'Campanha e canal' },
+  { label: 'Personalizar', detail: 'Dados dinâmicos' },
+  { label: 'Público', detail: 'Destinatários' },
+  { label: 'Revisar', detail: 'Agendamento e envio' },
+] as const;
+
+function renderCampaignProgress(step: number) {
+  return (
+    <nav aria-label="Progresso da campanha">
+      <ol className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border bg-[var(--border)] sm:grid-cols-4">
+        {CAMPAIGN_STEPS.map((item, index) => {
+          const number = index + 1;
+          const current = number === step;
+          const complete = number < step;
+          return (
+            <li
+              key={item.label}
+              aria-current={current ? 'step' : undefined}
+              className="flex items-center gap-2.5 bg-[var(--surface)] px-3 py-3"
+            >
+              <span
+                className="grid size-6 shrink-0 place-items-center rounded-full text-xs font-bold"
+                style={{
+                  background: current || complete ? 'var(--brand-navy)' : 'var(--surface-sunken)',
+                  color: current || complete ? '#fff' : 'var(--foreground-muted)',
+                  boxShadow: current ? 'inset 0 -2px 0 var(--brand-orange)' : undefined,
+                }}
+              >
+                {number}
+              </span>
+              <span className="min-w-0">
+                <span
+                  className="block truncate text-xs font-semibold"
+                  style={{ color: current ? 'var(--brand-primary)' : 'var(--foreground)' }}
+                >
+                  {item.label}
+                </span>
+                <span className="hidden truncate text-[11px] sm:block" style={{ color: 'var(--foreground-muted)' }}>
+                  {item.detail}
+                </span>
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
+  );
+}
+
+function renderCampaignWizardHeader(step: number) {
+  return (
+    <>
+      <header>
+        <p className="mb-1 text-[11px] font-bold uppercase tracking-[0.11em]" style={{ color: 'var(--brand-primary)' }}>
+          Campanhas · nova campanha
+        </p>
+        <h1 className="text-2xl font-semibold tracking-tight" style={{ color: 'var(--brand-primary)' }}>
+          Nova campanha — passo {step} de 4
+        </h1>
+        <p className="mt-1 text-sm" style={{ color: 'var(--foreground-muted)' }}>
+          Configure o envio e revise a audiência antes de confirmar.
+        </p>
+      </header>
+      {renderCampaignProgress(step)}
+    </>
+  );
+}
+
 /**
  * Pick a sensible default contact field for a template variable name —
  * "nome"/"name" → name, "cidade"/"city" → city, etc. Falls back to "name"
@@ -1719,9 +1788,9 @@ function NewCampaignPage() {
   };
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4">
-      <h1 className="text-2xl font-semibold">Nova campanha — passo {step} de 4</h1>
-      {steps[step]?.()}
+    <div className="mx-auto max-w-4xl space-y-6">
+      {renderCampaignWizardHeader(step)}
+      <div className="max-w-3xl">{steps[step]?.()}</div>
     </div>
   );
 }

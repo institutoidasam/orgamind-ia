@@ -32,8 +32,8 @@ export function AssigneeTabs({
               onClick={() => onChange(t.id)}
               className="shrink-0 rounded-full px-2.5 py-0.5"
               style={{
-                background: selected ? 'var(--st-read-bg)' : 'transparent',
-                color: selected ? 'var(--brand-purple)' : 'var(--foreground-muted)',
+                background: selected ? 'var(--brand-orange-soft)' : 'transparent',
+                color: selected ? 'var(--brand-orange-text)' : 'var(--foreground-muted)',
               }}
             >
               {t.label}

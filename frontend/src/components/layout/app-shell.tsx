@@ -23,7 +23,10 @@ export function AppShell({
   onMobileClose,
 }: Props) {
   return (
-    <div className="flex min-h-screen">
+    <div
+      className="flex min-h-screen"
+      style={{ background: 'var(--canvas)', color: 'var(--foreground)' }}
+    >
       {mobileOpen && (
         <button
           type="button"
@@ -34,6 +37,7 @@ export function AppShell({
       )}
 
       <aside
+        aria-label="Navegação principal"
         data-collapsed={collapsed ? 'true' : undefined}
         data-mobile-open={mobileOpen ? 'true' : undefined}
         className={[
@@ -51,7 +55,7 @@ export function AppShell({
 
       <div className="flex min-w-0 flex-1 flex-col">
         {topbar}
-        <main className="flex-1 px-3 py-4 sm:px-4 sm:py-5 lg:px-6 lg:py-6">{children}</main>
+        <main className="flex-1 px-3 py-4 sm:px-5 sm:py-6 lg:px-8 lg:py-7">{children}</main>
         {footer}
       </div>
     </div>

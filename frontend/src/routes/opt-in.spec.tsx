@@ -125,4 +125,12 @@ describe('/opt-in — landing pública', () => {
     // alguma até saber qual é.
     expect(document.body.textContent).not.toMatch(/idasam/i);
   });
+
+  it('mantém as cores nativas da nova marca no cabeçalho', () => {
+    wrap(<OptInPage />);
+
+    const logo = document.querySelector('header img');
+    expect(logo).toHaveClass('size-6');
+    expect(logo?.className).not.toMatch(/brightness-0|invert/);
+  });
 });

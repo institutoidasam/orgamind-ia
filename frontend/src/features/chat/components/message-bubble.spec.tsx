@@ -81,9 +81,11 @@ describe('MessageBubble', () => {
     expect(screen.getByTitle('Entregue')).toBeInTheDocument();
   });
 
-  it('renders READ tick (colored double check) for outbound READ messages', () => {
+  it('renders a high-contrast READ tick for outbound messages in both themes', () => {
     render(<MessageBubble message={{ ...base, direction: 'OUTBOUND', status: 'READ' }} />);
-    expect(screen.getByTitle('Lida')).toBeInTheDocument();
+    const tick = screen.getByTitle('Lida');
+    expect(tick).toBeInTheDocument();
+    expect(tick.querySelector('svg')).toHaveStyle({ color: 'var(--surface)' });
   });
 
   it('renders FAILED tick (warning) for outbound FAILED messages', () => {

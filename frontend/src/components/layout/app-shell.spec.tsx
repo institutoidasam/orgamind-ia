@@ -3,6 +3,16 @@ import { describe, it, expect } from 'vitest';
 import { AppShell } from './app-shell';
 
 describe('AppShell — slot de rodapé', () => {
+  it('expõe a navegação principal como um landmark nomeado', () => {
+    render(
+      <AppShell sidebar={<div>sidebar</div>} topbar={<div>topbar</div>}>
+        <div>conteúdo</div>
+      </AppShell>,
+    );
+
+    expect(screen.getByRole('complementary', { name: 'Navegação principal' })).toBeInTheDocument();
+  });
+
   it('renderiza o conteúdo passado em `footer`', () => {
     render(
       <AppShell

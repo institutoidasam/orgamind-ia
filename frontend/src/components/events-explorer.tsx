@@ -50,9 +50,9 @@ function FilterTab({
       onClick={() => onSelect(filter)}
       className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium"
       style={{
-        background: isActive ? 'var(--brand-purple-soft)' : 'transparent',
-        color: isActive ? 'var(--brand-purple)' : 'var(--foreground-muted)',
-        border: `1px solid ${isActive ? 'var(--brand-purple)' : 'var(--border)'}`,
+        background: isActive ? 'var(--brand-blue-soft)' : 'transparent',
+        color: isActive ? 'var(--brand-blue)' : 'var(--foreground-muted)',
+        border: `1px solid ${isActive ? 'var(--brand-blue)' : 'var(--border)'}`,
       }}
     >
       {FILTER_LABEL[filter]}
@@ -190,7 +190,7 @@ export function EventsExplorer({
             >
               <span
                 className="inline-block size-1.5 animate-pulse rounded-full"
-                style={{ background: 'var(--brand-cyan)' }}
+                style={{ background: 'var(--st-read-fg)' }}
               />
               ao vivo
             </span>

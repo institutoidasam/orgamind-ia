@@ -51,7 +51,7 @@ function ContactAvatar({ contact }: { contact: Contact }) {
   return (
     <span
       className="grid size-11 shrink-0 place-items-center rounded-full text-base font-semibold text-white"
-      style={{ background: 'var(--gradient-brand)' }}
+      style={{ background: 'var(--brand-navy)' }}
     >
       {ini === '?' ? contact.phoneE164.slice(-2) : ini}
     </span>
@@ -125,8 +125,8 @@ export function EventDetail({ campaignId, message }: Props) {
                 key={t}
                 className="rounded-full px-1.5 py-0.5 text-[10px]"
                 style={{
-                  background: 'var(--brand-purple-soft)',
-                  color: 'var(--brand-purple)',
+                  background: 'var(--brand-blue-soft)',
+                  color: 'var(--brand-blue)',
                 }}
               >
                 {t}

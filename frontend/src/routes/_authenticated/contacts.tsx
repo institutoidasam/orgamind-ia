@@ -834,7 +834,7 @@ function ContactsPage() {
       {selected.size > 0 && (
         <div
           className="flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-sm"
-          style={{ background: 'var(--brand-purple-soft)' }}
+          style={{ background: 'var(--brand-blue-soft)' }}
         >
           <span className="font-medium">{selected.size} selecionado(s)</span>
           <Button

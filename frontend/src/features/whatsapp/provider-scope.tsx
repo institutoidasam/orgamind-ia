@@ -104,7 +104,7 @@ export function ProviderBadge({ provider, className }: { provider: ChannelProvid
       className={cn('border', className)}
       style={{
         background: `color-mix(in oklch, ${color} 12%, transparent)`,
-        color,
+        color: 'var(--foreground)',
         borderColor: `color-mix(in oklch, ${color} 35%, transparent)`,
       }}
     >
@@ -143,7 +143,7 @@ export function ConnectionStateBadge({
   if (!state) return null;
   const color = CONNECTION_STATE_COLOR[state];
   return (
-    <span className="inline-flex items-center gap-1.5 text-xs" style={{ color }}>
+    <span className="inline-flex items-center gap-1.5 text-xs" style={{ color: 'var(--foreground)' }}>
       <span className="size-2 shrink-0 rounded-full" style={{ background: color }} aria-hidden />
       {CONNECTION_STATE_LABEL[state]}
     </span>

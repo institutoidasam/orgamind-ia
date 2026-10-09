@@ -1,20 +1,18 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
-@import "@fontsource-variable/geist-mono";
 @import "./styles/tokens.css";
 
 @custom-variant dark (&:is(.dark *));
 
 @theme {
-  --color-primary: oklch(0.555 0.25 295);
+  --color-primary: var(--primary);
 }
 
 @theme inline {
   --font-heading: var(--font-sans);
   --font-mono: var(--font-mono-design);
-  --font-sans: 'Geist Variable', sans-serif;
+  --font-sans: Roboto, Arial, sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -62,26 +60,26 @@
   --card-foreground: var(--foreground);
   --popover: var(--surface-raised);
   --popover-foreground: var(--foreground);
-  --primary: var(--brand-purple);
-  --primary-foreground: oklch(0.99 0 0);
+  --primary: var(--brand-primary);
+  --primary-foreground: #ffffff;
   --secondary: var(--surface-sunken);
   --secondary-foreground: var(--foreground);
   --muted: var(--surface-sunken);
   --muted-foreground: var(--foreground-muted);
   --accent: var(--surface-hover);
   --accent-foreground: var(--foreground);
-  --destructive: oklch(0.577 0.245 27.325);
+  --destructive: #b63517;
   --input: var(--border);
-  --ring: var(--brand-purple);
-  --radius: 0.625rem;
-  --sidebar: var(--surface-sunken);
-  --sidebar-foreground: var(--foreground);
-  --sidebar-primary: var(--brand-purple);
-  --sidebar-primary-foreground: oklch(0.99 0 0);
-  --sidebar-accent: var(--surface);
-  --sidebar-accent-foreground: var(--foreground);
-  --sidebar-border: var(--border);
-  --sidebar-ring: var(--brand-purple);
+  --ring: var(--brand-orange);
+  --radius: var(--r-sm);
+  --sidebar: var(--brand-navy);
+  --sidebar-foreground: #dbe4ef;
+  --sidebar-primary: var(--brand-orange);
+  --sidebar-primary-foreground: var(--brand-navy);
+  --sidebar-accent: #192342;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #33405e;
+  --sidebar-ring: var(--brand-orange);
 }
 
 .dark {
@@ -90,25 +88,25 @@
   --card-foreground: var(--foreground);
   --popover: var(--surface-raised);
   --popover-foreground: var(--foreground);
-  --primary: var(--brand-purple);
-  --primary-foreground: oklch(0.99 0 0);
+  --primary: var(--brand-primary);
+  --primary-foreground: var(--canvas);
   --secondary: var(--surface-sunken);
   --secondary-foreground: var(--foreground);
   --muted: var(--surface-sunken);
   --muted-foreground: var(--foreground-muted);
   --accent: var(--surface-hover);
   --accent-foreground: var(--foreground);
-  --destructive: oklch(0.704 0.191 22.216);
+  --destructive: #ffb9b4;
   --input: var(--border-strong);
-  --ring: var(--brand-purple);
-  --sidebar: var(--surface-sunken);
-  --sidebar-foreground: var(--foreground);
-  --sidebar-primary: var(--brand-purple);
-  --sidebar-primary-foreground: oklch(0.99 0 0);
-  --sidebar-accent: var(--surface);
-  --sidebar-accent-foreground: var(--foreground);
-  --sidebar-border: var(--border);
-  --sidebar-ring: var(--brand-purple);
+  --ring: var(--brand-orange);
+  --sidebar: var(--brand-navy);
+  --sidebar-foreground: #dbe4ef;
+  --sidebar-primary: var(--brand-orange);
+  --sidebar-primary-foreground: var(--brand-navy);
+  --sidebar-accent: #192342;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #33405e;
+  --sidebar-ring: var(--brand-orange);
 }
 
 @layer base {

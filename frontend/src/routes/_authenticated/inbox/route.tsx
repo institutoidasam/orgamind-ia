@@ -19,9 +19,16 @@ function InboxLayout() {
   // `minmax(0, 1fr)` trava a linha na altura do contêiner; o `min-h-0` das
   // colunas faz o resto.
   return (
-    <div className="grid h-[calc(100vh-8rem)] grid-rows-[minmax(0,1fr)] overflow-hidden rounded-lg" style={{ gridTemplateColumns: '330px 1fr', border: '1px solid var(--border)', background: 'var(--surface)' }}>
-      <ConversationsList activeId={params.conversationId} />
-      <Outlet />
+    <div
+      className="grid h-[calc(100vh-8rem)] grid-cols-1 grid-rows-[minmax(0,1fr)] overflow-hidden rounded-lg lg:grid-cols-[330px_minmax(0,1fr)]"
+      style={{ border: '1px solid var(--border)', background: 'var(--surface)' }}
+    >
+      <div className={params.conversationId ? 'hidden h-full lg:block' : 'h-full'}>
+        <ConversationsList activeId={params.conversationId} />
+      </div>
+      <div className={params.conversationId ? 'h-full min-h-0' : 'hidden min-h-0 lg:block'}>
+        <Outlet />
+      </div>
     </div>
   );
 }

@@ -39,6 +39,15 @@ describe('inbox — as classes que fazem o scroll existir', () => {
     expect(grid).toContain('grid-rows-[minmax(0,1fr)]');
   });
 
+  it('no celular mostra apenas o painel útil e libera duas colunas no desktop', () => {
+    const route = src('../../../routes/_authenticated/inbox/route.tsx');
+
+    expect(route).toContain('grid-cols-1');
+    expect(route).toContain('lg:grid-cols-[330px_minmax(0,1fr)]');
+    expect(route).toContain("params.conversationId ? 'hidden h-full lg:block' : 'h-full'");
+    expect(route).toContain("params.conversationId ? 'h-full min-h-0' : 'hidden min-h-0 lg:block'");
+  });
+
   it('a lista de conversas pode encolher abaixo do conteúdo e rolar', () => {
     const list = src('./conversations-list.tsx');
     expect(list).toMatch(/className="min-h-0 flex-1 overflow-y-auto"/);

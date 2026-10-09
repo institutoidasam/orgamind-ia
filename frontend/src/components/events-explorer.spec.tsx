@@ -108,7 +108,7 @@ describe("EventsExplorer active-filter selection", () => {
     render(<EventsExplorer campaignId="c1" statusCounts={STATUS_COUNTS} />);
 
     // Only the active tab carries the highlighted background.
-    expect(bgForTab(/todos/i)).toBe("var(--brand-purple-soft)");
+    expect(bgForTab(/todos/i)).toBe("var(--brand-blue-soft)");
     expect(bgForTab(/lidas/i)).toBe("transparent");
 
     // "Todos" → status undefined in the hook query.
@@ -125,7 +125,7 @@ describe("EventsExplorer active-filter selection", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /falhas/i }));
 
-    expect(bgForTab(/falhas/i)).toBe("var(--brand-purple-soft)");
+    expect(bgForTab(/falhas/i)).toBe("var(--brand-blue-soft)");
     expect(bgForTab(/todos/i)).toBe("transparent");
 
     const lastCall =

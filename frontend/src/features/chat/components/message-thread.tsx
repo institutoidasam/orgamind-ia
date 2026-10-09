@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { PauseCircle } from 'lucide-react';
+import { ArrowLeft, PauseCircle } from 'lucide-react';
 import { useConversation, useConversationMessages, useMarkRead, useResumeBot } from '../api';
 import { MessageBubble } from './message-bubble';
 import { MessageComposer, type ReplyTarget } from './message-composer';
@@ -56,6 +56,14 @@ function ThreadIdentity({ conv }: { conv?: ConversationSummary }) {
 function ThreadHeader({ conversationId, conv }: { conversationId: string; conv?: ConversationSummary }) {
   return (
     <div className="flex items-center gap-2.5 px-4 py-2.5" style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
+      <a
+        href="/inbox"
+        aria-label="Voltar para conversas"
+        className="grid size-8 shrink-0 place-items-center rounded-md lg:hidden"
+        style={{ color: 'var(--brand-primary)', background: 'var(--surface-sunken)' }}
+      >
+        <ArrowLeft className="size-4" />
+      </a>
       <ThreadAvatar conv={conv} />
       <ThreadIdentity conv={conv} />
       {conv ? (
@@ -77,10 +85,9 @@ function ThreadHeader({ conversationId, conv }: { conversationId: string; conv?:
 }
 
 function ThreadBody({
-  scrollRef, bottomRef, messages, isLoading, hasNextPage, fetchNextPage, onReply,
+  scrollRef, messages, isLoading, hasNextPage, fetchNextPage, onReply,
 }: {
   scrollRef: React.RefObject<HTMLDivElement | null>;
-  bottomRef: React.RefObject<HTMLDivElement | null>;
   messages: ChatMessage[];
   isLoading: boolean;
   hasNextPage: boolean;
@@ -102,7 +109,6 @@ function ThreadBody({
       ) : (
         messages.map((m) => <MessageBubble key={m.id} message={m} onReply={m.providerMessageId ? onReply : undefined} />)
       )}
-      <div ref={bottomRef} />
     </div>
   );
 }
@@ -111,7 +117,6 @@ export function MessageThread({ conversationId }: { conversationId: string }) {
   const conv = useConversation(conversationId);
   const { data, isLoading, isError, error, refetch, fetchNextPage, hasNextPage } = useConversationMessages(conversationId);
   const markRead = useMarkRead();
-  const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [reply, setReply] = useState<ReplyTarget>(null);
   const messages = data ? [...data.pages].reverse().flatMap((p) => p.items) : [];
@@ -136,7 +141,9 @@ export function MessageThread({ conversationId }: { conversationId: string }) {
     const nearBottom = el ? el.scrollHeight - el.scrollTop - el.clientHeight < 120 : true;
 
     if (isNewMessage && (firstRender || nearBottom)) {
-      bottomRef.current?.scrollIntoView({ behavior: 'auto' });
+      // `scrollIntoView` também rola o documento e esconde o cabeçalho sob a
+      // topbar fixa. Atualizar só o contêiner mantém a conversa visível.
+      if (el) el.scrollTop = el.scrollHeight;
     } else if (el && el.scrollHeight !== prevScrollHeight.current) {
       // History prepended (or anything that grew the content above the fold):
       // keep the currently-visible message in place by offsetting scrollTop by
@@ -157,14 +164,13 @@ export function MessageThread({ conversationId }: { conversationId: string }) {
   }
 
   return (
-    <div className="flex h-full flex-col" style={{ background: 'var(--surface-sunken)' }}>
+    <div className="flex h-full flex-col" style={{ background: 'var(--canvas)' }}>
       <ThreadHeader conversationId={conversationId} conv={conv.data} />
       {conv.data?.botName && conv.data.botPaused ? (
         <PausedBotBanner conversationId={conversationId} />
       ) : null}
       <ThreadBody
         scrollRef={scrollRef}
-        bottomRef={bottomRef}
         messages={messages}
         isLoading={isLoading}
         hasNextPage={hasNextPage}

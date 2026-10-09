@@ -80,10 +80,10 @@ describe('MessageThread scroll behaviour', () => {
     (HTMLElement.prototype as unknown as { scrollIntoView: () => void }).scrollIntoView = scrollSpy;
   });
 
-  it('auto-scrolls to the bottom on the initial render', () => {
+  it('auto-scrolls only dentro do histórico no render inicial', () => {
     messagesPages = [page(['a', 'b', 'c'])];
     render(<MessageThread conversationId="c1" />);
-    expect(scrollSpy).toHaveBeenCalled();
+    expect(scrollSpy).not.toHaveBeenCalled();
   });
 
   it('does NOT scroll to bottom when older history is prepended (newest id unchanged)', () => {
@@ -111,7 +111,7 @@ describe('MessageThread scroll behaviour', () => {
     messagesPages = [page(['a', 'b', 'c'])]; // newest is now 'c'
     rerender(<MessageThread conversationId="c1" />);
 
-    expect(scrollSpy).toHaveBeenCalled();
+    expect(scrollSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -141,6 +141,11 @@ describe('MessageThread header', () => {
     convData = { ...defaultConv, displayName: 'Bruno Costa' };
     render(<MessageThread conversationId="c1" />);
     expect(screen.getByText('Bruno Costa')).toBeInTheDocument();
+  });
+
+  it('offers a return to the conversation list for the mobile single-panel view', () => {
+    render(<MessageThread conversationId="c1" />);
+    expect(screen.getByRole('link', { name: 'Voltar para conversas' })).toHaveAttribute('href', '/inbox');
   });
 
   it('falls back to the ellipsis when conversation data is absent', () => {

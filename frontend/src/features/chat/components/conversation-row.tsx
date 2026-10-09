@@ -30,7 +30,7 @@ export function ConversationRow({
       type="button"
       onClick={onClick}
       className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-left"
-      style={{ background: active ? 'var(--surface-hover)' : 'transparent', borderLeft: active ? '3px solid var(--brand-purple)' : '3px solid transparent' }}
+      style={{ background: active ? 'var(--brand-orange-soft)' : 'transparent', borderLeft: active ? '3px solid var(--brand-orange)' : '3px solid transparent', borderBottom: '1px solid var(--border)' }}
     >
       <span className="grid size-10 shrink-0 place-items-center rounded-full text-xs font-semibold" style={{ background: 'var(--surface-sunken)', color: 'var(--foreground-muted)' }}>
         {c.profilePicUrl ? <img src={c.profilePicUrl} alt="" className="size-10 rounded-full object-cover" /> : initials(c.displayName)}
@@ -66,14 +66,14 @@ export function ConversationRow({
               <span
                 data-testid="assignee-badge"
                 title={c.assignedUserName ?? undefined}
-                className="grid size-4 place-items-center rounded-full text-[8px] font-bold text-white"
-                style={{ background: 'var(--brand-purple)' }}
+                className="grid size-4 place-items-center rounded-full text-[8px] font-bold"
+                style={{ background: 'var(--brand-primary)', color: 'var(--surface)' }}
               >
                 {initials(c.assignedUserName)}
               </span>
             ) : null}
             {c.unreadCount > 0 ? (
-              <span className="rounded-full px-1.5 text-[10px] font-bold text-white" style={{ background: 'var(--brand-purple)' }}>{c.unreadCount}</span>
+              <span className="rounded-full px-1.5 text-[10px] font-bold" style={{ background: 'var(--brand-primary)', color: 'var(--surface)' }}>{c.unreadCount}</span>
             ) : null}
           </span>
         </span>

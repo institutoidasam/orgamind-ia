@@ -168,7 +168,7 @@ export function ConversationsList({ activeId }: { activeId?: string }) {
   const showProviderBadge = providerFilter === 'all' && new Set(items.map((c) => c.provider).filter(Boolean)).size >= 2;
 
   return (
-    <div className="flex h-full flex-col" style={{ borderRight: '1px solid var(--border)' }}>
+    <div className="flex h-full flex-col" style={{ background: 'var(--surface)', borderRight: '1px solid var(--border)' }}>
       <div className="space-y-2 px-3.5 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
         <div className="ds-eyebrow">inbox</div>
         <div className="flex items-center gap-1.5">
@@ -177,7 +177,7 @@ export function ConversationsList({ activeId }: { activeId?: string }) {
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Buscar conversa…"
             className="w-full min-w-0 flex-1 rounded-md px-3 py-1.5 text-sm"
-            style={{ background: 'var(--surface-sunken)' }}
+            style={{ background: 'var(--surface)', border: '1px solid var(--border)' }}
           />
           <button
             type="button"
@@ -185,8 +185,8 @@ export function ConversationsList({ activeId }: { activeId?: string }) {
             onClick={() => setFilter(filter === 'unread' ? 'all' : 'unread')}
             className="shrink-0 rounded-full px-2.5 py-1 text-xs"
             style={{
-              background: filter === 'unread' ? 'var(--st-read-bg)' : 'transparent',
-              color: filter === 'unread' ? 'var(--brand-purple)' : 'var(--foreground-muted)',
+              background: filter === 'unread' ? 'var(--brand-orange-soft)' : 'transparent',
+              color: filter === 'unread' ? 'var(--brand-orange-text)' : 'var(--foreground-muted)',
             }}
           >
             Não lidas
@@ -200,8 +200,8 @@ export function ConversationsList({ activeId }: { activeId?: string }) {
             onClick={() => setFilter(filter === 'awaiting' ? 'all' : 'awaiting')}
             className="shrink-0 rounded-full px-2.5 py-1 text-xs"
             style={{
-              background: filter === 'awaiting' ? 'var(--st-read-bg)' : 'transparent',
-              color: filter === 'awaiting' ? 'var(--brand-purple)' : 'var(--foreground-muted)',
+              background: filter === 'awaiting' ? 'var(--brand-orange-soft)' : 'transparent',
+              color: filter === 'awaiting' ? 'var(--brand-orange-text)' : 'var(--foreground-muted)',
             }}
           >
             Aguardando resposta

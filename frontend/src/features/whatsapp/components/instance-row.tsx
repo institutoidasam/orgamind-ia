@@ -83,7 +83,7 @@ export function InstanceRow(props: Props) {
               {!isOnline && (
                 <button
                   type="button"
-                  className="rounded border border-[var(--brand-purple)] bg-[var(--brand-purple)] px-2 py-1 font-medium text-white"
+                  className="rounded border border-[var(--brand-navy)] bg-[var(--brand-navy)] px-2 py-1 font-medium text-white"
                   onClick={props.onConnect}
                 >
                   Conectar (QR)

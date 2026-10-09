@@ -31,6 +31,16 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.10.08',
+    date: '2026-10-08',
+    title: 'Nova identidade visual do OrgaMind',
+    items: [
+      {
+        text: 'A navegação, as telas de acesso, as campanhas e o Inbox receberam a nova identidade visual, com superfícies mais claras, azul-marinho e acentos laranja.',
+      },
+    ],
+  },
+  {
     version: '2026.08.25.2',
     date: '2026-08-25',
     title: 'Excluir quem já recebeu, canais e templates ficaram mais claros',

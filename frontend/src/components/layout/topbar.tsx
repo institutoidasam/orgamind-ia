@@ -37,10 +37,9 @@ export function Topbar({
 
   return (
     <div
-      className="no-print sticky top-0 z-10 flex items-center gap-2 px-3 py-3 sm:gap-3 sm:px-4 lg:px-6"
+      className="no-print sticky top-0 z-10 flex min-h-[61px] items-center gap-2 px-3 py-3 sm:gap-3 sm:px-5 lg:px-8"
       style={{
-        background: 'color-mix(in oklch, var(--canvas) 80%, transparent)',
-        backdropFilter: 'blur(10px)',
+        background: 'var(--surface)',
         borderBottom: '1px solid var(--border)',
       }}
     >
@@ -71,7 +70,7 @@ export function Topbar({
         className="flex min-w-0 items-center gap-2 text-sm"
         style={{ color: 'var(--foreground-muted)' }}
       >
-        <span className="hidden sm:inline">ORGAMIND</span>
+        <span className="hidden font-semibold tracking-tight sm:inline" style={{ color: 'var(--foreground)' }}>ORGAMIND</span>
         <span className="hidden sm:inline" style={{ color: 'var(--foreground-subtle)' }}>/</span>
         <strong className="truncate font-medium" style={{ color: 'var(--foreground)' }}>
           {pageName}
@@ -96,7 +95,7 @@ export function Topbar({
         <span className="hidden md:inline">Buscar ou executar...</span>
         <kbd
           className="ml-2 hidden rounded px-1.5 py-0.5 font-mono text-[11px] md:inline"
-          style={{ background: 'var(--surface-sunken)', border: '1px solid var(--border)' }}
+          style={{ background: 'var(--canvas)', border: '1px solid var(--border)' }}
         >
           ⌘K
         </kbd>
@@ -113,7 +112,7 @@ export function Topbar({
             type="button"
             aria-label="Menu do perfil"
             className="grid size-8 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white transition-opacity hover:opacity-80"
-            style={{ background: 'var(--gradient-brand)' }}
+            style={{ background: 'var(--brand-navy)' }}
           >
             {initials(displayName)}
           </button>

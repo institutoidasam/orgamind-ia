@@ -91,6 +91,35 @@ beforeEach(() => {
 });
 
 describe('DashboardPage — KPIs', () => {
+  it('uses the compact KPI treatment with a single orange accent', () => {
+    useDashboardMetricsMock.mockReturnValue(queryResult({ data: makeMetrics() }));
+    useCampaignsMock.mockReturnValue(queryResult({ data: [] }));
+
+    wrap(<DashboardPage />);
+
+    const kpis = screen.getByTestId('dashboard-kpis');
+    expect(kpis).toHaveClass('grid-cols-2', 'gap-3');
+    expect(kpis.firstElementChild).toHaveAttribute(
+      'style',
+      expect.stringContaining('border-top: 3px solid var(--brand-orange)'),
+    );
+  });
+
+  it('hides sparklines below the small breakpoint to keep mobile KPI labels legible', () => {
+    useDashboardMetricsMock.mockReturnValue(
+      queryResult({
+        data: makeMetrics({
+          activeCampaigns: metricBlock(7, '3 agendadas', [1, 2, 3]),
+        }),
+      }),
+    );
+    useCampaignsMock.mockReturnValue(queryResult({ data: [] }));
+
+    wrap(<DashboardPage />);
+
+    expect(screen.getByTestId('kpi-sparkline')).toHaveClass('hidden', 'sm:block');
+  });
+
   it('renders KPI counts and the % suffix on delivery rate', () => {
     useDashboardMetricsMock.mockReturnValue(
       queryResult({
@@ -274,9 +303,9 @@ describe('DashboardPage — recent campaign rows', () => {
 
     const { container } = wrap(<DashboardPage />);
 
-    // The progress fill is the gradient-brand element that carries an inline width.
+    // The progress fill uses the dashboard's orange accent and carries an inline width.
     const fill = Array.from(
-      container.querySelectorAll<HTMLElement>('[style*="gradient-brand"]'),
+      container.querySelectorAll<HTMLElement>('[style*="brand-orange"]'),
     ).find((el) => el.style.width !== '');
     expect(fill).toBeDefined();
     expect(fill!.style.width).toBe('100%');

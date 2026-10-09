@@ -30,17 +30,17 @@ export function Sidebar({ collapsed, user, onNavigate }: Props) {
 
   return (
     <div
-      className="flex h-full min-h-screen flex-col px-3 py-4 lg:min-h-0"
-      style={{ background: 'var(--surface-sunken)', borderRight: '1px solid var(--border)' }}
+      className="flex h-full min-h-screen flex-col px-3 py-5 lg:min-h-0"
+      style={{ background: 'var(--brand-navy)', color: '#fff' }}
     >
-      <div className="flex items-center gap-2.5 px-1.5 pb-4">
-        <img src={logoSvg} alt="" className="size-6" aria-hidden />
+      <div className="flex items-center gap-2.5 px-1.5 pb-5">
+        <img src={logoSvg} alt="" className="size-8 shrink-0" aria-hidden />
         {!collapsed && (
           <div className="leading-tight">
-            <div className="text-[20px] font-bold tracking-tight">ORGAMIND</div>
+            <div className="text-[18px] font-bold tracking-tight text-white">ORGAMIND</div>
             <div
-              className="text-[10px] uppercase tracking-wider"
-              style={{ color: 'var(--foreground-muted)' }}
+              className="text-[10px] uppercase tracking-[0.08em]"
+              style={{ color: 'rgba(219, 228, 239, 0.72)' }}
               title="Plataforma Inteligente de Comunicação Operacional Automática"
             >
               Comunicação operacional
@@ -59,17 +59,17 @@ export function Sidebar({ collapsed, user, onNavigate }: Props) {
 
       <div
         className="flex items-center gap-2.5 border-t pt-2.5 text-xs"
-        style={{ borderColor: 'var(--border)', color: 'var(--foreground-muted)' }}
+        style={{ borderColor: 'rgba(219, 228, 239, 0.18)', color: 'rgba(219, 228, 239, 0.72)' }}
       >
         <span
-          className="grid size-7 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white"
-          style={{ background: 'var(--gradient-brand)' }}
+          className="grid size-7 shrink-0 place-items-center rounded-full text-[11px] font-semibold"
+          style={{ background: 'var(--brand-orange)', color: 'var(--brand-navy)' }}
         >
           {initials(displayName)}
         </span>
         {!collapsed && (
           <div className="min-w-0">
-            <div className="truncate text-foreground">{user?.name ?? user?.email ?? '—'}</div>
+            <div className="truncate text-white">{user?.name ?? user?.email ?? '—'}</div>
             <div className="text-[11px] uppercase tracking-wider">{user?.role ?? 'operador'}</div>
           </div>
         )}
@@ -95,7 +95,14 @@ function Section({
 }) {
   return (
     <div className="mt-2 flex flex-col gap-0.5">
-      {!collapsed && <div className="ds-eyebrow px-2 pb-1 pt-2">{eyebrow}</div>}
+      {!collapsed && (
+        <div
+          className="px-2 pb-1 pt-2 text-[10px] font-bold uppercase tracking-[0.12em]"
+          style={{ color: 'rgba(173, 189, 209, 0.85)' }}
+        >
+          {eyebrow}
+        </div>
+      )}
       {items.map(({ label, to, icon: Icon }) => {
         const active = isActive(to);
         return (
@@ -103,17 +110,24 @@ function Section({
             key={to}
             to={to}
             onClick={onNavigate}
-            className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-sm font-medium transition-colors"
+            aria-current={active ? 'page' : undefined}
+            className="flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--brand-orange)]"
             style={{
-              background: active ? 'var(--surface)' : 'transparent',
-              color: active ? 'var(--foreground)' : 'var(--foreground-muted)',
-              boxShadow: active ? 'var(--shadow-xs), var(--ring-soft)' : undefined,
+              background: active ? 'color-mix(in srgb, var(--brand-navy) 72%, white)' : 'transparent',
+              color: active ? '#fff' : '#dbe4ef',
+              boxShadow: active ? 'inset 3px 0 var(--brand-orange)' : undefined,
             }}
           >
             <Icon className="size-[18px] shrink-0" />
             {!collapsed && <span>{label}</span>}
             {badges?.[to] ? (
-              <span className="ml-auto rounded-full px-1.5 text-[10px] font-bold text-white" style={{ background: 'var(--brand-purple)' }}>
+              <span
+                className="ml-auto rounded-full px-1.5 text-[10px] font-bold"
+                style={{
+                  background: active ? 'var(--brand-orange)' : 'rgba(219, 228, 239, 0.18)',
+                  color: active ? 'var(--brand-navy)' : '#dbe4ef',
+                }}
+              >
                 {badges[to]}
               </span>
             ) : null}

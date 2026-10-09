@@ -129,6 +129,15 @@ describe('ProviderBadge', () => {
       unmount();
     }
   });
+
+  it('keeps provider identity in the tint while using the foreground token for the label', () => {
+    render(<ProviderBadge provider="EVOLUTION" />);
+    const badge = screen.getByText('Evolution');
+
+    expect(badge).toHaveStyle({ color: 'var(--foreground)' });
+    expect(badge.style.background).toMatch(/color-mix\(in oklch, .* 12%, transparent\)/);
+    expect(badge.style.borderColor).toMatch(/color-mix\(in oklch, .* 35%, transparent\)/);
+  });
 });
 
 // --- ConnectionStateBadge -------------------------------------------------------
@@ -144,6 +153,15 @@ describe('ConnectionStateBadge', () => {
   ] as const)('renderiza o rótulo PT-BR do estado "%s"', (state, label) => {
     render(<ConnectionStateBadge state={state} />);
     expect(screen.getByText(label)).toBeInTheDocument();
+  });
+
+  it('uses the foreground token for the label while keeping the semantic color on the status dot', () => {
+    render(<ConnectionStateBadge state="connecting" />);
+    const label = screen.getByText('Conectando…');
+    const dot = label.querySelector('[aria-hidden]');
+
+    expect(label).toHaveStyle({ color: 'var(--foreground)' });
+    expect(dot).toHaveStyle({ background: '#f59e0b' });
   });
 
   it('não renderiza nada quando o estado é null (canal sem sessão — não é "desconectado")', () => {

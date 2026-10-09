@@ -33,13 +33,13 @@ function LoginPage() {
   const login = useLogin();
 
   return (
-    <div className="grid min-h-screen lg:grid-cols-2">
+    <div className="grid min-h-screen lg:grid-cols-2" style={{ background: 'var(--canvas)' }}>
       <div
         className="relative hidden flex-col justify-between p-14 text-white lg:flex"
-        style={{ background: 'var(--gradient-brand)' }}
+        style={{ background: 'var(--brand-navy)' }}
       >
         <div className="flex items-center gap-2 text-xl font-bold tracking-tight">
-          <img src={logoSvg} alt="" className="size-7 brightness-0 invert" aria-hidden />
+          <img src={logoSvg} alt="" className="size-7" aria-hidden />
           ORGAMIND
         </div>
         <h1 className="text-[clamp(40px,5vw,72px)] font-extrabold leading-[0.98] tracking-[-0.04em]">
@@ -50,8 +50,8 @@ function LoginPage() {
           Painel do operador
         </div>
       </div>
-      <div className="flex items-center justify-center px-6 py-12">
-        <div className="w-full max-w-[360px] space-y-5">
+      <div className="flex items-center justify-center px-6 py-12" style={{ background: 'var(--surface)' }}>
+        <div className="w-full max-w-[360px] space-y-5 rounded-lg border p-6" style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}>
           <div>
             <h2 className="ds-display !text-3xl">Bem-vindo de volta.</h2>
             <p className="mt-1 text-sm" style={{ color: 'var(--foreground-muted)' }}>

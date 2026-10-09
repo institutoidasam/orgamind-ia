@@ -151,7 +151,7 @@ export function MessageComposer({ conversationId, reply, onClearReply, provider,
     <div style={{ background: 'var(--surface)', borderTop: '1px solid var(--border)' }}>
       {reply ? (
         <div className="flex items-center justify-between gap-2 px-4 pt-2 text-xs" style={{ color: 'var(--foreground-muted)' }}>
-          <span className="truncate" style={{ borderLeft: '3px solid var(--brand-purple)', paddingLeft: 8 }}>↩︎ {reply.preview}</span>
+          <span className="truncate" style={{ borderLeft: '3px solid var(--brand-orange)', paddingLeft: 8 }}>↩︎ {reply.preview}</span>
           <button type="button" onClick={onClearReply} aria-label="Cancelar resposta"><X className="size-3.5" /></button>
         </div>
       ) : null}
@@ -175,7 +175,7 @@ export function MessageComposer({ conversationId, reply, onClearReply, provider,
           <span>Janela de 24h fechada — envie um template aprovado para reabrir a conversa.</span>
           {/* Caminho mais simples existente para enviar um template aprovado:
               o fluxo de campanha (não há envio avulso de template 1:1 hoje). */}
-          <Link to="/campaigns/new" className="shrink-0 font-medium underline" style={{ color: 'var(--brand-purple)' }}>
+          <Link to="/campaigns/new" className="shrink-0 font-medium underline" style={{ color: 'var(--brand-blue)' }}>
             Enviar template
           </Link>
         </div>

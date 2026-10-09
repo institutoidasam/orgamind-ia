@@ -7,7 +7,7 @@ const STATUS_TICKS: Record<string, TickEntry> = {
   WAITING_INSTANCE: { icon: <Clock className="size-3" />, title: 'Aguardando conexão' },
   SENT: { icon: <Check className="size-3" />, title: 'Enviada' },
   DELIVERED: { icon: <CheckCheck className="size-3" />, title: 'Entregue' },
-  READ: { icon: <CheckCheck className="size-3" style={{ color: 'var(--brand-cyan)' }} />, title: 'Lida' },
+  READ: { icon: <CheckCheck className="size-3" style={{ color: 'var(--surface)' }} />, title: 'Lida' },
   FAILED: { icon: <AlertTriangle className="size-3" style={{ color: 'var(--st-failed-fg)' }} />, title: 'Falhou' },
   CANCELLED: { icon: <AlertTriangle className="size-3" />, title: 'Cancelada' },
 };

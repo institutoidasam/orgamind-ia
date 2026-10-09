@@ -276,7 +276,7 @@ function CampaignProgressCell({ campaign }: { campaign: CampaignSummary }) {
           className="h-full"
           style={{
             width: `${pct}%`,
-            background: 'var(--gradient-brand)',
+            background: 'var(--brand-orange)',
             transition: 'width 240ms ease-out',
           }}
         />
@@ -323,11 +323,7 @@ function CampaignRow({ campaign }: { campaign: CampaignSummary }) {
   return (
     <TableRow>
       <TableCell>
-        <Link
-          to="/campaigns/$campaignId"
-          params={{ campaignId: campaign.id }}
-          className="underline"
-        >
+        <Link to="/campaigns/$campaignId" params={{ campaignId: campaign.id }} className="underline" style={{ color: 'var(--brand-blue)' }}>
           {campaign.name}
         </Link>
       </TableCell>
@@ -452,7 +448,7 @@ function CampaignsPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-3">
+      <div className="flex flex-wrap items-end justify-between gap-3 rounded-lg border px-4 py-4 sm:px-5" style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}>
         <header className="space-y-1">
           <div className="ds-eyebrow">campanhas · {data?.length ?? 0}</div>
           <h1 className="ds-display !text-3xl">Disparos.</h1>
@@ -467,24 +463,26 @@ function CampaignsPage() {
       {isLoading ? (
         <p>Carregando...</p>
       ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Nome</TableHead>
-              <TableHead>Template</TableHead>
-              <TableHead>Destinatários</TableHead>
-              <TableHead className="w-[160px]">Progresso</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Criada em</TableHead>
-              <TableHead className="w-[60px]" />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {data?.map((c) => (
-              <CampaignRow key={c.id} campaign={c} />
-            ))}
-          </TableBody>
-        </Table>
+        <div className="overflow-x-auto rounded-lg border" style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Nome</TableHead>
+                <TableHead>Template</TableHead>
+                <TableHead>Destinatários</TableHead>
+                <TableHead className="w-[160px]">Progresso</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead>Criada em</TableHead>
+                <TableHead className="w-[60px]" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data?.map((c) => (
+                <CampaignRow key={c.id} campaign={c} />
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       )}
     </div>
   );

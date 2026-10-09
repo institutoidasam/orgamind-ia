@@ -542,6 +542,9 @@ describe('NewCampaignPage characterization — step rendering & navigation', () 
     expect(
       screen.getByRole('heading', { name: /passo 1 de 4/i }),
     ).toBeTruthy();
+    expect(
+      screen.getByRole('navigation', { name: 'Progresso da campanha' }),
+    ).toHaveTextContent('Configurar');
     expect(screen.getByText('Nome e template')).toBeTruthy();
     expect(screen.getByPlaceholderText(/Boas-vindas alunos/i)).toBeTruthy();
     // Channel row for the seeded "Principal" channel.

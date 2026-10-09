@@ -54,18 +54,18 @@ function OptInPage() {
   const razaoSocial = org.data?.legalName ?? '';
 
   return (
-    <div className="flex min-h-screen flex-col bg-background">
+    <div className="flex min-h-screen flex-col" style={{ background: 'var(--canvas)' }}>
       <header
         className="flex items-center gap-2 px-5 py-4 text-white"
-        style={{ background: 'var(--gradient-brand)' }}
+        style={{ background: 'var(--brand-navy)' }}
       >
-        <img src={logoSvg} alt="" className="size-6 brightness-0 invert" aria-hidden />
+        <img src={logoSvg} alt="" className="size-6" aria-hidden />
         <span className="text-lg font-bold tracking-tight">{nome}</span>
       </header>
 
       {/* max-w + px generosos: isto é aberto no celular, em 3G, no meio do campo. */}
-      <main className="mx-auto w-full max-w-[520px] flex-1 px-5 py-8 sm:py-12">
-        {result ? (
+      <main className="mx-auto w-full max-w-[520px] flex-1 px-5 py-8 sm:py-12"><div className="rounded-lg border p-5 sm:p-6" style={{ borderColor: 'var(--border)', background: 'var(--surface)' }}>
+          {result ? (
           <ResultPanel result={result} />
         ) : text.isLoading ? (
           <div className="space-y-4">
@@ -121,8 +121,8 @@ function OptInPage() {
               }}
             />
           </div>
-        )}
-      </main>
+          )}
+        </div></main>
 
       {/* A razão social por extenso: quem é o CONTROLADOR dos dados. É o que a
           LGPD (art. 9º I) quer visível para o titular, e vem da configuração. */}
@@ -152,8 +152,8 @@ function ResultPanel({ result }: { result: PublicOptInResult }) {
         aria-hidden
         className="mx-auto flex size-14 items-center justify-center rounded-full text-2xl"
         style={{
-          background: ok ? 'var(--gradient-brand)' : 'var(--muted)',
-          color: ok ? '#fff' : 'var(--foreground-muted)',
+          background: ok ? 'var(--brand-orange)' : 'var(--muted)',
+          color: ok ? 'var(--brand-navy)' : 'var(--foreground-muted)',
         }}
       >
         {ok ? '✓' : '!'}

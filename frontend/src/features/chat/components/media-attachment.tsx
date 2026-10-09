@@ -13,7 +13,7 @@ const renderImage = (url: string, media: Media): ReactElement =>
   <img src={url} alt={media.fileName ?? 'imagem'} className="max-h-64 rounded-md" />;
 
 const renderDocument = (url: string, media: Media): ReactElement =>
-  <a href={url} download={media.fileName ?? 'arquivo'} className="text-xs underline" style={{ color: 'var(--brand-purple)' }}>📎 {media.fileName ?? 'documento'}</a>;
+  <a href={url} download={media.fileName ?? 'arquivo'} className="text-xs underline" style={{ color: 'var(--brand-blue)' }}>📎 {media.fileName ?? 'documento'}</a>;
 
 const RENDERERS: Record<MediaKind, (url: string, media: Media) => ReactElement> = {
   IMAGE: renderImage,

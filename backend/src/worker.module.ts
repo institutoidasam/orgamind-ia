@@ -36,6 +36,7 @@ import { BotsModule } from './modules/bots/bots.module';
 import { BotReplyProcessor } from './modules/bots/bot-reply.processor';
 import { ConsentModule } from './modules/consent/consent.module';
 import { OrganizationModule } from './modules/organization/organization.module';
+import { serializeErrorForLog } from './shared/logging/pino-error-serializer';
 // ConnectionReconcilerService is provided + exported by WhatsappInstancesModule
 // (imported below), where EvolutionApiAdapter and the repos it needs are in
 // scope. Declaring it directly here too created a duplicate the WorkerModule
@@ -53,6 +54,7 @@ import { OrganizationModule } from './modules/organization/organization.module';
           process.env.NODE_ENV !== 'production'
             ? { target: 'pino-pretty', options: { singleLine: true } }
             : undefined,
+        serializers: { err: serializeErrorForLog },
       },
     }),
     PrismaModule,

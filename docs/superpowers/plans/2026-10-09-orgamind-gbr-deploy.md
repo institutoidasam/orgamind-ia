@@ -26,3 +26,12 @@ Principal opera APIs: criar projeto OrgaMind GBR, ambiente production e compose 
 ## Task 6 — aceite público
 
 Principal: readiness via proxy, TLS, página de login, login API inicial com mustChangePassword, inspeção de serviços e erros. Preservar credenciais apenas no arquivo protegido. Reportar domínio/revisão/resultados e pendências reais. Sem enviar campanhas ou conectar contas WhatsApp.
+
+## Follow-up de aceite — probe e logs de erro
+
+Boot real encontrou worker unhealthy por herança do probe da API e credencial Evolution em erro Axios serializado. Worker novo parado durante a correção.
+
+- Task7 ownership docker-compose.prod.yml: override healthcheck worker em porta3001/ready, confirmação de Compose sem segredos; não alterar outros serviços.
+- Task8 ownership logging compartilhado/app.module/worker.module e specs: erro HTTP seguro nas duas configurações, Pino real com fixtures fictícias provando ausência de headers/rawrequest/payload/query/cause com credenciais. Preservar diagnóstico útil e redaction HTTP existente. Gate do delta e revisão independente obrigatórios.
+- Task9 ownership somente env privado GBR: renovar EVOLUTION_API_KEY comprometida em logs internos, preservar salt/banco/admin e demais valores; salvar novo env, publicar fixes, redeploy sem apagar volumes. Chave global é usada pelo adapter; a instância Evolution ainda não foi provisionada.
+- Aceite final: migrate exit0, API/web/postgres/redis/worker saudáveis, Evolution rodando; TLS/readiness/login200; logs posteriores não contêm chave nova ou anterior. Dívida global do gate legado permanece backlog identificado.

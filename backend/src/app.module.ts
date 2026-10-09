@@ -21,6 +21,7 @@ import { PrismaModule } from './shared/prisma/prisma.module';
 import { MediaStoreModule } from './shared/media/media-store.module';
 import { HealthModule } from './shared/health/health.module';
 import { CorrelationIdMiddleware } from './shared/correlation/correlation-id.middleware';
+import { serializeErrorForLog } from './shared/logging/pino-error-serializer';
 import { sanitizeReqForLog } from './shared/logging/pino-req-serializer';
 import { AuditModule } from './shared/audit/audit.module';
 import { AuditContextInterceptor } from './shared/audit/audit-context.interceptor';
@@ -151,7 +152,7 @@ export const LOG_REDACT_PATHS = [
         // handshake da Meta em /webhooks/whatsapp). `redact` é por CAMINHO,
         // não por substring, então não alcança a string de `url`. Ver
         // shared/logging/pino-req-serializer.ts para o porquê completo.
-        serializers: { req: sanitizeReqForLog },
+        serializers: { req: sanitizeReqForLog, err: serializeErrorForLog },
       },
     }),
   ],

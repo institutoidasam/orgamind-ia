@@ -343,6 +343,14 @@ services:
     command: ["node", "dist/worker.js"]
     restart: unless-stopped
     stop_grace_period: 60s
+    # This process does not run the API server inherited from the image. Probe
+    # its dedicated readiness endpoint so an unavailable Redis is surfaced.
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:3001/health/ready || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     environment:
       NODE_ENV: production
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -351,6 +359,7 @@ services:
       REDIS_URL: redis://redis:6379
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      WORKER_HEALTH_PORT: "3001"
 
       # Worker uses the same shared config module as api, so it requires the
       # same validated env vars even if it doesn't serve HTTP traffic.

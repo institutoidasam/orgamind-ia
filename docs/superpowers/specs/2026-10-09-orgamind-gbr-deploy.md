@@ -24,3 +24,7 @@ Base: `f4abdb9` em `codex/orgamind-visual-rebrand`; `origin/main` está no mesmo
 5. Registrar IDs, revisão, validação, credenciais apenas por caminho e plano de recuperação, sem segredos.
 
 Recuperação: como é primeiro deploy com banco novo, parar apenas o novo compose em caso de boot/migração inválida, corrigir e redeploy. Nunca apagar volumes ou modificar serviços existentes.
+
+## Evidência de boot e complemento de contrato
+
+O primeiro deploy concluiu e a QA pública passou, mas revelou dois bloqueantes do fechamento: healthcheck worker herdado da API e erro Axios incluindo credencial Evolution no log interno. Corrigir o probe e serializar erros HTTP com campos seguros, validando Pino real nas configurações API/worker. Renovar a chave global Evolution antes do aceite; preservar todos os demais segredos e volumes. Instância ainda não provisionada, conexão WhatsApp segue etapa posterior do operador.

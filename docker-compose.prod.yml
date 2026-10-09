@@ -100,7 +100,7 @@ services:
     # O procedimento de subida do OPERATIONS.md manda ler um dry-run NOVO antes.
     # O relatório sai com o telefone MASCARADO (o stdout deste contêiner é o que a
     # API do Dokploy expõe); `--verbose` mostraria inteiro e não é usado aqui.
-    command: ["sh", "-c", "npx prisma migrate deploy && npx prisma db seed && (npx tsx prisma/repair-campaign-message-content.ts || echo 'repair-campaign-message-content non-fatal failure, continuing') && (npx tsx prisma/backfill-conversations.ts || echo 'backfill-conversations non-fatal failure, continuing') && (npx tsx prisma/backfill-contact-validity.ts --apply || echo 'backfill-contact-validity non-fatal failure, continuing') && (npx tsx scripts/closeout-stuck-campaigns.ts --apply || echo 'closeout-stuck-campaigns non-fatal failure, continuing') && npx tsx prisma/merge-duplicate-phone-contacts.ts --apply"]
+    command: ["sh", "-c", "node dist/shared/config/validate-consent-salt.js && npx prisma migrate deploy && npx prisma db seed && (npx tsx prisma/repair-campaign-message-content.ts || echo 'repair-campaign-message-content non-fatal failure, continuing') && (npx tsx prisma/backfill-conversations.ts || echo 'backfill-conversations non-fatal failure, continuing') && (npx tsx prisma/backfill-contact-validity.ts --apply || echo 'backfill-contact-validity non-fatal failure, continuing') && (npx tsx scripts/closeout-stuck-campaigns.ts --apply || echo 'closeout-stuck-campaigns non-fatal failure, continuing') && npx tsx prisma/merge-duplicate-phone-contacts.ts --apply"]
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL}
@@ -140,9 +140,9 @@ services:
       # e a validação de consentimento seria recalculada do zero, o que é uma
       # operação destrutiva.
       #
-      # O valor é definido uma vez no primeiro deploy e nunca deve ser alterado
-      # em produção sem planejamento de migração de dados.
-      PICOA_CONSENT_SALT: __CHANGE_ME__generate_once_and_never_change__
+      # O valor é fornecido pelo ambiente uma vez no primeiro deploy e nunca
+      # deve ser alterado em produção sem planejamento de migração de dados.
+      PICOA_CONSENT_SALT: "${PICOA_CONSENT_SALT:?PICOA_CONSENT_SALT must be set and non-empty}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -233,6 +233,9 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       JWT_ACCESS_EXPIRES_IN: ${JWT_ACCESS_EXPIRES_IN:-15m}
       JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
+      # Deve ser exatamente o mesmo valor usado por migrate e worker. O
+      # compose exige que seja definido pelo ambiente de produção.
+      PICOA_CONSENT_SALT: "${PICOA_CONSENT_SALT:?PICOA_CONSENT_SALT must be set and non-empty}"
 
       # WhatsApp providers: at least one credential group below must be FULLY
       # set or the app fails to boot (see backend/src/shared/config/env.schema.ts).
@@ -376,6 +379,9 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       JWT_ACCESS_EXPIRES_IN: ${JWT_ACCESS_EXPIRES_IN:-15m}
       JWT_REFRESH_EXPIRES_IN: ${JWT_REFRESH_EXPIRES_IN:-7d}
+      # Deve ser exatamente o mesmo valor usado por migrate e api. O compose
+      # exige que seja definido pelo ambiente de produção.
+      PICOA_CONSENT_SALT: "${PICOA_CONSENT_SALT:?PICOA_CONSENT_SALT must be set and non-empty}"
 
       # WhatsApp providers — same rules as the api service (see the comment
       # there): at least one credential group must be FULLY set.

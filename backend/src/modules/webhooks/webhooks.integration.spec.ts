@@ -9,7 +9,7 @@ import {
   type StartedPostgreSqlContainer,
 } from '@testcontainers/postgresql';
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
-import { AppModule } from '../../app.module';
+import { DomainExceptionFilter } from '../../shared/errors/domain-exception.filter';
 
 /**
  * Integration test exercising:
@@ -42,6 +42,8 @@ describe.skipIf(!TESTCONTAINERS_ENABLED)('Webhooks (integration)', () => {
     process.env.REDIS_HOST = redis.getHost();
     process.env.REDIS_PORT = String(redis.getMappedPort(6379));
     process.env.JWT_SECRET = 'a'.repeat(32);
+    process.env.META_ACCESS_TOKEN = 'test-meta-access-token';
+    process.env.META_PHONE_NUMBER_ID = 'test-phone-number-id';
     process.env.META_APP_SECRET = APP_SECRET;
     process.env.META_WEBHOOK_VERIFY_TOKEN = 'verify-token';
     process.env.APP_BASE_URL = 'http://localhost:5173';
@@ -57,10 +59,14 @@ describe.skipIf(!TESTCONTAINERS_ENABLED)('Webhooks (integration)', () => {
       env: { ...process.env, DATABASE_URL: postgres.getConnectionUri() },
     });
 
+    const appModule =
+      (await import('../../app.module')) as typeof import('../../app.module');
+    const { AppModule } = appModule;
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();
     app = moduleRef.createNestApplication({ rawBody: true });
+    app.useGlobalFilters(new DomainExceptionFilter());
     await app.init();
   }, 120_000);
 

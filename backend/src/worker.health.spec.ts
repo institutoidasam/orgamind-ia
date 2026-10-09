@@ -1,11 +1,43 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type Redis from 'ioredis';
-import {
-  checkReadiness,
-  createHealthHandler,
-  scheduleContactSyncCron,
-} from './worker';
+
+const workerEnv = vi.hoisted(() => {
+  const overrides = {
+    NODE_ENV: 'test',
+    DATABASE_URL: 'postgresql://u:p@localhost:5432/db',
+    REDIS_URL: 'redis://localhost:6379',
+    JWT_SECRET: 'x'.repeat(32),
+    APP_BASE_URL: 'https://picoa.test',
+    WEBHOOK_BASE_URL: 'https://picoa.test',
+    CORS_ORIGIN: 'https://picoa.test',
+    ZERNIO_API_KEY: 'zk_test',
+    ZERNIO_BASE_URL: 'https://zernio.test/api/v1',
+    ZERNIO_WEBHOOK_SECRET: 'whsec_test',
+  };
+  const original = new Map<string, string | undefined>();
+  for (const key of Object.keys(overrides)) {
+    original.set(key, process.env[key]);
+  }
+  Object.assign(process.env, overrides);
+  return { original };
+});
+
+let worker: typeof import('./worker');
+
+beforeAll(async () => {
+  worker = (await import('./worker')) as typeof import('./worker');
+});
+
+afterAll(() => {
+  for (const [key, value] of workerEnv.original) {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+});
 
 function makeRes() {
   const res = {
@@ -32,7 +64,7 @@ describe('worker readiness', () => {
   describe('checkReadiness', () => {
     it('returns ready when Redis PING succeeds', async () => {
       const redis = { ping: vi.fn().mockResolvedValue('PONG') } as unknown as Redis;
-      const result = await checkReadiness(redis);
+      const result = await worker.checkReadiness(redis);
       expect(result.ready).toBe(true);
       expect(result.redis).toBe('up');
       expect(redis.ping).toHaveBeenCalledTimes(1);
@@ -42,13 +74,13 @@ describe('worker readiness', () => {
       const redis = {
         ping: vi.fn().mockRejectedValue(new Error('ECONNREFUSED')),
       } as unknown as Redis;
-      const result = await checkReadiness(redis);
+      const result = await worker.checkReadiness(redis);
       expect(result.ready).toBe(false);
       expect(result.redis).toBe('down');
     });
 
     it('returns NOT ready when Redis client is missing', async () => {
-      const result = await checkReadiness(undefined);
+      const result = await worker.checkReadiness(undefined);
       expect(result.ready).toBe(false);
       expect(result.redis).toBe('down');
     });
@@ -59,7 +91,7 @@ describe('worker readiness', () => {
       const redis = {
         ping: vi.fn().mockRejectedValue(new Error('down')),
       } as unknown as Redis;
-      const handler = createHealthHandler(redis);
+      const handler = worker.createHealthHandler(redis);
       const res = makeRes();
       await handler({ url: '/health/live' } as IncomingMessage, res);
       expect(res.statusCode).toBe(200);
@@ -68,7 +100,7 @@ describe('worker readiness', () => {
 
     it('responds 200 to /health/ready when Redis is up', async () => {
       const redis = { ping: vi.fn().mockResolvedValue('PONG') } as unknown as Redis;
-      const handler = createHealthHandler(redis);
+      const handler = worker.createHealthHandler(redis);
       const res = makeRes();
       await handler({ url: '/health/ready' } as IncomingMessage, res);
       expect(res.statusCode).toBe(200);
@@ -79,7 +111,7 @@ describe('worker readiness', () => {
       const redis = {
         ping: vi.fn().mockRejectedValue(new Error('ECONNREFUSED')),
       } as unknown as Redis;
-      const handler = createHealthHandler(redis);
+      const handler = worker.createHealthHandler(redis);
       const res = makeRes();
       await handler({ url: '/health/ready' } as IncomingMessage, res);
       expect(res.statusCode).toBe(503);
@@ -90,7 +122,7 @@ describe('worker readiness', () => {
 
     it('responds 404 to unknown paths', async () => {
       const redis = { ping: vi.fn().mockResolvedValue('PONG') } as unknown as Redis;
-      const handler = createHealthHandler(redis);
+      const handler = worker.createHealthHandler(redis);
       const res = makeRes();
       await handler({ url: '/nope' } as IncomingMessage, res);
       expect(res.statusCode).toBe(404);
@@ -122,7 +154,7 @@ describe('scheduleContactSyncCron', () => {
       }),
     };
 
-    await scheduleContactSyncCron(queue as never, true);
+    await worker.scheduleContactSyncCron(queue as never, true);
 
     expect(queue.removeRepeatable).toHaveBeenCalledWith(
       'cron',
@@ -148,9 +180,9 @@ describe('scheduleContactSyncCron', () => {
       add: vi.fn().mockResolvedValue({ id: 'job1' }),
     };
 
-    await expect(scheduleContactSyncCron(queue as never, true)).resolves.toBe(
-      'scheduled',
-    );
+    await expect(
+      worker.scheduleContactSyncCron(queue as never, true),
+    ).resolves.toBe('scheduled');
   });
 
   /**
@@ -173,7 +205,7 @@ describe('scheduleContactSyncCron', () => {
       };
 
       await expect(
-        scheduleContactSyncCron(queue as never, false),
+        worker.scheduleContactSyncCron(queue as never, false),
       ).resolves.toBe('disabled');
 
       // Um deploy que já rodou com o cron ligado tem a chave gravada no ZSET
@@ -200,9 +232,9 @@ describe('scheduleContactSyncCron', () => {
         add: vi.fn().mockResolvedValue({ id: 'job1' }),
       };
 
-      await expect(scheduleContactSyncCron(queue as never)).resolves.toBe(
-        'disabled',
-      );
+      await expect(
+        worker.scheduleContactSyncCron(queue as never),
+      ).resolves.toBe('disabled');
       expect(queue.add).not.toHaveBeenCalled();
     });
   });

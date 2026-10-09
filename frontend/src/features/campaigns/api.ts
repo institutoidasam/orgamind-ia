@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 import {
   useQuery,
   useMutation,
@@ -73,14 +73,20 @@ export function useLiveCampaignsIndicator() {
 }
 
 export function useCampaign(id: string) {
-  const startedAt = useRef(Date.now());
+  const startedAt = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    startedAt.current = Date.now();
+  }, []);
   return useQuery({
     ...campaignsQueries.detail(id),
     refetchInterval: (query) => {
       // Stop polling on errors so we don't hammer a failing endpoint.
       if (query.state.status === "error") return false;
       // Hard cutoff after 30 minutes — protects long-open tabs.
-      if (Date.now() - startedAt.current > POLLING_MAX_DURATION_MS)
+      if (
+        startedAt.current !== undefined &&
+        Date.now() - startedAt.current > POLLING_MAX_DURATION_MS
+      )
         return false;
       const status = query.state.data?.status;
       // No data yet (initial load): poll once at the standard interval.
@@ -465,7 +471,10 @@ export function useCampaignWaiting(
   campaignId: string,
   opts: { live?: boolean } = {},
 ) {
-  const startedAt = useRef(Date.now());
+  const startedAt = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    startedAt.current = Date.now();
+  }, []);
   return useQuery({
     queryKey: ["campaigns", campaignId, "waiting"] as const,
     queryFn: () =>
@@ -478,7 +487,10 @@ export function useCampaignWaiting(
       // Stop polling on errors so we don't hammer a failing endpoint.
       if (query.state.status === "error") return false;
       // Hard cutoff after 30 minutes — protects long-open tabs.
-      if (Date.now() - startedAt.current > POLLING_MAX_DURATION_MS)
+      if (
+        startedAt.current !== undefined &&
+        Date.now() - startedAt.current > POLLING_MAX_DURATION_MS
+      )
         return false;
       return WAITING_POLL_INTERVAL_MS;
     },

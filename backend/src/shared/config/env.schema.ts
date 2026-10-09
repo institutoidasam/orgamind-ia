@@ -1,4 +1,8 @@
 import { z } from 'zod';
+import {
+  consentSaltValidationError,
+  CONSENT_SALT_DEVELOPMENT_DEFAULT,
+} from './consent-salt';
 
 // ── Provider credential groups ──────────────────────────────────────────────
 // A WhatsApp provider is usable only when its ENTIRE credential group is set.
@@ -17,6 +21,37 @@ type EnvInput = Record<string, unknown>;
 /** A var counts as set only when it is a non-empty (trimmed) string. */
 function isSet(v: unknown): boolean {
   return typeof v === 'string' ? v.trim().length > 0 : v != null;
+}
+
+function addProductionSecretIssue(
+  ctx: z.RefinementCtx,
+  path: string,
+  message = 'Must be set to a real (non-placeholder) value when NODE_ENV=production',
+): void {
+  ctx.addIssue({
+    code: 'custom',
+    path: [path],
+    message,
+  });
+}
+
+function validateProductionSecrets(
+  env: {
+    NODE_ENV: 'development' | 'production' | 'test';
+    BULL_BOARD_PASSWORD: string;
+    PICOA_CONSENT_SALT: string;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (env.NODE_ENV !== 'production') return;
+
+  if (!env.BULL_BOARD_PASSWORD || env.BULL_BOARD_PASSWORD === 'changeme123') {
+    addProductionSecretIssue(ctx, 'BULL_BOARD_PASSWORD');
+  }
+  const consentSaltError = consentSaltValidationError(env.PICOA_CONSENT_SALT);
+  if (consentSaltError) {
+    addProductionSecretIssue(ctx, 'PICOA_CONSENT_SALT', consentSaltError);
+  }
 }
 
 export type GroupState = {
@@ -158,7 +193,7 @@ export const envSchema = z
     // todo o histórico de consentimento já gravado (os hashes deixam de casar)
     // — na prática, ressuscita quem deu PARAR. Definir uma vez, por ambiente,
     // e nunca mais mexer. O default só existe para dev/teste.
-    PICOA_CONSENT_SALT: z.string().default('orgamind-consent-dev'),
+    PICOA_CONSENT_SALT: z.string().default(CONSENT_SALT_DEVELOPMENT_DEFAULT),
 
     // Worker tuning (worker process restart required to apply)
     WORKER_CONCURRENCY: z.coerce.number().int().positive().default(10),
@@ -504,22 +539,9 @@ export const envSchema = z
     }
 
     // The Bull Board password ships with a placeholder dev default so local
-    // boots work out of the box. In production that placeholder (and an empty
-    // value) must never be accepted — fail fast at boot instead of exposing the
-    // queue dashboard behind a guessable credential.
-    if (env.NODE_ENV === 'production') {
-      if (
-        !env.BULL_BOARD_PASSWORD ||
-        env.BULL_BOARD_PASSWORD === 'changeme123'
-      ) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['BULL_BOARD_PASSWORD'],
-          message:
-            'Must be set to a real (non-placeholder) value when NODE_ENV=production',
-        });
-      }
-    }
+    // boots work out of the box. In production it and the consent-salt
+    // examples must fail fast instead of silently accepting placeholders.
+    validateProductionSecrets(env, ctx);
   });
 
 export type Env = z.infer<typeof envSchema>;

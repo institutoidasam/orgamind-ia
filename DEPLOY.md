@@ -43,6 +43,11 @@ In the **Environment** tab, paste the contents of
 - `JWT_SECRET` — `openssl rand -base64 48`
 - `POSTGRES_PASSWORD` — `openssl rand -base64 32`
 - `EVOLUTION_API_KEY` — `openssl rand -base64 32`
+- `PICOA_CONSENT_SALT` — generate once with `openssl rand -hex 32` and keep
+  the same value across `migrate`, `api`, and `worker`. The production compose
+  refuses to start if it is unset or empty. Store it with the other deployment
+  secrets; replace the `__CHANGE_ME__` template value before the first deploy.
+  Changing it after consent records exist requires a hash migration.
 - `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` — temporary admin credentials
   (forced to change on first login)
 - Leave `WEBHOOK_BASE_URL=http://api:3000` and `EVOLUTION_BASE_URL=http://evolution-api:8080`

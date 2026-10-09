@@ -15,6 +15,19 @@ type Props = {
   onNavigate?: () => void;
 };
 
+type SectionProps = {
+  eyebrow: string;
+  items: NavItem[];
+  badges?: Record<string, number>;
+  collapsed: boolean;
+  isActive: (to: string) => boolean;
+  onNavigate?: () => void;
+};
+
+type NavigationItemProps = Pick<SectionProps, 'badges' | 'collapsed' | 'isActive' | 'onNavigate'> & {
+  item: NavItem;
+};
+
 export function Sidebar({ collapsed, user, onNavigate }: Props) {
   const router = useRouterState();
   const path = router.location.pathname;
@@ -26,28 +39,12 @@ export function Sidebar({ collapsed, user, onNavigate }: Props) {
   // which is plenty for a sidebar badge.
   const unreadTotal = unread.data?.items.reduce((acc, c) => acc + c.unreadCount, 0) ?? 0;
 
-  const displayName = user?.name ?? user?.email ?? '';
-
   return (
     <div
       className="flex h-full min-h-screen flex-col px-3 py-5 lg:min-h-0"
       style={{ background: 'var(--brand-navy)', color: '#fff' }}
     >
-      <div className="flex items-center gap-2.5 px-1.5 pb-5">
-        <img src={logoSvg} alt="" className="size-8 shrink-0" aria-hidden />
-        {!collapsed && (
-          <div className="leading-tight">
-            <div className="text-[18px] font-bold tracking-tight text-white">ORGAMIND</div>
-            <div
-              className="text-[10px] uppercase tracking-[0.08em]"
-              style={{ color: 'rgba(219, 228, 239, 0.72)' }}
-              title="Plataforma Inteligente de Comunicação Operacional Automática"
-            >
-              Comunicação operacional
-            </div>
-          </div>
-        )}
-      </div>
+      <SidebarBrand collapsed={collapsed} />
 
       <Section eyebrow="operação" items={NAV_OPS} badges={{ '/inbox': unreadTotal }} collapsed={collapsed} isActive={isActive} onNavigate={onNavigate} />
       <Section eyebrow="sistema" items={NAV_SYS} collapsed={collapsed} isActive={isActive} onNavigate={onNavigate} />
@@ -57,42 +54,12 @@ export function Sidebar({ collapsed, user, onNavigate }: Props) {
 
       <div className="flex-1" />
 
-      <div
-        className="flex items-center gap-2.5 border-t pt-2.5 text-xs"
-        style={{ borderColor: 'rgba(219, 228, 239, 0.18)', color: 'rgba(219, 228, 239, 0.72)' }}
-      >
-        <span
-          className="grid size-7 shrink-0 place-items-center rounded-full text-[11px] font-semibold"
-          style={{ background: 'var(--brand-orange)', color: 'var(--brand-navy)' }}
-        >
-          {initials(displayName)}
-        </span>
-        {!collapsed && (
-          <div className="min-w-0">
-            <div className="truncate text-white">{user?.name ?? user?.email ?? '—'}</div>
-            <div className="text-[11px] uppercase tracking-wider">{user?.role ?? 'operador'}</div>
-          </div>
-        )}
-      </div>
+      <SidebarIdentity collapsed={collapsed} user={user} />
     </div>
   );
 }
 
-function Section({
-  eyebrow,
-  items,
-  badges,
-  collapsed,
-  isActive,
-  onNavigate,
-}: {
-  eyebrow: string;
-  items: NavItem[];
-  badges?: Record<string, number>;
-  collapsed: boolean;
-  isActive: (to: string) => boolean;
-  onNavigate?: () => void;
-}) {
+function Section({ eyebrow, items, badges, collapsed, isActive, onNavigate }: SectionProps) {
   return (
     <div className="mt-2 flex flex-col gap-0.5">
       {!collapsed && (
@@ -103,37 +70,98 @@ function Section({
           {eyebrow}
         </div>
       )}
-      {items.map(({ label, to, icon: Icon }) => {
-        const active = isActive(to);
-        return (
-          <Link
-            key={to}
-            to={to}
-            onClick={onNavigate}
-            aria-current={active ? 'page' : undefined}
-            className="flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--brand-orange)]"
-            style={{
-              background: active ? 'color-mix(in srgb, var(--brand-navy) 72%, white)' : 'transparent',
-              color: active ? '#fff' : '#dbe4ef',
-              boxShadow: active ? 'inset 3px 0 var(--brand-orange)' : undefined,
-            }}
+      {items.map((item) => (
+        <NavigationItem
+          key={item.to}
+          item={item}
+          badges={badges}
+          collapsed={collapsed}
+          isActive={isActive}
+          onNavigate={onNavigate}
+        />
+      ))}
+    </div>
+  );
+}
+
+function SidebarBrand({ collapsed }: Pick<Props, 'collapsed'>) {
+  return (
+    <div className="flex items-center gap-2.5 px-1.5 pb-5">
+      <img src={logoSvg} alt="" className="size-8 shrink-0" aria-hidden />
+      {!collapsed && (
+        <div className="leading-tight">
+          <div className="text-[18px] font-bold tracking-tight text-white">ORGAMIND</div>
+          <div
+            className="text-[10px] uppercase tracking-[0.08em]"
+            style={{ color: 'rgba(219, 228, 239, 0.72)' }}
+            title="Plataforma Inteligente de Comunicação Operacional Automática"
           >
-            <Icon className="size-[18px] shrink-0" />
-            {!collapsed && <span>{label}</span>}
-            {badges?.[to] ? (
-              <span
-                className="ml-auto rounded-full px-1.5 text-[10px] font-bold"
-                style={{
-                  background: active ? 'var(--brand-orange)' : 'rgba(219, 228, 239, 0.18)',
-                  color: active ? 'var(--brand-navy)' : '#dbe4ef',
-                }}
-              >
-                {badges[to]}
-              </span>
-            ) : null}
-          </Link>
-        );
-      })}
+            Comunicação operacional
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NavigationItem({ item, badges, collapsed, isActive, onNavigate }: NavigationItemProps) {
+  const active = isActive(item.to);
+  const badge = badges?.[item.to];
+  const Icon = item.icon;
+
+  return (
+    <Link
+      to={item.to}
+      onClick={onNavigate}
+      aria-current={active ? 'page' : undefined}
+      className="flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--brand-orange)]"
+      style={{
+        background: active ? 'color-mix(in srgb, var(--brand-navy) 72%, white)' : 'transparent',
+        color: active ? '#fff' : '#dbe4ef',
+        boxShadow: active ? 'inset 3px 0 var(--brand-orange)' : undefined,
+      }}
+    >
+      <Icon className="size-[18px] shrink-0" />
+      {!collapsed && <span>{item.label}</span>}
+      {badge ? <UnreadBadge active={active}>{badge}</UnreadBadge> : null}
+    </Link>
+  );
+}
+
+function UnreadBadge({ active, children }: { active: boolean; children: number }) {
+  return (
+    <span
+      className="ml-auto rounded-full px-1.5 text-[10px] font-bold"
+      style={{
+        background: active ? 'var(--brand-orange)' : 'rgba(219, 228, 239, 0.18)',
+        color: active ? 'var(--brand-navy)' : '#dbe4ef',
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function SidebarIdentity({ collapsed, user }: Pick<Props, 'collapsed' | 'user'>) {
+  const displayName = user?.name ?? user?.email ?? '';
+
+  return (
+    <div
+      className="flex items-center gap-2.5 border-t pt-2.5 text-xs"
+      style={{ borderColor: 'rgba(219, 228, 239, 0.18)', color: 'rgba(219, 228, 239, 0.72)' }}
+    >
+      <span
+        className="grid size-7 shrink-0 place-items-center rounded-full text-[11px] font-semibold"
+        style={{ background: 'var(--brand-orange)', color: 'var(--brand-navy)' }}
+      >
+        {initials(displayName)}
+      </span>
+      {!collapsed && (
+        <div className="min-w-0">
+          <div className="truncate text-white">{user?.name ?? user?.email ?? '—'}</div>
+          <div className="text-[11px] uppercase tracking-wider">{user?.role ?? 'operador'}</div>
+        </div>
+      )}
     </div>
   );
 }

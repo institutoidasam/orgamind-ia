@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { CampaignSummary } from '@/features/campaigns/schemas';
@@ -29,10 +29,8 @@ vi.mock('@/features/campaigns/api', () => ({
   useCampaigns: () => useCampaignsMock(),
 }));
 
+import { DashboardPage } from '@/features/dashboard/components/dashboard-page';
 import { Route } from './dashboard';
-
-const DashboardPage = (Route as unknown as { component: React.ComponentType })
-  .component;
 
 function wrap(ui: React.ReactElement) {
   return render(
@@ -88,6 +86,14 @@ function queryResult<T>(over: Partial<Record<string, unknown>> & { data?: T }) {
 beforeEach(() => {
   useDashboardMetricsMock.mockReset();
   useCampaignsMock.mockReset();
+});
+
+describe('dashboard route adapter', () => {
+  it('renders the named DashboardPage component', () => {
+    expect((Route as unknown as { component: React.ComponentType }).component).toBe(
+      DashboardPage,
+    );
+  });
 });
 
 describe('DashboardPage — KPIs', () => {

@@ -2,6 +2,11 @@ import { defineConfig } from 'vitest/config';
 import swc from 'unplugin-swc';
 
 export default defineConfig({
+  // O plugin SWC assume toda a transformação TypeScript. Desabilite os dois
+  // transformadores nativos do Vite para evitar que o Vitest ative Oxc ao
+  // mesmo tempo que `esbuild: false`.
+  esbuild: false,
+  oxc: false,
   test: {
     globals: true,
     environment: 'node',

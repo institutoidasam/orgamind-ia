@@ -9,6 +9,7 @@ services:
       - "5432:5432"
     volumes:
       - pg_dev:/var/lib/postgresql/data
+    restart: "no"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 5s
@@ -22,7 +23,7 @@ services:
       - redis_data:/data
     ports:
       - "6379:6379"
-    restart: unless-stopped
+    restart: "no"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -40,6 +41,7 @@ services:
       - "8081:8080"
     volumes:
       - evolution_instances:/evolution/instances
+    restart: "no"
     environment:
       SERVER_URL: http://localhost:8081
       AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
@@ -119,6 +121,7 @@ services:
     env_file: .env
     environment:
       DIFY_BASE_URL: ${DIFY_BASE_URL:-}
+    restart: "no"
     stop_grace_period: 30s
     volumes:
       - ./backend:/app
@@ -139,6 +142,7 @@ services:
     env_file: .env
     environment:
       DIFY_BASE_URL: ${DIFY_BASE_URL:-}
+    restart: "no"
     stop_grace_period: 60s
     volumes:
       - ./backend:/app
@@ -166,6 +170,7 @@ services:
       # Vite's default HMR client uses the page's port, so 5174->5173 works.
       - "5174:5173"
     env_file: .env
+    restart: "no"
     volumes:
       - ./frontend:/app
       - /app/node_modules

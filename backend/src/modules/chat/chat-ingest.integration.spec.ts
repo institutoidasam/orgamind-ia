@@ -9,7 +9,6 @@ import {
   type StartedPostgreSqlContainer,
 } from '@testcontainers/postgresql';
 import { RedisContainer, type StartedRedisContainer } from '@testcontainers/redis';
-import { AppModule } from '../../app.module';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
 /**
@@ -41,12 +40,15 @@ describe.skipIf(!TESTCONTAINERS_ENABLED)('Chat ingest (integration)', () => {
     // and WhatsappProvidersService pick up the correct provider.
     process.env.WHATSAPP_PROVIDER = 'evolution';
     process.env.EVOLUTION_API_KEY = 'test-evo-key';
-    process.env.EVOLUTION_API_URL = 'http://localhost:8080'; // not called in this test
+    process.env.EVOLUTION_BASE_URL = 'http://localhost:8080'; // not called in this test
+    process.env.EVOLUTION_INSTANCE_NAME = 'picoa-test';
 
     process.env.DATABASE_URL = postgres.getConnectionUri();
     process.env.REDIS_HOST = redis.getHost();
     process.env.REDIS_PORT = String(redis.getMappedPort(6379));
     process.env.JWT_SECRET = 'a'.repeat(32);
+    process.env.META_ACCESS_TOKEN = 'test-meta-access-token';
+    process.env.META_PHONE_NUMBER_ID = 'test-phone-number-id';
     process.env.META_APP_SECRET = 'test-app-secret-min-32-chars-yyyyy';
     process.env.META_WEBHOOK_VERIFY_TOKEN = 'verify-token';
     process.env.APP_BASE_URL = 'http://localhost:5173';
@@ -84,6 +86,9 @@ describe.skipIf(!TESTCONTAINERS_ENABLED)('Chat ingest (integration)', () => {
       });
     }
 
+    const appModule =
+      (await import('../../app.module')) as typeof import('../../app.module');
+    const { AppModule } = appModule;
     const moduleRef = await Test.createTestingModule({
       imports: [AppModule],
     }).compile();

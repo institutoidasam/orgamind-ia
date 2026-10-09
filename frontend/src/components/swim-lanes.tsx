@@ -31,6 +31,22 @@ type StageEvent = {
   failCard?: string;
 };
 
+type StageTimes = {
+  queuedAt: number;
+  sentAt: number | null;
+  deliveredAt: number | null;
+  readAt: number | null;
+  failedAt: number | null;
+};
+
+type StageBuildInput = {
+  statusVar: string;
+  reachedAt: number | null;
+  from: number | null;
+  to: number | null;
+  envelope: number;
+};
+
 export function SwimLanes({ message }: { message: CampaignMessage }) {
   const events = buildStages(message);
 
@@ -60,129 +76,225 @@ function StageRow({
   next: StageEvent | undefined;
   isLast: boolean;
 }) {
-  const reached = ev.reached;
-
-  const dotStyle: React.CSSProperties = {
-    background: reached
-      ? `var(--st-${ev.statusVar}-fg)`
-      : "var(--surface-sunken)",
-    border: reached
-      ? `1px solid var(--st-${ev.statusVar}-border)`
-      : "1px solid var(--border)",
-  };
-  const connectorStyle: React.CSSProperties = {
-    background:
-      next?.reached || reached
-        ? `var(--st-${ev.statusVar}-border)`
-        : "var(--border)",
-  };
-
   return (
     <li className="flex gap-3">
-      <div className="flex flex-col items-center" aria-hidden>
-        <div
-          className="grid size-[22px] place-items-center rounded-full text-white"
-          style={dotStyle}
-        >
-          {reached && <Check className="size-3" />}
-        </div>
-        {!isLast && <div className="my-0.5 w-0.5 flex-1" style={connectorStyle} />}
-      </div>
-      <div className="flex-1 pb-4">
-        <div className="flex items-baseline justify-between gap-2">
-          <span className="text-sm font-medium">{stage}</span>
-          <span
-            className="ds-mono text-xs"
-            style={{ color: "var(--foreground-muted)" }}
-          >
-            {ev.duration ?? (reached ? "—" : "")}
-          </span>
-        </div>
-        {ev.barWidth != null && (
-          <div
-            className="mt-1 h-1 rounded-full"
-            style={{
-              width: `${ev.barWidth}%`,
-              background: `var(--st-${ev.statusVar}-fg)`,
-            }}
-          />
-        )}
-        {ev.failCard && (
-          <div
-            className="mt-2 rounded-md border p-2 text-xs"
-            style={{
-              background: "var(--st-failed-bg)",
-              borderColor: "var(--st-failed-border)",
-              color: "var(--st-failed-fg)",
-            }}
-          >
-            {ev.failCard}
-          </div>
-        )}
-      </div>
+      <StageMarker ev={ev} next={next} isLast={isLast} />
+      <StageDetails stage={stage} ev={ev} />
     </li>
   );
 }
 
-function buildStages(m: CampaignMessage): Record<number, StageEvent> {
-  const queuedAt = new Date(m.queuedAt).getTime();
-  const sentAt = m.sentAt ? new Date(m.sentAt).getTime() : null;
-  const deliveredAt = m.deliveredAt ? new Date(m.deliveredAt).getTime() : null;
-  const readAt = m.readAt ? new Date(m.readAt).getTime() : null;
-  const failedAt = m.failedAt ? new Date(m.failedAt).getTime() : null;
+function StageMarker({
+  ev,
+  next,
+  isLast,
+}: Pick<Parameters<typeof StageRow>[0], "ev" | "next" | "isLast">) {
+  return (
+    <div className="flex flex-col items-center" aria-hidden>
+      <div
+        className="grid size-[22px] place-items-center rounded-full text-white"
+        style={markerStyle(ev)}
+      >
+        {ev.reached && <Check className="size-3" />}
+      </div>
+      {!isLast && (
+        <div className="my-0.5 w-0.5 flex-1" style={connectorStyle(ev, next)} />
+      )}
+    </div>
+  );
+}
 
-  const reached = (t: number | null) => t != null;
-  const dur = (from: number, to: number | null) =>
-    to == null ? undefined : formatDelta(to - from);
+function StageDetails({
+  stage,
+  ev,
+}: Pick<Parameters<typeof StageRow>[0], "stage" | "ev">) {
+  return (
+    <div className="flex-1 pb-4">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-sm font-medium">{stage}</span>
+        <span
+          className="ds-mono text-xs"
+          style={{ color: "var(--foreground-muted)" }}
+        >
+          {ev.duration ?? (ev.reached ? "—" : "")}
+        </span>
+      </div>
+      {ev.barWidth != null && <ProgressBar ev={ev} />}
+      {ev.failCard && <FailureCard text={ev.failCard} />}
+    </div>
+  );
+}
 
-  const totalEnvelope =
-    (readAt ?? deliveredAt ?? sentAt ?? failedAt ?? Date.now()) - queuedAt || 1;
-  const widthOf = (from: number, to: number | null) =>
-    to == null
-      ? undefined
-      : Math.min(100, Math.round(((to - from) / totalEnvelope) * 100));
+function ProgressBar({ ev }: { ev: StageEvent }) {
+  return (
+    <div
+      className="mt-1 h-1 rounded-full"
+      style={{
+        width: `${ev.barWidth}%`,
+        background: `var(--st-${ev.statusVar}-fg)`,
+      }}
+    />
+  );
+}
 
-  const stage0: StageEvent = {
-    reached: true,
-    statusVar: STATUS_VAR.QUEUED,
-    duration: dur(queuedAt, sentAt ?? failedAt ?? null),
-    barWidth: widthOf(queuedAt, sentAt ?? failedAt ?? null),
-  };
-  const stage1: StageEvent = {
-    reached: reached(sentAt),
-    statusVar: STATUS_VAR.SENT,
-    duration: dur(sentAt ?? queuedAt, deliveredAt ?? failedAt ?? null),
-    barWidth: widthOf(sentAt ?? queuedAt, deliveredAt ?? failedAt ?? null),
-  };
-  const stage2: StageEvent = {
-    reached: reached(deliveredAt),
-    statusVar: STATUS_VAR.DELIVERED,
-    duration: dur(deliveredAt ?? sentAt ?? queuedAt, readAt ?? null),
-    barWidth: widthOf(deliveredAt ?? sentAt ?? queuedAt, readAt ?? null),
-  };
-  const stage3: StageEvent = {
-    reached: reached(readAt),
-    statusVar: STATUS_VAR.READ,
-  };
+function FailureCard({ text }: { text: string }) {
+  return (
+    <div
+      className="mt-2 rounded-md border p-2 text-xs"
+      style={{
+        background: "var(--st-failed-bg)",
+        borderColor: "var(--st-failed-border)",
+        color: "var(--st-failed-fg)",
+      }}
+    >
+      {text}
+    </div>
+  );
+}
 
-  // Inject failure / cancellation card on the next-pending stage
-  if (m.status === "FAILED" && failedAt) {
-    const target = !sentAt ? stage1 : !deliveredAt ? stage2 : stage3;
-    target.failCard = m.errorMessage
-      ? `${m.errorCode ? `[${m.errorCode}] ` : ""}${m.errorMessage}`
-      : "Falha desconhecida";
-    target.statusVar = STATUS_VAR.FAILED;
+function markerStyle(ev: StageEvent): React.CSSProperties {
+  return {
+    background: ev.reached
+      ? `var(--st-${ev.statusVar}-fg)`
+      : "var(--surface-sunken)",
+    border: ev.reached
+      ? `1px solid var(--st-${ev.statusVar}-border)`
+      : "1px solid var(--border)",
+  };
+}
+
+function connectorStyle(ev: StageEvent, next: StageEvent | undefined): React.CSSProperties {
+  return {
+    background:
+      next?.reached || ev.reached
+        ? `var(--st-${ev.statusVar}-border)`
+        : "var(--border)",
+  };
+}
+
+function buildStages(message: CampaignMessage): Record<number, StageEvent> {
+  const times = stageTimes(message);
+  const envelope = totalEnvelope(times);
+  const stages = [
+    createStage({
+      statusVar: STATUS_VAR.QUEUED,
+      reachedAt: times.queuedAt,
+      from: times.queuedAt,
+      to: times.sentAt ?? times.failedAt,
+      envelope,
+    }),
+    createStage({
+      statusVar: STATUS_VAR.SENT,
+      reachedAt: times.sentAt,
+      from: times.sentAt ?? times.queuedAt,
+      to: times.deliveredAt ?? times.failedAt,
+      envelope,
+    }),
+    createStage({
+      statusVar: STATUS_VAR.DELIVERED,
+      reachedAt: times.deliveredAt,
+      from: times.deliveredAt ?? times.sentAt ?? times.queuedAt,
+      to: times.readAt,
+      envelope,
+    }),
+    createStage({
+      statusVar: STATUS_VAR.READ,
+      reachedAt: times.readAt,
+      from: null,
+      to: null,
+      envelope,
+    }),
+  ];
+
+  addTerminalCard(stages, message, times);
+  return {
+    0: stages[0],
+    1: stages[1],
+    2: stages[2],
+    3: stages[3],
+  };
+}
+
+function stageTimes(message: CampaignMessage): StageTimes {
+  return {
+    queuedAt: new Date(message.queuedAt).getTime(),
+    sentAt: toTimestamp(message.sentAt),
+    deliveredAt: toTimestamp(message.deliveredAt),
+    readAt: toTimestamp(message.readAt),
+    failedAt: toTimestamp(message.failedAt),
+  };
+}
+
+function toTimestamp(value: string | Date | null) {
+  return value ? new Date(value).getTime() : null;
+}
+
+function totalEnvelope(times: StageTimes) {
+  const endAt =
+    times.readAt ??
+    times.deliveredAt ??
+    times.sentAt ??
+    times.failedAt ??
+    Date.now();
+  return endAt - times.queuedAt || 1;
+}
+
+function createStage({
+  statusVar,
+  reachedAt,
+  from,
+  to,
+  envelope,
+}: StageBuildInput): StageEvent {
+  return {
+    reached: reachedAt != null,
+    statusVar,
+    duration: from == null || to == null ? undefined : formatDelta(to - from),
+    barWidth:
+      from == null || to == null
+        ? undefined
+        : Math.min(100, Math.round(((to - from) / envelope) * 100)),
+  };
+}
+
+function addTerminalCard(
+  stages: StageEvent[],
+  message: CampaignMessage,
+  times: StageTimes,
+) {
+  if (message.status === "FAILED" && times.failedAt != null) {
+    attachTerminalCard(stages, times, failureMessage(message), STATUS_VAR.FAILED);
   }
-  if (m.status === "CANCELLED") {
-    const target = !sentAt ? stage1 : !deliveredAt ? stage2 : stage3;
-    target.failCard =
-      m.errorCode === "opted_out"
+  if (message.status === "CANCELLED") {
+    const text =
+      message.errorCode === "opted_out"
         ? "Contato em opt-out — não enviada"
         : "Mensagem cancelada";
-    target.statusVar = STATUS_VAR.CANCELLED;
+    attachTerminalCard(stages, times, text, STATUS_VAR.CANCELLED);
   }
+}
 
-  return { 0: stage0, 1: stage1, 2: stage2, 3: stage3 };
+function failureMessage(message: CampaignMessage) {
+  if (!message.errorMessage) return "Falha desconhecida";
+  return `${message.errorCode ? `[${message.errorCode}] ` : ""}${message.errorMessage}`;
+}
+
+function attachTerminalCard(
+  stages: StageEvent[],
+  times: StageTimes,
+  text: string,
+  statusVar: string,
+) {
+  const index = nextPendingStageIndex(times);
+  const target = stages[index];
+  target.failCard = text;
+  target.statusVar = statusVar;
+}
+
+function nextPendingStageIndex(times: StageTimes) {
+  if (times.sentAt == null) return 1;
+  if (times.deliveredAt == null) return 2;
+  return 3;
 }
 
 function formatDelta(ms: number) {

@@ -32,7 +32,7 @@ beforeEach(() => {
   useCampaignMessages.mockReset();
 });
 
-describe("EventsExplorer filter counts", () => {
+describe("EventsExplorer aggregate filter counts", () => {
   it("derives every tab count from statusCounts, not the current page", () => {
     // The visible page is tiny (2 rows) and does NOT reflect the real totals.
     useCampaignMessages.mockReturnValue({
@@ -66,7 +66,9 @@ describe("EventsExplorer filter counts", () => {
     );
     expect(countForTab(/falhas/i)).toBe("0");
   });
+});
 
+describe("EventsExplorer filter-count fallback", () => {
   it("never reports the current page length as the 'Todos' total", () => {
     // Regression for the latent fallback: when statusCounts was absent the
     // "Todos" tab printed messages.length (the visible page) instead of the
@@ -156,7 +158,9 @@ describe("EventsExplorer pagination", () => {
     expect(prev).toBeDisabled();
     expect(next).toBeEnabled();
   });
+});
 
+describe("EventsExplorer page navigation", () => {
   it("advances the page and updates prev/next enablement", () => {
     useCampaignMessages.mockReturnValue({
       data: { items: [{ id: "m1", status: "READ" }], total: 157 },
@@ -187,6 +191,24 @@ describe("EventsExplorer pagination", () => {
     expect(screen.getByText(/página 2 de 2/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "›" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "‹" })).toBeEnabled();
+  });
+});
+
+describe("EventsExplorer filter pagination", () => {
+  it("returns to page one when changing the active filter", () => {
+    useCampaignMessages.mockReturnValue({
+      data: { items: [{ id: "m1", status: "READ" }], total: 157 },
+    });
+    render(<EventsExplorer campaignId="c1" statusCounts={STATUS_COUNTS} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "›" }));
+    expect(screen.getByText(/página 2 de 4/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /lidas/i }));
+
+    expect(screen.getByText(/página 1 de 4/i)).toBeInTheDocument();
+    const lastCall =
+      useCampaignMessages.mock.calls[useCampaignMessages.mock.calls.length - 1];
+    expect(lastCall[1]).toMatchObject({ page: 1, status: "READ" });
   });
 });
 

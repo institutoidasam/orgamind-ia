@@ -8,7 +8,15 @@ node_modules
 dist
 coverage
 *.log
+logs
+artifacts
+backups
+*.bak
 .env
 .env.local
+.env.*
+envs
+secrets
+.secrets
 .git
 .tdd-snapshots-*

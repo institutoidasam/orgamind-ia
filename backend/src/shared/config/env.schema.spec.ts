@@ -48,6 +48,40 @@ describe('docker-compose.prod.yml encaminha as envs do webhook do GoZap', () => 
     expect(env).toMatch(/^\s+GOZAP_WEBHOOK_TOKEN:/m);
     expect(env).toMatch(/^\s+GOZAP_WEBHOOK_DEBUG:/m);
   });
+
+  it.each(['migrate', 'api', 'worker'])(
+    'serviço %s exige o sal de consentimento externo',
+    (service) => {
+      expect(serviceEnvBlock(service)).toContain(
+        'PICOA_CONSENT_SALT: "${PICOA_CONSENT_SALT:?PICOA_CONSENT_SALT must be set and non-empty}"',
+      );
+    },
+  );
+
+  it('valida o sal antes de cada operação de escrita do migrate', () => {
+    const migrate = serviceEnvBlock('migrate');
+    const commandPrefix = '    command:';
+    const commandLine = migrate
+      .split('\n')
+      .find((line) => line.startsWith(commandPrefix));
+    const command = commandLine?.slice(commandPrefix.length).trimStart() ?? '';
+    const preflight = 'node dist/shared/config/validate-consent-salt.js';
+
+    expect(command).toContain(preflight);
+    for (const writeCommand of [
+      'npx prisma migrate deploy',
+      'npx prisma db seed',
+      'npx tsx prisma/repair-campaign-message-content.ts',
+      'npx tsx prisma/backfill-conversations.ts',
+      'npx tsx prisma/backfill-contact-validity.ts --apply',
+      'npx tsx scripts/closeout-stuck-campaigns.ts --apply',
+      'npx tsx prisma/merge-duplicate-phone-contacts.ts --apply',
+    ]) {
+      expect(command.indexOf(preflight)).toBeLessThan(
+        command.indexOf(writeCommand),
+      );
+    }
+  });
 });
 
 describe('validateEnv', () => {
@@ -353,6 +387,7 @@ describe('validateEnv', () => {
           ...baseEnv,
           NODE_ENV: 'production',
           BULL_BOARD_PASSWORD: 'changeme123',
+          PICOA_CONSENT_SALT: 'test-consent-salt-for-production',
         }),
       ).toThrow(/BULL_BOARD_PASSWORD/);
     });
@@ -363,6 +398,7 @@ describe('validateEnv', () => {
           ...baseEnv,
           NODE_ENV: 'production',
           BULL_BOARD_PASSWORD: '',
+          PICOA_CONSENT_SALT: 'test-consent-salt-for-production',
         }),
       ).toThrow(/BULL_BOARD_PASSWORD/);
     });
@@ -372,6 +408,7 @@ describe('validateEnv', () => {
         ...baseEnv,
         NODE_ENV: 'production',
         BULL_BOARD_PASSWORD: 'a-strong-real-password',
+        PICOA_CONSENT_SALT: 'test-consent-salt-for-production',
       });
       expect(result.BULL_BOARD_PASSWORD).toBe('a-strong-real-password');
     });
@@ -380,6 +417,71 @@ describe('validateEnv', () => {
       const result = validateEnv({ ...baseEnv });
       expect(result.NODE_ENV).toBe('development');
       expect(result.BULL_BOARD_PASSWORD).toBe('changeme123');
+    });
+  });
+
+  const productionEnv = (overrides: Record<string, unknown> = {}) => ({
+    ...baseEnv,
+    NODE_ENV: 'production',
+    BULL_BOARD_PASSWORD: ['a', 'strong', 'real', 'password'].join('-'),
+    ...overrides,
+  });
+
+  describe('PICOA_CONSENT_SALT', () => {
+    it.each([
+      ['omitted value', undefined],
+      ['development default', 'orgamind-consent-dev'],
+      ['empty value', ''],
+      ['whitespace-only value', '  \t  '],
+      [
+        'production example sentinel',
+        '__CHANGE_ME__generate_once_and_never_change__',
+      ],
+      [
+        'development default with surrounding whitespace',
+        '  orgamind-consent-dev  ',
+      ],
+      [
+        'production example sentinel with surrounding whitespace',
+        '  __CHANGE_ME__generate_once_and_never_change__  ',
+      ],
+    ])('rejects the %s in production', (_label, PICOA_CONSENT_SALT) => {
+      expect(() =>
+        validateEnv(
+          productionEnv({
+            PICOA_CONSENT_SALT,
+          }),
+        ),
+      ).toThrow(/PICOA_CONSENT_SALT/);
+    });
+
+    it('accepts a configured consent salt in production', () => {
+      const result = validateEnv(
+        productionEnv({
+          PICOA_CONSENT_SALT: 'test-consent-salt-for-production',
+        }),
+      );
+      expect(result.PICOA_CONSENT_SALT).toBe(
+        'test-consent-salt-for-production',
+      );
+    });
+
+    it('compares a real salt trimmed but preserves its configured value', () => {
+      const salt = '  test-consent-salt-for-production  ';
+
+      expect(
+        validateEnv(productionEnv({ PICOA_CONSENT_SALT: salt }))
+          .PICOA_CONSENT_SALT,
+      ).toBe(salt);
+    });
+
+    it('keeps the development default outside production', () => {
+      expect(validateEnv({ ...baseEnv }).PICOA_CONSENT_SALT).toBe(
+        'orgamind-consent-dev',
+      );
+      expect(
+        validateEnv({ ...baseEnv, NODE_ENV: 'test' }).PICOA_CONSENT_SALT,
+      ).toBe('orgamind-consent-dev');
     });
   });
 });

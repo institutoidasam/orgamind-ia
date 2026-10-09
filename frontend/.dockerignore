@@ -1,0 +1,19 @@
+# Never copy host dependencies or generated frontend output into the image.
+node_modules
+dist
+dist-ssr
+coverage
+
+# Local-only environments, secrets, artifacts, logs, and backups.
+.env
+.env.*
+envs
+secrets
+.secrets
+artifacts
+logs
+*.log
+backups
+*.bak
+.git
+.tdd-snapshots-*

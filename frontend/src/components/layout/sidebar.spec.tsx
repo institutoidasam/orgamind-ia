@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 let currentPath = '/dashboard';
@@ -34,5 +34,24 @@ describe('Sidebar', () => {
 
     expect(screen.getByText('AN')).toHaveStyle({ color: 'var(--brand-navy)' });
     expect(screen.getByText('3')).toHaveStyle({ color: 'var(--brand-navy)' });
+  });
+
+  it('preserva ADMIN, badge e fechamento do menu ao navegar', () => {
+    currentPath = '/inbox';
+    const onNavigate = vi.fn();
+    render(
+      <Sidebar
+        collapsed={false}
+        user={{ email: 'ana@orgamind.com', name: 'Ana', role: 'ADMIN' }}
+        onNavigate={onNavigate}
+      />,
+    );
+
+    expect(screen.getByText('admin')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Inbox/ })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByText('3')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('link', { name: 'Usuários' }));
+    expect(onNavigate).toHaveBeenCalledOnce();
   });
 });

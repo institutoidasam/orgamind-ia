@@ -43,7 +43,7 @@ describe("SwimLanes — stage labels", () => {
   });
 });
 
-describe("SwimLanes — durations and bars", () => {
+describe("SwimLanes — basic durations", () => {
   it("shows '—' on a reached stage with no measurable duration and blank on unreached", () => {
     // Only queued: stage0 reached but has no end timestamp -> "—".
     // stages 1..3 unreached -> empty duration cell.
@@ -63,7 +63,7 @@ describe("SwimLanes — durations and bars", () => {
     expect(screen.getByText("+5s")).toBeInTheDocument();
   });
 
-  it("formats sub-second / minute / hour deltas", () => {
+  it("formats a sub-second delta", () => {
     // sub-second on stage0 (queued->sent 500ms)
     const a = baseMessage({
       status: "SENT",
@@ -73,8 +73,11 @@ describe("SwimLanes — durations and bars", () => {
     const { unmount } = render(<SwimLanes message={a} />);
     expect(screen.getByText("+500ms")).toBeInTheDocument();
     unmount();
+  });
+});
 
-    // minutes: queued->sent 2min
+describe("SwimLanes — longer durations", () => {
+  it("formats minute and hour deltas", () => {
     const b = baseMessage({
       status: "SENT",
       queuedAt: "2026-06-05T00:00:00Z",
@@ -120,6 +123,22 @@ describe("SwimLanes — failure / cancellation cards", () => {
     expect(screen.getByText("Falha desconhecida")).toBeInTheDocument();
   });
 
+  it("puts a failure after delivery on the unread stage", () => {
+    const msg = baseMessage({
+      status: "FAILED",
+      sentAt: "2026-06-05T00:00:05Z",
+      deliveredAt: "2026-06-05T00:00:08Z",
+      failedAt: "2026-06-05T00:00:10Z",
+      errorMessage: "Read receipt unavailable",
+    });
+    render(<SwimLanes message={msg} />);
+
+    const items = screen.getAllByRole("listitem");
+    expect(items[3]).toHaveTextContent("Read receipt unavailable");
+  });
+});
+
+describe("SwimLanes — cancellation cards", () => {
   it("renders the opt-out cancellation card for errorCode opted_out", () => {
     const msg = baseMessage({
       status: "CANCELLED",
@@ -135,6 +154,21 @@ describe("SwimLanes — failure / cancellation cards", () => {
     const msg = baseMessage({ status: "CANCELLED", errorCode: null });
     render(<SwimLanes message={msg} />);
     expect(screen.getByText("Mensagem cancelada")).toBeInTheDocument();
+  });
+});
+
+describe("SwimLanes — incomplete event histories", () => {
+  it("keeps a failure on the sent stage when delivery exists without a sent timestamp", () => {
+    const msg = baseMessage({
+      status: "FAILED",
+      deliveredAt: "2026-06-05T00:00:08Z",
+      failedAt: "2026-06-05T00:00:10Z",
+      errorMessage: "Provider record is incomplete",
+    });
+    render(<SwimLanes message={msg} />);
+
+    const items = screen.getAllByRole("listitem");
+    expect(items[1]).toHaveTextContent("Provider record is incomplete");
   });
 });
 

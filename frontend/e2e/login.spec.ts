@@ -1,5 +1,10 @@
 import { test, expect } from '@playwright/test';
-import { E2E_PASSWORD, describeLoginStatus, submitLogin } from './helpers/auth';
+import {
+  E2E_PASSWORD,
+  describeLoginStatus,
+  dismissReleaseNotes,
+  submitLogin,
+} from './helpers/auth';
 
 test.describe('login', () => {
   test('redirects to dashboard with valid credentials', async ({ page }) => {
@@ -14,11 +19,8 @@ test.describe('login', () => {
     expect(status, describeLoginStatus(status)).toBe(200);
 
     await expect(page).toHaveURL(/\/dashboard$/);
-    // O `<h1>` do dashboard é a saudação ("Bom dia, operador."), que muda com a
-    // hora do dia — casa-se pelo trecho estável. Não existe heading "Dashboard"
-    // nessa tela: a asserção antiga nunca chegou a rodar porque a de URL falhava
-    // antes dela.
-    await expect(page.getByRole('heading', { name: /operador/i })).toBeVisible();
+    await dismissReleaseNotes(page);
+    await expect(page.getByRole('heading', { name: 'Visão geral' })).toBeVisible();
   });
 
   test('shows error toast on invalid credentials', async ({ page }) => {

@@ -103,7 +103,7 @@ const INTERACTIVE_PLACEHOLDERS: Record<Exclude<TemplateKind, 'TEXT'>, string> = 
       title: 'Como podemos ajudar?',
       description: 'Olá {{nome}}, escolha uma opção:',
       buttonText: 'Ver opções',
-      footerText: 'Atendimento ORGAMIND',
+      footerText: 'Atendimento OrgaMind',
       sections: [
         {
           title: 'Suporte',
@@ -120,7 +120,7 @@ const INTERACTIVE_PLACEHOLDERS: Record<Exclude<TemplateKind, 'TEXT'>, string> = 
   BUTTONS: JSON.stringify(
     {
       description: 'Olá {{nome}}, podemos confirmar seu agendamento?',
-      footerText: 'ORGAMIND',
+      footerText: 'OrgaMind',
       buttons: [
         { buttonId: 'yes', title: 'Sim' },
         { buttonId: 'no', title: 'Não' },

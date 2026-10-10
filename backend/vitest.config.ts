@@ -10,7 +10,12 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['src/**/*.spec.ts', 'test/**/*.spec.ts', 'prisma/**/*.spec.ts', 'scripts/**/*.spec.ts'],
+    include: [
+      'src/**/*.spec.ts',
+      'test/**/*.spec.ts',
+      'prisma/**/*.spec.ts',
+      'scripts/**/*.spec.ts',
+    ],
     // Specs de banco (campaigns.batches.e2e.spec.ts, contact-validity.db.spec.ts, prisma/seed.spec.ts)
     // truncam o mesmo banco _test; em paralelo eles se atropelam. Desabilitar parallelismo apenas
     // quando PICOA_DB_TESTS=1 para evitar conflitos de truncate concurrent.
@@ -18,8 +23,13 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
-      include: ['src/**'],
-      exclude: ['src/main.ts', 'src/worker.ts', 'src/**/*.module.ts', 'src/**/*.dto.ts'],
+      include: ['src/**/*.ts'],
+      exclude: [
+        'src/main.ts',
+        'src/worker.ts',
+        'src/**/*.module.ts',
+        'src/**/*.dto.ts',
+      ],
     },
   },
   plugins: [

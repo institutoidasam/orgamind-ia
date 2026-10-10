@@ -25,12 +25,12 @@ describe('RELEASE_NOTES', () => {
     expect(RELEASE_NOTES.length).toBeGreaterThan(0);
   });
 
-  it('registra o rebrand visual de outubro como a novidade mais recente', () => {
+  it('registra os módulos internos como a novidade mais recente', () => {
     expect(RELEASE_NOTES[0]).toMatchObject({
-      version: '2026.10.08',
-      date: '2026-10-08',
+      version: '2026.10.10',
+      date: '2026-10-10',
     });
-    expect(RELEASE_NOTES[0].title).toMatch(/nova identidade visual/i);
+    expect(RELEASE_NOTES[0].title).toMatch(/comunicação entre setores/i);
   });
 
   it('está em ordem decrescente por version (mais nova primeiro)', () => {

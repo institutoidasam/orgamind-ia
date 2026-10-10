@@ -23,8 +23,10 @@ export const E2E_PASSWORD = 'senha-e2e-do-picoa';
  * chave `ip:`). No CI a suíte inteira sai do mesmo 127.0.0.1 e cabe numa
  * janela de 60s, então os logins não se diluem no tempo — eles se somam.
  *
- * Hoje são 4: setup (1) + login válido (1) + login inválido (1) + import (1).
- * Com banco sujo o setup gasta 1 a mais (fallback), chegando a 5 — o teto.
+ * No banco recém-semeado são 5: setup (2: senha semeada + novo login após a
+ * troca), login válido (1), login inválido (1) e import (1). Com banco sujo,
+ * o setup faz 2 chamadas (senha semeada falha + login normal), portanto também
+ * chega a 5 no total — o teto.
  * O 6º login vira 429 e a suíte fica vermelha por motivo nenhum.
  */
 
@@ -67,6 +69,14 @@ export async function submitLogin(page: Page, password: string): Promise<number>
   );
   await page.getByRole('button', { name: 'Entrar' }).click();
   return (await loginCall).status();
+}
+
+/** Fecha o diálogo automático de novidades que bloqueia o conteúdo da página. */
+export async function dismissReleaseNotes(page: Page): Promise<void> {
+  const dialog = page.getByRole('dialog', { name: 'Novidades' });
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Fechar' }).click();
+  await expect(dialog).toBeHidden();
 }
 
 /** Janela do `@Throttle` de `/auth/login` (60s no controller), com folga. */
@@ -131,4 +141,5 @@ export async function signIn(page: Page): Promise<void> {
   const status = await submitLogin(page, E2E_PASSWORD);
   expect(status, describeLoginStatus(status)).toBe(200);
   await expect(page).toHaveURL(/\/dashboard$/);
+  await dismissReleaseNotes(page);
 }

@@ -10,6 +10,10 @@ const USER_SUMMARY_SELECT = {
   email: true,
   name: true,
   role: true,
+  sectorId: true,
+  sector: { select: { id: true, name: true, code: true, isActive: true } },
+  isActive: true,
+  sessionVersion: true,
   mustChangePassword: true,
   lastLoginAt: true,
   createdAt: true,
@@ -18,7 +22,9 @@ const USER_SUMMARY_SELECT = {
   createdBy: { select: { email: true } },
 } satisfies Prisma.UserSelect;
 
-export type UserSummary = Prisma.UserGetPayload<{ select: typeof USER_SUMMARY_SELECT }>;
+export type UserSummary = Prisma.UserGetPayload<{
+  select: typeof USER_SUMMARY_SELECT;
+}>;
 
 export type UserListResult = {
   data: UserSummary[];
@@ -75,24 +81,23 @@ export class UsersRepository {
   deleteWithLastAdminGuard(
     id: string,
   ): Promise<{ deleted: User } | { lastAdmin: true }> {
-    return this.prisma.$transaction(
-      async (tx) => {
-        const user = await tx.user.findUnique({ where: { id } });
-        if (!user) {
-          // Surface as a NotFoundError caller-side. We propagate via a thrown
-          // marker — Prisma's findUnique returning null is the only way we'd
-          // reach here.
-          throw new Error('USER_NOT_FOUND');
-        }
-        if (user.role === 'ADMIN') {
-          const adminCount = await tx.user.count({ where: { role: 'ADMIN' } });
-          if (adminCount <= 1) return { lastAdmin: true as const };
-        }
-        const deleted = await tx.user.delete({ where: { id } });
-        return { deleted };
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
+    return this.runSerializable(async (tx) => {
+      const user = await tx.user.findUnique({ where: { id } });
+      if (!user) {
+        // Surface as a NotFoundError caller-side. We propagate via a thrown
+        // marker — Prisma's findUnique returning null is the only way we'd
+        // reach here.
+        throw new Error('USER_NOT_FOUND');
+      }
+      if (user.role === 'ADMIN' && user.isActive) {
+        const adminCount = await tx.user.count({
+          where: { role: 'ADMIN', isActive: true },
+        });
+        if (adminCount <= 1) return { lastAdmin: true as const };
+      }
+      const deleted = await tx.user.delete({ where: { id } });
+      return { deleted };
+    });
   }
 
   /**
@@ -104,30 +109,65 @@ export class UsersRepository {
     id: string,
     data: Prisma.UserUpdateInput,
   ): Promise<{ updated: User } | { lastAdmin: true }> {
-    return this.prisma.$transaction(
-      async (tx) => {
-        const isDemotion =
-          typeof data.role === 'string' && data.role !== 'ADMIN';
-        if (isDemotion) {
-          const user = await tx.user.findUnique({ where: { id } });
-          if (!user) throw new Error('USER_NOT_FOUND');
-          if (user.role === 'ADMIN') {
-            const adminCount = await tx.user.count({
-              where: { role: 'ADMIN' },
-            });
-            if (adminCount <= 1) return { lastAdmin: true as const };
-          }
-        }
-        const updated = await tx.user.update({ where: { id }, data });
-        return { updated };
-      },
-      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-    );
+    return this.runSerializable(async (tx) => {
+      const user = await tx.user.findUnique({ where: { id } });
+      if (!user) throw new Error('USER_NOT_FOUND');
+      const nextRole = typeof data.role === 'string' ? data.role : user.role;
+      const nextActive =
+        typeof data.isActive === 'boolean' ? data.isActive : user.isActive;
+      if (
+        user.role === 'ADMIN' &&
+        user.isActive &&
+        (nextRole !== 'ADMIN' || !nextActive)
+      ) {
+        const adminCount = await tx.user.count({
+          where: { role: 'ADMIN', isActive: true },
+        });
+        if (adminCount <= 1) return { lastAdmin: true as const };
+      }
+      const updated = await tx.user.update({ where: { id }, data });
+      return { updated };
+    });
   }
 
   resetPassword(id: string, passwordHash: string): Promise<void> {
     return this.prisma.user
-      .update({ where: { id }, data: { password: passwordHash, mustChangePassword: true } })
+      .update({
+        where: { id },
+        data: {
+          password: passwordHash,
+          mustChangePassword: true,
+          sessionVersion: { increment: 1 },
+        },
+      })
       .then(() => undefined);
+  }
+
+  findActiveSector(id: string) {
+    return this.prisma.sector.findFirst({ where: { id, isActive: true } });
+  }
+
+  private async runSerializable<T>(
+    operation: (tx: Prisma.TransactionClient) => Promise<T>,
+  ): Promise<T> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(operation, {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        });
+      } catch (error) {
+        if (!this.isSerializationFailure(error)) throw error;
+        lastError = error;
+      }
+    }
+    throw lastError;
+  }
+
+  private isSerializationFailure(error: unknown): boolean {
+    return (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === 'P2034'
+    );
   }
 }

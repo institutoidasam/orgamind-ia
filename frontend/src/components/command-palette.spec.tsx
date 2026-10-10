@@ -17,11 +17,17 @@ vi.mock('@/lib/api-client', () => ({
   logoutRemote: vi.fn(),
 }));
 
+let activeRole = 'ADMIN';
+vi.mock('@/stores/auth.store', () => ({
+  useAuthStore: (select: (state: { user: { role: string } }) => unknown) => select({ user: { role: activeRole } }),
+}));
+
 import { CommandPalette } from './command-palette';
 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  activeRole = 'ADMIN';
 });
 
 function PaletteHarness() {
@@ -45,10 +51,22 @@ describe('CommandPalette navigation entries', () => {
     }
   });
 
-  it('includes the Inbox/Segmentos entries', () => {
+  it('só oferece ações legadas para ADMIN e OPERATOR', () => {
+    activeRole = 'SUPERVISOR';
+    const { rerender } = render(<CommandPalette open onOpenChange={() => {}} />);
+    expect(screen.queryByText('Ir para Campanhas')).not.toBeInTheDocument();
+    expect(screen.getByText('Ir para Demandas')).toBeInTheDocument();
+
+    activeRole = 'VIEWER';
+    rerender(<CommandPalette open onOpenChange={() => {}} />);
+    expect(screen.queryByText('Ir para Nova comunicação')).not.toBeInTheDocument();
+    expect(screen.getByText('Ir para Comunicados')).toBeInTheDocument();
+  });
+
+  it('includes the Caixa de entrada/Demandas entries', () => {
     render(<CommandPalette open onOpenChange={() => {}} />);
-    expect(screen.getByText('Ir para Inbox')).toBeInTheDocument();
-    expect(screen.getByText('Ir para Segmentos')).toBeInTheDocument();
+    expect(screen.getByText('Ir para Caixa de entrada')).toBeInTheDocument();
+    expect(screen.getByText('Ir para Demandas')).toBeInTheDocument();
   });
 
   it('does not list a Broadcasts entry (absorbed into Campanhas)', () => {
@@ -56,10 +74,10 @@ describe('CommandPalette navigation entries', () => {
     expect(screen.queryByText('Ir para Broadcasts')).not.toBeInTheDocument();
   });
 
-  it('keeps the create + system actions', () => {
+  it('keeps the system actions and routes to the real new communication flow', () => {
     render(<CommandPalette open onOpenChange={() => {}} />);
-    expect(screen.getByText('Nova campanha')).toBeInTheDocument();
-    expect(screen.getByText('Importar planilha')).toBeInTheDocument();
+    expect(screen.getByText('Ir para Nova comunicação')).toBeInTheDocument();
+    expect(screen.getByText('Mudar tema')).toBeInTheDocument();
     expect(screen.getByText('Sair')).toBeInTheDocument();
   });
 });
@@ -79,10 +97,10 @@ describe('CommandPalette keyboard behavior', () => {
     const user = userEvent.setup();
     render(<CommandPalette open onOpenChange={() => {}} />);
 
-    await user.type(screen.getByPlaceholderText('Buscar ou executar...'), 'planilha');
+    await user.type(screen.getByPlaceholderText('Buscar ou executar...'), 'demanda');
 
-    expect(screen.getByText('Importar planilha')).toBeInTheDocument();
-    expect(screen.queryByText('Nova campanha')).not.toBeInTheDocument();
+    expect(screen.getByText('Ir para Demandas')).toBeInTheDocument();
+    expect(screen.queryByText('Ir para Nova comunicação')).not.toBeInTheDocument();
   });
 
   it('fecha com Escape e devolve o foco ao elemento que abriu a paleta', async () => {

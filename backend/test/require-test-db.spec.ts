@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   extractDatabaseName,
   isTestDatabaseUrl,
@@ -73,6 +73,16 @@ describe('shouldRunDbTests', () => {
 });
 
 describe('assertTestDatabase', () => {
+  it('usa DATABASE_URL do ambiente quando nenhum argumento é fornecido', () => {
+    vi.stubEnv('DATABASE_URL', 'postgresql://u:p@localhost:5432/picoa_test');
+
+    try {
+      expect(() => assertTestDatabase()).not.toThrow();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('não lança quando o banco é de teste', () => {
     expect(() =>
       assertTestDatabase('postgresql://u:p@localhost:5432/picoa_test'),
@@ -92,6 +102,12 @@ describe('assertTestDatabase', () => {
   });
 
   it('lança quando a DATABASE_URL é undefined', () => {
-    expect(() => assertTestDatabase(undefined)).toThrow();
+    vi.stubEnv('DATABASE_URL', undefined);
+
+    try {
+      expect(() => assertTestDatabase()).toThrow();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

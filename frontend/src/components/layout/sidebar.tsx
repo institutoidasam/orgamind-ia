@@ -1,12 +1,9 @@
 import { Link, useRouterState } from '@tanstack/react-router';
-import logoSvg from '@/assets/logo.svg';
+import { Brand } from '@/components/brand';
 import { initials } from '@/lib/initials';
-import { useConversations } from '@/features/chat/api';
-import { isNavActive, navSection, type NavItem } from '@/lib/nav';
-
-const NAV_OPS = navSection('ops');
-const NAV_SYS = navSection('sys');
-const NAV_ADMIN = navSection('admin');
+import { WORKSPACE_NAME } from '@/lib/brand';
+import { useInternalUnreadCount } from '@/lib/internal-unread';
+import { isNavActive, navSection, type NavItem, type NavRole } from '@/lib/nav';
 
 type Props = {
   collapsed: boolean;
@@ -33,24 +30,23 @@ export function Sidebar({ collapsed, user, onNavigate }: Props) {
   const path = router.location.pathname;
   const isActive = (to: string) => isNavActive(path, to);
 
-  const unread = useConversations('unread', '');
-  // Total unread MESSAGES (sum of per-conversation unreadCount), not the count
-  // of unread conversations. Bounded to the first page of unread conversations,
-  // which is plenty for a sidebar badge.
-  const unreadTotal = unread.data?.items.reduce((acc, c) => acc + c.unreadCount, 0) ?? 0;
+  const role = user?.role as NavRole | undefined;
+  const unread = useInternalUnreadCount({ role: user?.role, userKey: user?.email });
+  const unreadTotal = unread.data?.count ?? 0;
+  const work = navSection('ops', role);
+  const followUp = navSection('sys', role);
+  const administration = navSection('admin', role);
 
   return (
     <div
-      className="flex h-full min-h-screen flex-col px-3 py-5 lg:min-h-0"
+      className="flex h-full min-h-screen flex-col px-2 py-4 lg:min-h-0"
       style={{ background: 'var(--brand-navy)', color: '#fff' }}
     >
       <SidebarBrand collapsed={collapsed} />
 
-      <Section eyebrow="operação" items={NAV_OPS} badges={{ '/inbox': unreadTotal }} collapsed={collapsed} isActive={isActive} onNavigate={onNavigate} />
-      <Section eyebrow="sistema" items={NAV_SYS} collapsed={collapsed} isActive={isActive} onNavigate={onNavigate} />
-      {user?.role === 'ADMIN' && (
-        <Section eyebrow="admin" items={NAV_ADMIN} collapsed={collapsed} isActive={isActive} onNavigate={onNavigate} />
-      )}
+      <Section eyebrow="Trabalho" items={work} badges={{ '/caixa-de-entrada': unreadTotal }} collapsed={collapsed} isActive={isActive} onNavigate={onNavigate} />
+      <Section eyebrow="Acompanhar" items={followUp} collapsed={collapsed} isActive={isActive} onNavigate={onNavigate} />
+      {administration.length > 0 && <Section eyebrow="Administração" items={administration} collapsed={collapsed} isActive={isActive} onNavigate={onNavigate} />}
 
       <div className="flex-1" />
 
@@ -86,20 +82,8 @@ function Section({ eyebrow, items, badges, collapsed, isActive, onNavigate }: Se
 
 function SidebarBrand({ collapsed }: Pick<Props, 'collapsed'>) {
   return (
-    <div className="flex items-center gap-2.5 px-1.5 pb-5">
-      <img src={logoSvg} alt="" className="size-8 shrink-0" aria-hidden />
-      {!collapsed && (
-        <div className="leading-tight">
-          <div className="text-[18px] font-bold tracking-tight text-white">ORGAMIND</div>
-          <div
-            className="text-[10px] uppercase tracking-[0.08em]"
-            style={{ color: 'rgba(219, 228, 239, 0.72)' }}
-            title="Plataforma Inteligente de Comunicação Operacional Automática"
-          >
-            Comunicação operacional
-          </div>
-        </div>
-      )}
+    <div className="px-1.5 pb-4">
+      <Brand compact={collapsed} inverse subtitle={WORKSPACE_NAME} />
     </div>
   );
 }
@@ -114,7 +98,8 @@ function NavigationItem({ item, badges, collapsed, isActive, onNavigate }: Navig
       to={item.to}
       onClick={onNavigate}
       aria-current={active ? 'page' : undefined}
-      className="flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--brand-orange)]"
+      title={collapsed ? item.label : undefined}
+      className="flex items-center gap-2.5 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--brand-orange)]"
       style={{
         background: active ? 'color-mix(in srgb, var(--brand-navy) 72%, white)' : 'transparent',
         color: active ? '#fff' : '#dbe4ef',
@@ -143,7 +128,7 @@ function UnreadBadge({ active, children }: { active: boolean; children: number }
 }
 
 function SidebarIdentity({ collapsed, user }: Pick<Props, 'collapsed' | 'user'>) {
-  const displayName = user?.name ?? user?.email ?? '';
+  const displayName = identityDisplayName(user);
 
   return (
     <div
@@ -156,12 +141,25 @@ function SidebarIdentity({ collapsed, user }: Pick<Props, 'collapsed' | 'user'>)
       >
         {initials(displayName)}
       </span>
-      {!collapsed && (
-        <div className="min-w-0">
-          <div className="truncate text-white">{user?.name ?? user?.email ?? '—'}</div>
-          <div className="text-[11px] uppercase tracking-wider">{user?.role ?? 'operador'}</div>
-        </div>
-      )}
+      <IdentityDetails collapsed={collapsed} user={user} />
     </div>
   );
+}
+
+function IdentityDetails({ collapsed, user }: Pick<Props, 'collapsed' | 'user'>) {
+  if (collapsed) return null;
+  return (
+    <div className="min-w-0">
+      <div className="truncate text-white">{identityDisplayName(user) || '—'}</div>
+      <div className="text-[11px] uppercase tracking-wider">{roleLabel(user?.role)}</div>
+    </div>
+  );
+}
+
+function identityDisplayName(user: Props['user']) {
+  return user?.name ?? user?.email ?? '';
+}
+
+function roleLabel(role?: string) {
+  return ({ ADMIN: 'Administrador', SUPERVISOR: 'Supervisor', OPERATOR: 'Operador', VIEWER: 'Leitura' } as const)[role as NavRole] ?? '—';
 }

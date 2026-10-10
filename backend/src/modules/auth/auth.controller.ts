@@ -16,12 +16,15 @@ import { LoginDto } from './dto/login.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { Public } from './decorators/public.decorator';
 import { InvalidCredentialsError } from './errors/auth.errors';
+import { Roles } from './decorators/roles.decorator';
 import type { JwtPayload } from './jwt.strategy';
 
 const REFRESH_COOKIE_NAME = 'picoa_refresh';
-const REFRESH_COOKIE_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
-
-function setRefreshCookie(res: Response, refreshToken: string): void {
+function setRefreshCookie(
+  res: Response,
+  refreshToken: string,
+  maxAgeMs: number,
+): void {
   const isProd = process.env.NODE_ENV === 'production';
   // Defensive: expire any legacy `path=/auth` cookie BEFORE setting the new
   // one. Without this, returning users who logged in before the path fix end
@@ -36,7 +39,7 @@ function setRefreshCookie(res: Response, refreshToken: string): void {
     // Strict in prod (TLS-fronted by Caddy); Lax in dev so cross-origin
     // localhost (vite:5173 -> api:3000) still works.
     sameSite: isProd ? 'strict' : 'lax',
-    maxAge: REFRESH_COOKIE_MAX_AGE_MS,
+    maxAge: maxAgeMs,
     // path '/' (not '/auth') because in production the SPA reaches the API
     // through nginx's `/api/*` rewrite — i.e. the browser sees the request
     // path as `/api/auth/refresh`, not `/auth/refresh`. A `path=/auth` cookie
@@ -74,7 +77,7 @@ export class AuthController {
   ) {
     const { accessToken, refreshToken, mustChangePassword, user } =
       await this.auth.login(dto);
-    setRefreshCookie(res, refreshToken);
+    setRefreshCookie(res, refreshToken, this.refresh.refreshCookieMaxAgeMs());
     return { accessToken, mustChangePassword, user };
   }
 
@@ -89,14 +92,16 @@ export class AuthController {
     @Res({ passthrough: true }) res: Response,
   ) {
     const refreshToken = req.cookies?.[REFRESH_COOKIE_NAME] as
-      | string
-      | undefined;
+      string | undefined;
     if (!refreshToken) {
       throw new InvalidCredentialsError();
     }
-    const { accessToken, refreshToken: newRefresh } =
-      await this.refresh.rotate(refreshToken);
-    setRefreshCookie(res, newRefresh);
+    const {
+      accessToken,
+      refreshToken: newRefresh,
+      refreshTokenMaxAgeMs,
+    } = await this.refresh.rotate(refreshToken);
+    setRefreshCookie(res, newRefresh, refreshTokenMaxAgeMs);
     return { accessToken };
   }
 
@@ -106,8 +111,7 @@ export class AuthController {
   @Post('logout')
   async logout(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const refreshToken = req.cookies?.[REFRESH_COOKIE_NAME] as
-      | string
-      | undefined;
+      string | undefined;
     if (refreshToken) {
       await this.refresh.revoke(refreshToken);
     }
@@ -116,6 +120,7 @@ export class AuthController {
   }
 
   @Throttle({ default: { ttl: 60000, limit: 5 } })
+  @Roles('ADMIN', 'OPERATOR', 'SUPERVISOR', 'VIEWER')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Change current user password (throttled 5/min)' })
   @Post('change-password')

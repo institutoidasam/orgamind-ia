@@ -1,5 +1,6 @@
 import { latestRelease } from '@/release-notes';
 import { formatRelativeToToday } from '@/lib/format-date-ptbr';
+import { PRODUCT_NAME, WORKSPACE_NAME } from '@/lib/brand';
 
 /**
  * Rodapé do layout autenticado: versão publicada mais recente e há quanto
@@ -13,7 +14,10 @@ export function Footer() {
       className="mt-6 border-t px-3 py-4 text-xs sm:px-5 lg:px-8"
       style={{ borderColor: 'var(--border)', color: 'var(--foreground-subtle)' }}
     >
-      Versão {latest.version} · atualizado {formatRelativeToToday(latest.date)}
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+        <span>{WORKSPACE_NAME} · Ambiente interno</span>
+        <span>{PRODUCT_NAME} · Versão {latest.version} · atualizado {formatRelativeToToday(latest.date)}</span>
+      </div>
     </footer>
   );
 }

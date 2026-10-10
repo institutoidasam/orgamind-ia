@@ -4,12 +4,20 @@ export const userSummarySchema = z.object({
   id: z.string(),
   email: z.string().email(),
   name: z.string().nullable(),
-  role: z.enum(['ADMIN', 'OPERATOR']),
+  role: z.enum(['ADMIN', 'OPERATOR', 'SUPERVISOR', 'VIEWER']),
+  sectorId: z.string().nullable(),
+  sector: z
+    .object({
+      id: z.string(),
+      name: z.string(),
+      code: z.string(),
+      isActive: z.boolean(),
+    })
+    .nullable(),
+  isActive: z.boolean(),
   lastLoginAt: z.string().nullable(),
   createdAt: z.string(),
-  createdBy: z
-    .object({ email: z.string() })
-    .nullable(),
+  createdBy: z.object({ email: z.string() }).nullable(),
 });
 
 export const userListResponseSchema = z.object({

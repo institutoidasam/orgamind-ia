@@ -7,7 +7,10 @@ export const createUserSchema = z.object({
   // distinct rows in the case-sensitive `email String @unique` Postgres column.
   email: z.string().trim().toLowerCase().pipe(z.email()),
   name: z.string().max(120).optional(),
-  role: z.enum(['ADMIN', 'OPERATOR']).default('OPERATOR'),
+  role: z
+    .enum(['ADMIN', 'OPERATOR', 'SUPERVISOR', 'VIEWER'])
+    .default('OPERATOR'),
+  sectorId: z.string().optional(),
 });
 
 export class CreateUserDto extends createZodDto(createUserSchema) {}

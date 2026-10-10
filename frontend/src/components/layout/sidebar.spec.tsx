@@ -10,8 +10,8 @@ vi.mock('@tanstack/react-router', () => ({
   ),
 }));
 
-vi.mock('@/features/chat/api', () => ({
-  useConversations: () => ({ data: { items: [{ unreadCount: 3 }] } }),
+vi.mock('@/lib/internal-unread', () => ({
+  useInternalUnreadCount: () => ({ data: { count: 4 } }),
 }));
 
 import { Sidebar } from './sidebar';
@@ -21,23 +21,23 @@ afterEach(cleanup);
 describe('Sidebar', () => {
   it('marca a rota atual para navegação assistiva', () => {
     currentPath = '/dashboard';
-    render(<Sidebar collapsed={false} user={{ email: 'ana@orgamind.com', name: 'Ana' }} />);
+    render(<Sidebar collapsed={false} user={{ email: 'ana@orgamind.com', name: 'Ana', role: 'ADMIN' }} />);
 
-    expect(screen.getByRole('link', { name: 'Início' })).toHaveAttribute('aria-current', 'page');
-    const inboxLink = screen.getByText('Inbox').closest('a') as HTMLAnchorElement;
+    expect(screen.getByRole('link', { name: 'Visão geral' })).toHaveAttribute('aria-current', 'page');
+    const inboxLink = screen.getByText('Caixa de entrada').closest('a') as HTMLAnchorElement;
     expect(inboxLink).not.toHaveAttribute('aria-current');
   });
 
   it('mantém texto navy legível nos acentos laranja pequenos', () => {
-    currentPath = '/inbox';
-    render(<Sidebar collapsed={false} user={{ email: 'ana@orgamind.com', name: 'Ana' }} />);
+    currentPath = '/caixa-de-entrada';
+    render(<Sidebar collapsed={false} user={{ email: 'ana@orgamind.com', name: 'Ana', role: 'ADMIN' }} />);
 
     expect(screen.getByText('AN')).toHaveStyle({ color: 'var(--brand-navy)' });
-    expect(screen.getByText('3')).toHaveStyle({ color: 'var(--brand-navy)' });
+    expect(screen.getByText('4')).toHaveStyle({ color: 'var(--brand-navy)' });
   });
 
   it('preserva ADMIN, badge e fechamento do menu ao navegar', () => {
-    currentPath = '/inbox';
+    currentPath = '/caixa-de-entrada';
     const onNavigate = vi.fn();
     render(
       <Sidebar
@@ -47,11 +47,32 @@ describe('Sidebar', () => {
       />,
     );
 
-    expect(screen.getByText('admin')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Inbox/ })).toHaveAttribute('aria-current', 'page');
-    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getByText('Administração')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Caixa de entrada/ })).toHaveAttribute('aria-current', 'page');
+    expect(screen.getByText('4')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('link', { name: 'Usuários' }));
     expect(onNavigate).toHaveBeenCalledOnce();
+  });
+
+  it('mostra operações e acompanhamento para quatro papéis, sem criação para VIEWER e sem administração fora de ADMIN', () => {
+    currentPath = '/demandas/dm-1';
+    for (const [role, canCreate] of [['ADMIN', true], ['SUPERVISOR', true], ['OPERATOR', true], ['VIEWER', false]] as const) {
+      const { unmount } = render(<Sidebar collapsed={false} user={{ email: `${role}@orgamind.com`, name: role, role }} />);
+      expect(screen.getByRole('link', { name: 'Demandas' })).toHaveAttribute('aria-current', 'page');
+      expect(screen.getByRole('link', { name: 'Comunicados' })).not.toHaveAttribute('aria-current');
+      expect(screen.queryByRole('link', { name: 'Nova comunicação' })).toBe(canCreate ? screen.getByRole('link', { name: 'Nova comunicação' }) : null);
+      if (role === 'ADMIN') expect(screen.getByRole('link', { name: 'Setores' })).toBeInTheDocument();
+      else expect(screen.queryByRole('link', { name: 'Setores' })).not.toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it('mantém títulos como tooltip quando a barra está recolhida', () => {
+    currentPath = '/dashboard';
+    render(<Sidebar collapsed user={{ email: 'ana@orgamind.com', name: 'Ana', role: 'ADMIN' }} />);
+
+    expect(screen.getByRole('link', { name: 'Visão geral' })).toHaveAttribute('title', 'Visão geral');
+    expect(screen.getByRole('link', { name: 'Visão geral' })).toHaveAttribute('aria-current', 'page');
   });
 });

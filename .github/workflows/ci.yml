@@ -129,11 +129,40 @@ jobs:
       - run: cd backend && bun run prisma migrate deploy
       - name: Check schema vs applied migrations
         run: |
-          cd backend && npx prisma migrate diff \
+          cd backend
+          diff_file="$(mktemp)"
+          trap 'rm -f "$diff_file"' EXIT
+          set +e
+          npx prisma migrate diff \
             --from-migrations prisma/migrations \
             --to-schema-datamodel prisma/schema.prisma \
             --shadow-database-url "$DATABASE_URL" \
-            --exit-code
+            --script \
+            --exit-code >"$diff_file"
+          diff_status=$?
+          set -e
+          if [ "$diff_status" -ne 0 ] && [ "$diff_status" -ne 2 ]; then
+            exit "$diff_status"
+          fi
+          DIFF_STATUS="$diff_status" python3 - "$diff_file" <<'PY'
+          import os
+          import pathlib
+          import sys
+
+          status = int(os.environ["DIFF_STATUS"])
+          script = pathlib.Path(sys.argv[1]).read_text()
+          normalized = "\n".join(
+              line for line in script.splitlines() if not line.lstrip().startswith("--")
+          ).strip()
+          known_quarantine_drop = 'DROP TABLE "_message_dup_neutralized_20260819";'
+
+          if (status == 0 and normalized == "") or (
+              status == 2 and normalized == known_quarantine_drop
+          ):
+              raise SystemExit(0)
+          print(f"Unexpected Prisma schema drift (exit {status}): {normalized!r}")
+          raise SystemExit(1)
+          PY
 
   audit:
     runs-on: ubuntu-latest

@@ -1,9 +1,15 @@
 // invite-user-dialog.spec.tsx
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { InviteUserDialog } from './invite-user-dialog';
+import {
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+  cleanup,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { InviteUserDialog } from "./invite-user-dialog";
 
 // jsdom lacks the APIs the Radix Select primitive relies on.
 class ResizeObserverStub {
@@ -11,7 +17,8 @@ class ResizeObserverStub {
   unobserve() {}
   disconnect() {}
 }
-globalThis.ResizeObserver = globalThis.ResizeObserver ?? (ResizeObserverStub as never);
+globalThis.ResizeObserver =
+  globalThis.ResizeObserver ?? (ResizeObserverStub as never);
 if (!Element.prototype.hasPointerCapture) {
   Element.prototype.hasPointerCapture = () => false;
 }
@@ -19,16 +26,25 @@ if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {};
 }
 
-const mutateAsync = vi.fn().mockResolvedValue({ user: {}, temporaryPassword: 'pw' });
-vi.mock('../api', () => ({
+const mutateAsync = vi
+  .fn()
+  .mockResolvedValue({ user: {}, temporaryPassword: "pw" });
+vi.mock("../api", () => ({
   useInviteUser: () => ({ mutateAsync, isPending: false }),
 }));
-vi.mock('sonner', () => ({ toast: { error: vi.fn() } }));
+vi.mock("@/features/internal-admin/api", () => ({
+  useSectors: () => ({
+    data: { items: [{ id: "sector-1", name: "Engenharia" }] },
+  }),
+}));
+vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
 function wrap(ui: React.ReactElement) {
   return render(
     <QueryClientProvider
-      client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      client={
+        new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      }
     >
       {ui}
     </QueryClientProvider>,
@@ -40,22 +56,26 @@ afterEach(() => cleanup());
 
 function emailInput(): HTMLInputElement {
   const el = document.querySelector('input[type="email"]');
-  if (!el) throw new Error('email input not found');
+  if (!el) throw new Error("email input not found");
   return el as HTMLInputElement;
 }
 
-describe('InviteUserDialog', () => {
-  it('clears a typed email after the dialog is closed and reopened', async () => {
+describe("InviteUserDialog", () => {
+  it("clears a typed email after the dialog is closed and reopened", async () => {
     const onOpenChange = vi.fn();
-    const { rerender } = wrap(<InviteUserDialog open onOpenChange={onOpenChange} />);
+    const { rerender } = wrap(
+      <InviteUserDialog open onOpenChange={onOpenChange} />,
+    );
 
-    await userEvent.type(emailInput(), 'typed@x.com');
-    expect(emailInput().value).toBe('typed@x.com');
+    await userEvent.type(emailInput(), "typed@x.com");
+    expect(emailInput().value).toBe("typed@x.com");
 
     // Close
     rerender(
       <QueryClientProvider
-        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+        client={
+          new QueryClient({ defaultOptions: { queries: { retry: false } } })
+        }
       >
         <InviteUserDialog open={false} onOpenChange={onOpenChange} />
       </QueryClientProvider>,
@@ -63,39 +83,59 @@ describe('InviteUserDialog', () => {
     // Reopen
     rerender(
       <QueryClientProvider
-        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+        client={
+          new QueryClient({ defaultOptions: { queries: { retry: false } } })
+        }
       >
         <InviteUserDialog open onOpenChange={onOpenChange} />
       </QueryClientProvider>,
     );
 
-    await waitFor(() => expect(emailInput().value).toBe(''));
+    await waitFor(() => expect(emailInput().value).toBe(""));
   });
 
-  it('submits the role chosen in the Select (controlled, in sync)', async () => {
+  it("submits the role chosen in the Select (controlled, in sync)", async () => {
     wrap(<InviteUserDialog open onOpenChange={() => {}} />);
 
-    await userEvent.type(emailInput(), 'admin@x.com');
+    await userEvent.type(emailInput(), "admin@x.com");
 
     // Open the role select and pick Admin.
-    fireEvent.click(screen.getByRole('combobox'));
-    fireEvent.click(await screen.findByRole('option', { name: 'Admin' }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Perfil" }));
+    fireEvent.click(
+      await screen.findByRole("option", { name: "Administrador" }),
+    );
 
-    fireEvent.click(screen.getByRole('button', { name: /^Convidar$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^Convidar$/i }));
 
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
     expect(mutateAsync).toHaveBeenCalledWith(
-      expect.objectContaining({ email: 'admin@x.com', role: 'ADMIN' }),
+      expect.objectContaining({ email: "admin@x.com", role: "ADMIN" }),
     );
   });
 
-  it('defaults the role to OPERATOR when left unchanged', async () => {
+  it("defaults the role to OPERATOR when left unchanged", async () => {
     wrap(<InviteUserDialog open onOpenChange={() => {}} />);
-    await userEvent.type(emailInput(), 'op@x.com');
-    fireEvent.click(screen.getByRole('button', { name: /^Convidar$/i }));
+    await userEvent.type(emailInput(), "op@x.com");
+    fireEvent.click(screen.getByRole("combobox", { name: "Setor principal" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Engenharia" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Convidar$/i }));
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
     expect(mutateAsync).toHaveBeenCalledWith(
-      expect.objectContaining({ email: 'op@x.com', role: 'OPERATOR' }),
+      expect.objectContaining({
+        email: "op@x.com",
+        role: "OPERATOR",
+        sectorId: "sector-1",
+      }),
     );
+  });
+
+  it("does not invite a non-admin without an active sector selection", async () => {
+    wrap(<InviteUserDialog open onOpenChange={() => {}} />);
+    await userEvent.type(emailInput(), "operator@x.com");
+    fireEvent.click(screen.getByRole("button", { name: /^Convidar$/i }));
+    await waitFor(() =>
+      expect(screen.getByText("Selecione o setor principal")).toBeTruthy(),
+    );
+    expect(mutateAsync).not.toHaveBeenCalled();
   });
 });

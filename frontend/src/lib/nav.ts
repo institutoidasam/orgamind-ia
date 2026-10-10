@@ -26,7 +26,11 @@ import {
 /** Sidebar grouping. Order here is the order sections render in the sidebar. */
 export type NavSection = 'ops' | 'sys' | 'admin';
 
-export type NavRole = 'ADMIN';
+export type NavRole = 'ADMIN' | 'SUPERVISOR' | 'OPERATOR' | 'VIEWER';
+
+const ALL_INTERNAL_ROLES: readonly NavRole[] = ['ADMIN', 'SUPERVISOR', 'OPERATOR', 'VIEWER'];
+const WRITE_INTERNAL_ROLES: readonly NavRole[] = ['ADMIN', 'SUPERVISOR', 'OPERATOR'];
+const LEGACY_ROLES: readonly NavRole[] = ['ADMIN', 'OPERATOR'];
 
 export type NavItem = {
   /** Route path, e.g. `/contacts`. Also the breadcrumb match key. */
@@ -36,8 +40,8 @@ export type NavItem = {
   icon: LucideIcon;
   /** Which sidebar group this belongs to. */
   section: NavSection;
-  /** When set, only users with this role see the entry. */
-  role?: NavRole;
+  /** Papéis que podem usar o item; ausência mantém a rota só para breadcrumb. */
+  roles?: readonly NavRole[];
   /**
    * Route exists and must resolve a breadcrumb label, but is intentionally not
    * listed in the sidebar (reachable from elsewhere). Still shown in the palette.
@@ -68,31 +72,36 @@ export type NavItem = {
 const HIDDEN_FROM_SIDEBAR: string[] = ['/consentimento', '/opt-in-links'];
 
 export const NAV: NavItem[] = [
-  { to: '/dashboard', label: 'Início', icon: Home, section: 'ops' },
-  { to: '/inbox', label: 'Inbox', icon: MessageSquare, section: 'ops' },
-  { to: '/contacts', label: 'Contatos', icon: Users, section: 'ops' },
-  { to: '/templates', label: 'Templates', icon: FileText, section: 'ops' },
-  { to: '/segments', label: 'Segmentos', icon: Filter, section: 'ops' },
-  // ZD → fusão (13/07): /disparos mostrava os mesmos números das mesmas
-  // campanhas e morreu (a rota é só um redirect para cá). O que só existia
-  // lá — os disparos feitos PELO PAINEL do Zernio, que não são campanhas do
-  // orgamind — chegou a viver numa seção à parte desta página, mas essa seção
-  // também foi removida a pedido do cliente (25/08, 5bf2d11): a tela de
-  // campanhas hoje só mostra campanha do orgamind.
-  { to: '/campaigns', label: 'Campanhas', icon: Send, section: 'ops' },
+  { to: '/dashboard', label: 'Visão geral', icon: Home, section: 'ops', roles: ALL_INTERNAL_ROLES },
+  { to: '/caixa-de-entrada', label: 'Caixa de entrada', icon: MessageSquare, section: 'ops', roles: ALL_INTERNAL_ROLES },
+  { to: '/nova-comunicacao', label: 'Nova comunicação', icon: Send, section: 'ops', roles: WRITE_INTERNAL_ROLES },
+  { to: '/demandas', label: 'Demandas', icon: FileText, section: 'sys', roles: ALL_INTERNAL_ROLES },
+  { to: '/comunicados', label: 'Comunicados', icon: MessageSquare, section: 'sys', roles: ALL_INTERNAL_ROLES },
+  { to: '/setores', label: 'Setores', icon: Users, section: 'admin', roles: ['ADMIN'] },
+  { to: '/users', label: 'Usuários', icon: UserCog, section: 'admin', roles: ['ADMIN'] },
+  { to: '/connect', label: 'Números e canais', icon: Wifi, section: 'admin', roles: ['ADMIN'] },
+
+  // Telas legadas preservam URLs e breadcrumbs, mas não fazem parte do painel
+  // interno. O backend legado só aceita ADMIN/OPERATOR; SUPERVISOR/VIEWER não
+  // as veem na paleta para não receberem atalhos que terminariam em 403.
+  { to: '/inbox', label: 'Inbox externo', icon: MessageSquare, section: 'ops', roles: LEGACY_ROLES, hideInSidebar: true },
+  { to: '/contacts', label: 'Contatos', icon: Users, section: 'ops', roles: LEGACY_ROLES, hideInSidebar: true },
+  { to: '/templates', label: 'Templates', icon: FileText, section: 'ops', roles: LEGACY_ROLES, hideInSidebar: true },
+  { to: '/segments', label: 'Segmentos', icon: Filter, section: 'ops', roles: LEGACY_ROLES, hideInSidebar: true },
+  { to: '/campaigns', label: 'Campanhas', icon: Send, section: 'ops', roles: LEGACY_ROLES, hideInSidebar: true },
   {
     to: '/imports',
     label: 'Imports',
     icon: FileSpreadsheet,
     section: 'ops',
+    roles: LEGACY_ROLES,
     hideInSidebar: true,
   },
   // C5 — o painel que troca a métrica de sucesso: "quantos podem receber campanha
   // hoje", e não "quantas mensagens saíram". Fica em `ops` porque é a tela que o
   // operador tem de olhar ANTES de montar uma campanha. Mora em `/consentimento`
   // porque `/opt-in` é a landing PÚBLICA (sem login) — ver consentimento.tsx.
-  { to: '/consentimento', label: 'Opt-in', icon: ShieldCheck, section: 'ops' },
-  { to: '/connect', label: 'Canais', icon: Wifi, section: 'sys' },
+  { to: '/consentimento', label: 'Opt-in', icon: ShieldCheck, section: 'ops', roles: LEGACY_ROLES, hideInSidebar: true },
   // C3 — gerar um ponto de coleta é decidir de onde virá consentimento, com que
   // finalidade e sob que texto; e o token acaba impresso num cartaz que ninguém
   // recolhe. Por isso vive em `admin`, ao lado de Usuários.
@@ -101,9 +110,9 @@ export const NAV: NavItem[] = [
     label: 'Links & QR de opt-in',
     icon: QrCode,
     section: 'admin',
-    role: 'ADMIN',
+    roles: ['ADMIN'],
+    hideInSidebar: true,
   },
-  { to: '/users', label: 'Usuários', icon: UserCog, section: 'admin', role: 'ADMIN' },
   // A identidade da organização é o nome que aparece no consentimento de todos
   // os titulares. Editá-la é da mesma gravidade de escrever o texto de
   // consentimento — por isso ADMIN, ao lado de Usuários.
@@ -112,7 +121,8 @@ export const NAV: NavItem[] = [
     label: 'Configurações',
     icon: Settings,
     section: 'admin',
-    role: 'ADMIN',
+    roles: ['ADMIN'],
+    hideInSidebar: true,
   },
 ];
 
@@ -124,10 +134,22 @@ export const NAV: NavItem[] = [
  * enxergando as entradas escondidas — é o que mantém a rota alcançável e o
  * breadcrumb resolvendo.
  */
-export function navSection(section: NavSection): NavItem[] {
+export function navItemsForRole(role?: NavRole): NavItem[] {
+  if (!role) return [];
+  return NAV.filter((item) => item.roles?.includes(role));
+}
+
+export function canUseLegacyModules(role?: NavRole): boolean {
+  return role === 'ADMIN' || role === 'OPERATOR';
+}
+
+export function navSection(section: NavSection, role?: NavRole): NavItem[] {
   return NAV.filter(
     (n) =>
-      n.section === section && !n.hideInSidebar && !HIDDEN_FROM_SIDEBAR.includes(n.to),
+      n.section === section
+      && !n.hideInSidebar
+      && !HIDDEN_FROM_SIDEBAR.includes(n.to)
+      && Boolean(role && n.roles?.includes(role)),
   );
 }
 

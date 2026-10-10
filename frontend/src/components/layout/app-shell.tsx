@@ -43,12 +43,12 @@ export function AppShell({
         className={[
           // shared
           'no-print',
-          'fixed inset-y-0 left-0 z-40 w-[260px] overflow-y-auto transition-transform duration-200',
+          'fixed inset-y-0 left-0 z-40 w-[210px] overflow-y-auto transition-transform duration-200',
           // desktop: sticky in flow, width driven by CSS variable below
           'lg:sticky lg:top-0 lg:z-0 lg:h-screen lg:!w-[var(--sidebar-w)] lg:translate-x-0 lg:transition-[width]',
           mobileOpen ? 'translate-x-0' : '-translate-x-full',
         ].join(' ')}
-        style={{ ['--sidebar-w' as string]: collapsed ? '64px' : '240px' }}
+        style={{ ['--sidebar-w' as string]: collapsed ? '64px' : '210px' }}
       >
         {sidebar}
       </aside>

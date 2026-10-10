@@ -31,6 +31,21 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.10.10',
+    date: '2026-10-10',
+    title: 'Comunicação entre setores no OrgaMind',
+    items: [
+      {
+        text: 'A Visão geral, a Caixa de entrada, as Demandas e os Comunicados agora acompanham a comunicação entre setores da GBR Componentes.',
+        where: '/dashboard',
+      },
+      {
+        text: 'Administradores podem organizar Setores, Usuários e Números e canais; os demais papéis veem somente as ações autorizadas.',
+        where: '/setores',
+      },
+    ],
+  },
+  {
     version: '2026.10.08',
     date: '2026-10-08',
     title: 'Nova identidade visual do OrgaMind',

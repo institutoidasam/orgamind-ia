@@ -1,17 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { NAV, navLabelFor, navSection } from './nav';
+import { NAV, navItemsForRole, navLabelFor, navSection } from './nav';
 
 // Every authenticated top-level route that the app exposes. The manifest is the
 // single source of truth for sidebar / topbar / command-palette, so it must
 // cover all of these — otherwise the topbar breadcrumb falls back to "—".
 const KNOWN_ROUTES = [
   '/dashboard',
-  '/inbox',
-  '/contacts',
-  '/segments',
-  '/campaigns',
-  '/templates',
-  '/imports',
+  '/caixa-de-entrada',
+  '/nova-comunicacao',
+  '/demandas',
+  '/comunicados',
+  '/setores',
   '/connect',
   '/users',
 ];
@@ -33,15 +32,37 @@ describe('NAV manifest', () => {
     }
   });
 
-  it('marks Usuários as ADMIN-only', () => {
-    const users = NAV.find((n) => n.to === '/users');
-    expect(users?.role).toBe('ADMIN');
+  it('organiza exatamente os oito módulos internos nos três grupos do painel', () => {
+    expect(navSection('ops', 'ADMIN').map((item) => item.label)).toEqual([
+      'Visão geral', 'Caixa de entrada', 'Nova comunicação',
+    ]);
+    expect(navSection('sys', 'ADMIN').map((item) => item.label)).toEqual([
+      'Demandas', 'Comunicados',
+    ]);
+    expect(navSection('admin', 'ADMIN').map((item) => item.label)).toEqual([
+      'Setores', 'Usuários', 'Números e canais',
+    ]);
   });
 
-  it('does not gate non-admin routes', () => {
-    const dashboard = NAV.find((n) => n.to === '/dashboard');
-    expect(dashboard?.role).toBeUndefined();
+  it('aplica o acesso da navegação por papel sem expor módulos legados a SUPERVISOR ou VIEWER', () => {
+    expect(navItemsForRole('ADMIN').map((item) => item.to)).toContain('/connect');
+    expect(navItemsForRole('OPERATOR').map((item) => item.to)).toContain('/campaigns');
+    expect(navItemsForRole('SUPERVISOR').map((item) => item.to)).not.toContain('/campaigns');
+    expect(navItemsForRole('VIEWER').map((item) => item.to)).not.toContain('/nova-comunicacao');
+    expect(navSection('admin', 'SUPERVISOR')).toEqual([]);
+    expect(navSection('admin', 'VIEWER')).toEqual([]);
   });
+
+  it('marks Usuários as ADMIN-only', () => {
+    const users = NAV.find((n) => n.to === '/users');
+    expect(users?.roles).toEqual(['ADMIN']);
+  });
+
+  it('does not gate the shared internal overview', () => {
+    const dashboard = NAV.find((n) => n.to === '/dashboard');
+    expect(dashboard?.roles).toContain('VIEWER');
+  });
+
 });
 
 describe('NAV', () => {
@@ -65,7 +86,7 @@ describe('telas de opt-in: fora do menu, vivas na rota', () => {
 
   it('não aparecem na barra lateral (nenhuma seção)', () => {
     const inSidebar = (['ops', 'sys', 'admin'] as const).flatMap((s) =>
-      navSection(s).map((n) => n.to),
+      navSection(s, 'ADMIN').map((n) => n.to),
     );
     for (const route of OPTIN_ROUTES) {
       expect(inSidebar).not.toContain(route);
@@ -90,9 +111,9 @@ describe('navLabelFor', () => {
   });
 
   it('resolves nested paths to their parent route label', () => {
-    expect(navLabelFor('/contacts/123')).toBe(navLabelFor('/contacts'));
-    expect(navLabelFor('/segments/abc')).toBe(navLabelFor('/segments'));
-    expect(navLabelFor('/inbox/conv-1')).toBe(navLabelFor('/inbox'));
+    expect(navLabelFor('/demandas/dm-123')).toBe(navLabelFor('/demandas'));
+    expect(navLabelFor('/comunicados/cm-1')).toBe(navLabelFor('/comunicados'));
+    expect(navLabelFor('/caixa-de-entrada/item-1')).toBe(navLabelFor('/caixa-de-entrada'));
   });
 
   it('returns the fallback for an unknown route', () => {

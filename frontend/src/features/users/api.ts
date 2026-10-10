@@ -1,10 +1,14 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '@/lib/api-client';
-import { useAuthStore } from '@/stores/auth.store';
-import { userListResponseSchema, type InviteUserOutput, type EditUserInput } from './schemas';
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api } from "@/lib/api-client";
+import { useAuthStore } from "@/stores/auth.store";
+import {
+  userListResponseSchema,
+  type InviteUserOutput,
+  type EditUserInput,
+} from "./schemas";
 
 function invalidateUserList(qc: ReturnType<typeof useQueryClient>) {
-  qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === 'users' });
+  qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === "users" });
 }
 
 /**
@@ -28,19 +32,47 @@ export function syncAuthStoreOnSelfEdit(id: string, data: EditUserInput) {
 
 export function useUsers(page = 1, pageSize = 20) {
   return useQuery({
-    queryKey: ['users', { page, pageSize }],
+    queryKey: ["users", { page, pageSize }],
     queryFn: () =>
-      api.get('users', { searchParams: { page, pageSize } }).json().then((d) =>
-        userListResponseSchema.parse(d),
-      ),
+      api
+        .get("users", { searchParams: { page, pageSize } })
+        .json()
+        .then((d) => userListResponseSchema.parse(d)),
+  });
+}
+
+/** Administrative selectors must not silently lose users after the first page. */
+export function useAllUsers() {
+  return useQuery({
+    queryKey: ["users", "all"],
+    queryFn: async () => {
+      const first = userListResponseSchema.parse(
+        await api
+          .get("users", { searchParams: { page: 1, pageSize: 100 } })
+          .json(),
+      );
+      const pages = Math.ceil(first.total / first.pageSize);
+      if (pages <= 1) return first.data;
+      const rest = await Promise.all(
+        Array.from({ length: pages - 1 }, (_, index) =>
+          api
+            .get("users", { searchParams: { page: index + 2, pageSize: 100 } })
+            .json()
+            .then((data) => userListResponseSchema.parse(data)),
+        ),
+      );
+      return [...first.data, ...rest.flatMap((page) => page.data)];
+    },
   });
 }
 
 export function useInviteUser() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (input: InviteUserOutput): Promise<{ user: unknown; temporaryPassword: string }> =>
-      api.post('users', { json: input }).json(),
+    mutationFn: (
+      input: InviteUserOutput,
+    ): Promise<{ user: unknown; temporaryPassword: string }> =>
+      api.post("users", { json: input }).json(),
     onSuccess: () => invalidateUserList(qc),
   });
 }

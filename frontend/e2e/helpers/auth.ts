@@ -71,14 +71,6 @@ export async function submitLogin(page: Page, password: string): Promise<number>
   return (await loginCall).status();
 }
 
-/** Fecha o diálogo automático de novidades que bloqueia o conteúdo da página. */
-export async function dismissReleaseNotes(page: Page): Promise<void> {
-  const dialog = page.getByRole('dialog', { name: 'Novidades' });
-  await expect(dialog).toBeVisible();
-  await dialog.getByRole('button', { name: 'Fechar' }).click();
-  await expect(dialog).toBeHidden();
-}
-
 /** Janela do `@Throttle` de `/auth/login` (60s no controller), com folga. */
 const LOGIN_RATE_LIMIT_WINDOW_MS = 65_000;
 
@@ -141,5 +133,5 @@ export async function signIn(page: Page): Promise<void> {
   const status = await submitLogin(page, E2E_PASSWORD);
   expect(status, describeLoginStatus(status)).toBe(200);
   await expect(page).toHaveURL(/\/dashboard$/);
-  await dismissReleaseNotes(page);
+  await expect(page.getByRole('dialog', { name: 'Novidades' })).not.toBeVisible();
 }

@@ -2,7 +2,6 @@ import { test, expect } from '@playwright/test';
 import {
   E2E_PASSWORD,
   describeLoginStatus,
-  dismissReleaseNotes,
   submitLogin,
 } from './helpers/auth';
 
@@ -19,8 +18,8 @@ test.describe('login', () => {
     expect(status, describeLoginStatus(status)).toBe(200);
 
     await expect(page).toHaveURL(/\/dashboard$/);
-    await dismissReleaseNotes(page);
     await expect(page.getByRole('heading', { name: 'Visão geral' })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Novidades' })).not.toBeVisible();
   });
 
   test('shows error toast on invalid credentials', async ({ page }) => {

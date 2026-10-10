@@ -1,4 +1,4 @@
-import { render, screen, within, cleanup } from '@testing-library/react';
+import { render, screen, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { latestRelease } from '@/release-notes';
@@ -26,11 +26,10 @@ afterEach(() => {
 });
 
 describe('ReleaseNotesButton', () => {
-  it('mostra o badge "Novo" e abre o diálogo sozinho quando há versão não vista', () => {
+  it('mostra o badge "Novo" sem abrir o diálogo quando há versão não vista', () => {
     render(<ReleaseNotesButton />);
     expect(screen.getByText('Novo')).toBeInTheDocument();
-    const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByText('Novidades')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('não mostra o badge nem abre sozinho quando a versão mais nova já foi vista', () => {
@@ -48,11 +47,12 @@ describe('ReleaseNotesButton', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
-  it('fechar o diálogo marca a versão como vista: o badge some e não reabre sozinho', async () => {
+  it('fechar o diálogo marca a versão como vista: o badge some e não reabre', async () => {
     const user = userEvent.setup();
     render(<ReleaseNotesButton />);
     expect(screen.getByText('Novo')).toBeInTheDocument();
 
+    await user.click(screen.getByRole('button', { name: 'Novidades' }));
     await user.click(screen.getByRole('button', { name: 'Fechar' }));
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
@@ -61,17 +61,13 @@ describe('ReleaseNotesButton', () => {
   });
 
   it('setItem lança → fechar fecha e não reabre', async () => {
-    // Achado #1 da revisão final: se `getItem` funciona mas `setItem` lança
-    // (quota, modo privado do Safari...), `open` no botão antigo era
-    // `manualOpen || hasUnseen` recalculado AO VIVO — se `hasUnseen` não
-    // convergisse para `false`, o diálogo Radix reabria no mesmo render em
-    // que acabou de ser fechado (foco preso, ponteiro bloqueado). Fechar tem
-    // que fechar mesmo que a persistência não tenha gravado nada.
+    // Sem armazenamento disponível, fechar mantém o diálogo fechado.
     vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
       throw new Error('quota exceeded');
     });
     const user = userEvent.setup();
     render(<ReleaseNotesButton />);
+    await user.click(screen.getByRole('button', { name: 'Novidades' }));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Fechar' }));

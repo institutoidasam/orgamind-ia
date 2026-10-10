@@ -74,6 +74,10 @@ setup('admin semeado cumpre a troca de senha obrigatória', async ({ page }) => 
 
   await completePasswordChange(page, SEEDED_PASSWORD, E2E_PASSWORD);
 
-  // ...e o caminho completo: cumprida a troca, o operador chega onde ia.
+  // A troca revoga a sessão atual de propósito; o destino guardado pede novo
+  // login antes de liberar o dashboard.
+  await expect(page).toHaveURL(/\/login\?redirect=%2Fdashboard$/);
+  const normalized = await submitLoginWaitingOutRateLimit(page, E2E_PASSWORD);
+  expect(normalized, describeLoginStatus(normalized)).toBe(200);
   await expect(page).toHaveURL(/\/dashboard$/);
 });

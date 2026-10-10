@@ -20,6 +20,8 @@
   --brand-orange-soft: #fff0eb;
   --brand-blue: #24537a;
   --brand-blue-soft: #edf3f8;
+  --nav-active: #233151;
+  --nav-hover: #192342;
   --brand-primary: var(--brand-navy);
   --gradient-brand: var(--brand-primary);
   --gradient-brand-soft: var(--surface-sunken);
@@ -52,6 +54,7 @@
   --live-color: #176b52;
 
   /* Type */
+  --font-sans: Roboto, Arial, sans-serif;
   --font-mono-design: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   --tracking-display: -0.03em;
   --tracking-tight: -0.015em;
@@ -88,6 +91,8 @@
   --brand-primary: #dbe4ef;
   --brand-blue: #9ec3dc;
   --brand-blue-soft: #1d3449;
+  --nav-active: #233151;
+  --nav-hover: #192342;
   --brand-orange-text: #ffad91;
   --brand-orange-soft: #47251f;
   /* Legacy full-bleed brand surfaces retain white-text contrast in dark mode. */
@@ -126,7 +131,7 @@
 .ds-display { font-family: var(--font-sans); font-weight: 700; line-height: 1.1; letter-spacing: var(--tracking-display); color: var(--foreground); }
 .ds-display-lg { font-family: var(--font-sans); font-size: 48px; font-weight: 700; line-height: 0.95; letter-spacing: var(--tracking-display); }
 .ds-display-xl { font-family: var(--font-sans); font-size: 72px; font-weight: 700; line-height: 0.95; letter-spacing: var(--tracking-display); }
-.ds-eyebrow { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--foreground-muted); font-weight: 700; }
+.ds-eyebrow { font-size: 10px; text-transform: uppercase; letter-spacing: 0.11em; color: var(--foreground-muted); font-weight: 700; }
 .ds-mono, .ds-numeric { font-family: var(--font-mono-design); font-variant-numeric: tabular-nums; }
 .ds-numeric { font-weight: 600; }
 .ds-hairline { border-top: 1px solid var(--hairline); }

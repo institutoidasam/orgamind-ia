@@ -1,17 +1,23 @@
 import { Injectable } from '@nestjs/common';
-import type { User } from '@prisma/client';
+import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
 @Injectable()
 export class AuthRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  findByEmail(email: string): Promise<User | null> {
-    return this.prisma.user.findUnique({ where: { email } });
+  findByEmail(email: string): Promise<AuthUser | null> {
+    return this.prisma.user.findUnique({
+      where: { email },
+      include: { sector: true },
+    });
   }
 
-  findById(id: string): Promise<User | null> {
-    return this.prisma.user.findUnique({ where: { id } });
+  findById(id: string): Promise<AuthUser | null> {
+    return this.prisma.user.findUnique({
+      where: { id },
+      include: { sector: true },
+    });
   }
 
   updateLastLoginAt(id: string): Promise<void> {
@@ -30,9 +36,12 @@ export class AuthRepository {
         where: { id },
         data: {
           password: passwordHash,
+          sessionVersion: { increment: 1 },
           ...(clearMustChange ? { mustChangePassword: false } : {}),
         },
       })
       .then(() => undefined);
   }
 }
+
+export type AuthUser = Prisma.UserGetPayload<{ include: { sector: true } }>;

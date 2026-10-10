@@ -4,10 +4,12 @@ import { JwtService, type JwtSignOptions } from '@nestjs/jwt';
 import type Redis from 'ioredis';
 import { randomUUID, createHash } from 'crypto';
 import { AuthRepository } from './auth.repository';
+import type { AuthUser } from './auth.repository';
 import { InvalidCredentialsError } from './errors/auth.errors';
 import { AuditService } from '../../shared/audit/audit.service';
 import { REDIS_CLIENT } from '../../shared/redis/redis.module';
 import type { Env } from '../../shared/config/env.schema';
+import type { Role } from '@prisma/client';
 
 const FAMILY_KEY_PREFIX = 'auth:refresh-family:';
 // Reverse index: userId -> Set<fid>. Lets us revoke ALL of a user's refresh
@@ -17,20 +19,95 @@ const FAMILY_KEY_PREFIX = 'auth:refresh-family:';
 // gone), and a lost index (e.g. Redis flush) only means the families are gone
 // too — never a security hole.
 const USER_FAMILIES_KEY_PREFIX = 'auth:user-families:';
-const REFRESH_TOKEN_TTL_SECONDS = 7 * 24 * 3600;
+const DURATION_FACTORS_MS = {
+  ms: 1,
+  s: 1000,
+  m: 60 * 1000,
+  h: 60 * 60 * 1000,
+  d: 24 * 60 * 60 * 1000,
+  w: 7 * 24 * 60 * 60 * 1000,
+} as const;
+
+const CONSUME_FAMILY_LUA = `
+local serialized = redis.call('GET', KEYS[1])
+if not serialized then return 0 end
+local family = cjson.decode(serialized)
+if family.currentTokenHash ~= ARGV[1] then
+  redis.call('DEL', KEYS[1])
+  redis.call('SREM', KEYS[2], ARGV[3])
+  return -1
+end
+redis.call('SET', KEYS[1], ARGV[2], 'KEEPTTL')
+return 1
+`;
+
+const ADD_FAMILY_TO_INDEX_LUA = `
+local currentTtl = redis.call('PTTL', KEYS[1])
+redis.call('SADD', KEYS[1], ARGV[1])
+if currentTtl ~= -1 and currentTtl < tonumber(ARGV[2]) then
+  redis.call('PEXPIRE', KEYS[1], ARGV[2])
+end
+return 1
+`;
 
 type FamilyState = {
   userId: string;
   currentTokenHash: string; // SHA-256 of the latest refresh token
   rotatedAt: number; // ms epoch (last rotation)
-  issuedAt: number; // ms epoch (initial login that started this family)
+  issuedAt: number; // ms epoch (legacy fallback only)
+  expiresAt?: number; // ms epoch, immutable once the family is created
+  sessionVersion?: number;
 };
 
 type RefreshPayload = {
   sub: string;
   fid: string;
   type: string;
+  exp?: number;
 };
+
+type RefreshFamily = {
+  key: string;
+  payload: RefreshPayload;
+  state: FamilyState;
+};
+
+type TokenPair = {
+  accessToken: string;
+  refreshToken: string;
+  refreshTokenMaxAgeMs: number;
+};
+
+function isFamilyState(value: unknown): value is FamilyState {
+  if (!value || typeof value !== 'object') return false;
+  const state = value as Record<string, unknown>;
+  return (
+    typeof state.userId === 'string' &&
+    typeof state.currentTokenHash === 'string' &&
+    typeof state.rotatedAt === 'number' &&
+    (state.expiresAt === undefined || typeof state.expiresAt === 'number') &&
+    (state.sessionVersion === undefined ||
+      typeof state.sessionVersion === 'number')
+  );
+}
+
+function durationToMs(value: JwtSignOptions['expiresIn']): number {
+  if (typeof value === 'number') return value * 1000;
+  if (typeof value !== 'string') {
+    throw new Error('JWT_REFRESH_EXPIRES_IN must be a positive duration');
+  }
+  const match = /^(\d+)\s*(ms|s|m|h|d|w)$/i.exec(value);
+  if (!match) {
+    throw new Error('JWT_REFRESH_EXPIRES_IN must be a positive duration');
+  }
+  const unit = match[2].toLowerCase() as keyof typeof DURATION_FACTORS_MS;
+  const factor = DURATION_FACTORS_MS[unit];
+  const duration = Number(match[1]) * factor;
+  if (!Number.isSafeInteger(duration) || duration <= 0) {
+    throw new Error('JWT_REFRESH_EXPIRES_IN must be a positive duration');
+  }
+  return duration;
+}
 
 /**
  * Refresh-token rotation with reuse detection.
@@ -63,32 +140,37 @@ export class RefreshService {
   }
 
   private accessExpiry(): JwtSignOptions['expiresIn'] {
-    return (this.config.get('JWT_ACCESS_EXPIRES_IN', { infer: true }) ??
-      '15m') as JwtSignOptions['expiresIn'];
+    return this.config.get('JWT_ACCESS_EXPIRES_IN', { infer: true }) ?? '15m';
   }
 
   private refreshExpiry(): JwtSignOptions['expiresIn'] {
-    return (this.config.get('JWT_REFRESH_EXPIRES_IN', { infer: true }) ??
-      '7d') as JwtSignOptions['expiresIn'];
+    return this.config.get('JWT_REFRESH_EXPIRES_IN', { infer: true }) ?? '7d';
+  }
+
+  refreshCookieMaxAgeMs(): number {
+    return durationToMs(this.refreshExpiry());
   }
 
   /** Issue a brand-new family with a fresh refresh + access pair. Used at login. */
   async issueNew(
     userId: string,
     email: string,
-    role: 'ADMIN' | 'OPERATOR',
-  ): Promise<{ accessToken: string; refreshToken: string }> {
+    role: Role,
+    sessionVersion = 0,
+  ): Promise<TokenPair> {
     const familyId = randomUUID();
+    const refreshTokenMaxAgeMs = this.refreshCookieMaxAgeMs();
     const refreshToken = await this.jwt.signAsync(
-      { sub: userId, fid: familyId, type: 'refresh' },
+      { sub: userId, fid: familyId, jti: randomUUID(), type: 'refresh' },
       { expiresIn: this.refreshExpiry() },
     );
     const accessToken = await this.jwt.signAsync(
-      { sub: userId, email, role },
+      { sub: userId, email, role, sessionVersion },
       { expiresIn: this.accessExpiry() },
     );
 
     const issuedAt = Date.now();
+    const expiresAt = issuedAt + refreshTokenMaxAgeMs;
     await this.redis.set(
       `${FAMILY_KEY_PREFIX}${familyId}`,
       JSON.stringify({
@@ -96,110 +178,197 @@ export class RefreshService {
         currentTokenHash: this.hash(refreshToken),
         rotatedAt: issuedAt,
         issuedAt,
+        expiresAt,
+        sessionVersion,
       } satisfies FamilyState),
-      'EX',
-      REFRESH_TOKEN_TTL_SECONDS,
+      'PX',
+      refreshTokenMaxAgeMs,
     );
 
     // Record the family in the user's reverse index so revokeAllForUser can
     // find and burn it later. Refresh the index TTL on each login.
     const indexKey = this.userFamiliesKey(userId);
-    await this.redis.sadd(indexKey, familyId);
-    await this.redis.expire(indexKey, REFRESH_TOKEN_TTL_SECONDS);
+    await this.addFamilyToIndex(indexKey, familyId, refreshTokenMaxAgeMs);
 
-    return { accessToken, refreshToken };
+    return { accessToken, refreshToken, refreshTokenMaxAgeMs };
   }
 
   /** Rotate a refresh token. Detects reuse and invalidates the family on detection. */
-  async rotate(
+  async rotate(refreshToken: string): Promise<TokenPair> {
+    const payload = await this.verifyRefreshToken(refreshToken);
+    const family = await this.loadFamily(payload);
+    const expiresAt = await this.familyExpiresAt(family);
+
+    const user = await this.findActiveUser(family.state.userId);
+    if (
+      payload.sub !== family.state.userId ||
+      (family.state.sessionVersion ?? 0) !== (user.sessionVersion ?? 0)
+    ) {
+      await this.invalidateFamily(family);
+      throw new InvalidCredentialsError();
+    }
+    const tokens = await this.issueRotatedTokens(user, payload.fid, expiresAt);
+    const consumed = await this.consumeFamily(
+      family,
+      refreshToken,
+      tokens.refreshToken,
+      expiresAt,
+    );
+    if (consumed === -1) return this.rejectReuse(family);
+    if (consumed === 0) {
+      await this.redis.srem(this.userFamiliesKey(user.id), payload.fid);
+      throw new InvalidCredentialsError();
+    }
+    await this.audit.log('auth.refresh', 'User', user.id);
+    return tokens;
+  }
+
+  private async verifyRefreshToken(
     refreshToken: string,
-  ): Promise<{ accessToken: string; refreshToken: string }> {
+  ): Promise<RefreshPayload> {
     let payload: RefreshPayload;
     try {
       payload = await this.jwt.verifyAsync<RefreshPayload>(refreshToken);
     } catch {
       throw new InvalidCredentialsError();
     }
-    if (payload.type !== 'refresh') throw new InvalidCredentialsError();
-
-    const familyKey = `${FAMILY_KEY_PREFIX}${payload.fid}`;
-    const stateJson = await this.redis.get(familyKey);
-    if (!stateJson) {
-      // Family expired or invalidated
+    if (
+      payload.type !== 'refresh' ||
+      typeof payload.sub !== 'string' ||
+      typeof payload.fid !== 'string'
+    ) {
       throw new InvalidCredentialsError();
     }
+    return payload;
+  }
 
-    const state: FamilyState = JSON.parse(stateJson);
-    const presentedHash = this.hash(refreshToken);
+  private async loadFamily(payload: RefreshPayload): Promise<RefreshFamily> {
+    const key = `${FAMILY_KEY_PREFIX}${payload.fid}`;
+    const serialized = await this.redis.get(key);
+    if (!serialized) throw new InvalidCredentialsError();
 
-    if (state.currentTokenHash !== presentedHash) {
-      // REUSE DETECTED: old token presented after rotation. Burn the family.
-      await this.redis.del(familyKey);
-      await this.redis.srem(this.userFamiliesKey(state.userId), payload.fid);
-      this.logger.warn(
-        { userId: state.userId, fid: payload.fid },
-        'Refresh token reuse detected — family invalidated',
-      );
-      await this.audit.log(
-        'auth.refresh_reuse_detected',
-        'User',
-        state.userId,
-        { fid: payload.fid },
-      );
+    let parsedState: unknown;
+    try {
+      parsedState = JSON.parse(serialized);
+    } catch {
       throw new InvalidCredentialsError();
     }
+    if (!isFamilyState(parsedState)) throw new InvalidCredentialsError();
+    return { key, payload, state: parsedState };
+  }
 
-    // Look up user (role may have changed)
-    const user = await this.authRepo.findById(state.userId);
-    if (!user) throw new InvalidCredentialsError();
-
-    // Issue new tokens (preserving family id)
-    const newRefresh = await this.jwt.signAsync(
-      { sub: user.id, fid: payload.fid, type: 'refresh' },
-      { expiresIn: this.refreshExpiry() },
+  private async rejectReuse(family: RefreshFamily): Promise<never> {
+    // The Lua compare-and-consume has already burned the family. Repeat the
+    // cleanup defensively so a Redis-compatible client that reports reuse
+    // without deleting cannot leave a replayable family behind.
+    await this.invalidateFamily(family);
+    this.logger.warn(
+      { userId: family.state.userId, fid: family.payload.fid },
+      'Refresh token reuse detected — family invalidated',
     );
-    const newAccess = await this.jwt.signAsync(
-      { sub: user.id, email: user.email, role: user.role },
+    await this.audit.log(
+      'auth.refresh_reuse_detected',
+      'User',
+      family.state.userId,
+      { fid: family.payload.fid },
+    );
+    throw new InvalidCredentialsError();
+  }
+
+  private async findActiveUser(userId: string): Promise<AuthUser> {
+    const user = await this.authRepo.findById(userId);
+    if (!user || user.isActive === false) throw new InvalidCredentialsError();
+    return user;
+  }
+
+  private async issueRotatedTokens(
+    user: AuthUser,
+    fid: string,
+    expiresAt: number,
+  ): Promise<TokenPair> {
+    const refreshTokenMaxAgeMs = this.remainingLifetimeMs(expiresAt);
+    const refreshToken = await this.jwt.signAsync(
+      { sub: user.id, fid, jti: randomUUID(), type: 'refresh' },
+      { expiresIn: Math.max(1, Math.floor(refreshTokenMaxAgeMs / 1000)) },
+    );
+    const accessToken = await this.jwt.signAsync(
+      {
+        sub: user.id,
+        email: user.email,
+        role: user.role,
+        sessionVersion: user.sessionVersion ?? 0,
+      },
       { expiresIn: this.accessExpiry() },
     );
+    return { accessToken, refreshToken, refreshTokenMaxAgeMs };
+  }
 
-    // Preserve the family's original TTL across rotations. Resetting EX to 7d
-    // on every rotation effectively made any active session immortal —
-    // a user refreshing once a week never had their family expire. Anchor TTL
-    // to `issuedAt` (kept across rotations) so the absolute 7-day cap holds.
-    // Older entries written before `issuedAt` existed fall back to `rotatedAt`.
-    const issuedAt = state.issuedAt ?? state.rotatedAt;
-    const elapsedSec = Math.floor((Date.now() - issuedAt) / 1000);
-    const remainingSec = REFRESH_TOKEN_TTL_SECONDS - elapsedSec;
-    if (remainingSec <= 0) {
-      await this.redis.del(familyKey);
-      await this.redis.srem(this.userFamiliesKey(state.userId), payload.fid);
-      throw new InvalidCredentialsError();
-    }
-    // Conditional write (XX = only if the key still exists). If a concurrent
-    // revokeAllForUser DELeted the family between our GET above and this SET,
-    // XX makes this a no-op so we don't resurrect a revoked session — and we
-    // deny the rotation. Closes the revoke/rotate race without a lock.
-    const written = await this.redis.set(
-      familyKey,
-      JSON.stringify({
-        userId: state.userId,
-        currentTokenHash: this.hash(newRefresh),
-        rotatedAt: Date.now(),
-        issuedAt,
-      } satisfies FamilyState),
-      'EX',
-      remainingSec,
-      'XX',
+  private remainingLifetimeMs(expiresAt: number): number {
+    const remaining = expiresAt - Date.now();
+    if (remaining <= 0) throw new InvalidCredentialsError();
+    return remaining;
+  }
+
+  private async familyExpiresAt(family: RefreshFamily): Promise<number> {
+    if (family.state.expiresAt !== undefined) return family.state.expiresAt;
+
+    const observedAt = Date.now();
+    const ttlMs = await this.redis.pttl(family.key);
+    if (ttlMs <= 0) throw new InvalidCredentialsError();
+    const redisExpiresAt = observedAt + ttlMs;
+    const jwtExpiresAt =
+      typeof family.payload.exp === 'number'
+        ? family.payload.exp * 1000
+        : redisExpiresAt;
+    return Math.min(redisExpiresAt, jwtExpiresAt);
+  }
+
+  private async consumeFamily(
+    family: RefreshFamily,
+    presentedToken: string,
+    nextToken: string,
+    expiresAt: number,
+  ): Promise<number> {
+    const issuedAt = family.state.issuedAt ?? family.state.rotatedAt;
+    const nextState = JSON.stringify({
+      userId: family.state.userId,
+      currentTokenHash: this.hash(nextToken),
+      rotatedAt: Date.now(),
+      issuedAt,
+      expiresAt,
+      sessionVersion: family.state.sessionVersion ?? 0,
+    } satisfies FamilyState);
+    return this.redis.eval(
+      CONSUME_FAMILY_LUA,
+      2,
+      family.key,
+      this.userFamiliesKey(family.state.userId),
+      this.hash(presentedToken),
+      nextState,
+      family.payload.fid,
+    ) as Promise<number>;
+  }
+
+  private async addFamilyToIndex(
+    indexKey: string,
+    familyId: string,
+    ttlMs: number,
+  ): Promise<void> {
+    await this.redis.eval(
+      ADD_FAMILY_TO_INDEX_LUA,
+      1,
+      indexKey,
+      familyId,
+      String(ttlMs),
     );
-    if (written === null) {
-      await this.redis.srem(this.userFamiliesKey(state.userId), payload.fid);
-      throw new InvalidCredentialsError();
-    }
+  }
 
-    await this.audit.log('auth.refresh', 'User', user.id);
-
-    return { accessToken: newAccess, refreshToken: newRefresh };
+  private async invalidateFamily(family: RefreshFamily): Promise<void> {
+    await this.redis.del(family.key);
+    await this.redis.srem(
+      this.userFamiliesKey(family.state.userId),
+      family.payload.fid,
+    );
   }
 
   /** Revoke a family. Called on logout. Silent no-op for invalid/expired tokens. */

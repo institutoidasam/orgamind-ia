@@ -10,6 +10,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { RELEASE_NOTES } from '@/release-notes';
 import { formatDatePtBr } from '@/lib/format-date-ptbr';
+import { PRODUCT_NAME } from '@/lib/brand';
 
 type Props = {
   open: boolean;
@@ -33,7 +34,7 @@ export function ReleaseNotesDialog({ open, onOpenChange }: Props) {
       <DialogContent className="max-w-lg" showCloseButton={false}>
         <DialogHeader>
           <DialogTitle>Novidades</DialogTitle>
-          <DialogDescription>O que mudou no ORGAMIND recentemente.</DialogDescription>
+          <DialogDescription>O que mudou no {PRODUCT_NAME} recentemente.</DialogDescription>
         </DialogHeader>
 
         <div className="max-h-[420px] space-y-5 overflow-y-auto pr-1">

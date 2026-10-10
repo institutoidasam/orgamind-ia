@@ -22,8 +22,9 @@ afterEach(cleanup);
 describe('Footer', () => {
   it('mostra a versão mais nova e a data relativa formatada', () => {
     render(<Footer />);
+    expect(screen.getByText('GBR Componentes · Ambiente interno')).toBeInTheDocument();
     expect(
-      screen.getByText('Versão 2026.09.01 · atualizado RELATIVE(2026-09-01)'),
+      screen.getByText('OrgaMind · Versão 2026.09.01 · atualizado RELATIVE(2026-09-01)'),
     ).toBeInTheDocument();
   });
 });

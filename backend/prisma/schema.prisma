@@ -47,6 +47,14 @@ model User {
   password              String
   name                  String?
   role                  Role           @default(OPERATOR)
+  // Membership is optional so the existing administrative bootstrap remains
+  // valid while sectors are introduced incrementally.
+  sectorId              String?
+  sector                Sector?        @relation("SectorMembers", fields: [sectorId], references: [id], onDelete: SetNull)
+  isActive              Boolean        @default(true)
+  // Incremented whenever an identity-affecting mutation invalidates a bearer.
+  // Tokens issued before this column existed are treated as version zero.
+  sessionVersion        Int            @default(0)
   mustChangePassword    Boolean        @default(true)
   lastLoginAt           DateTime?
   createdAt             DateTime       @default(now())
@@ -58,11 +66,161 @@ model User {
   assignedConversations Conversation[] @relation("AssignedConversations")
   segments              Segment[]      @relation("SegmentAuthor")
   optInLinks            OptInLink[]    @relation("OptInLinkAuthor")
+  managedSectors        Sector[]       @relation("SectorManager")
+  authoredInternalCommunications InternalCommunication[] @relation("InternalCommunicationAuthor")
+  assignedInternalCommunications InternalCommunication[] @relation("InternalCommunicationAssignee")
+  internalEvents        InternalEvent[] @relation("InternalEventActor")
+  internalReads         InternalRead[]
 }
 
 enum Role {
   ADMIN
   OPERATOR
+  SUPERVISOR
+  VIEWER
+}
+
+enum InternalCommunicationKind {
+  DEMAND
+  ANNOUNCEMENT
+}
+
+enum InternalPriority {
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum InternalDemandStatus {
+  OPEN
+  IN_PROGRESS
+  WAITING
+  COMPLETED
+}
+
+enum InternalEventKind {
+  CREATED
+  COMMENTED
+  STATUS_CHANGED
+  ASSIGNED
+  UNASSIGNED
+  PRIORITY_CHANGED
+  DUE_DATE_CHANGED
+}
+
+enum SectorNumberProvider {
+  META
+  EVOLUTION
+  OTHER
+}
+
+model Sector {
+  id                  String                  @id @default(cuid())
+  name                String                  @unique
+  code                String                  @unique
+  description         String?
+  isActive            Boolean                 @default(true)
+  managerId           String?
+  manager             User?                   @relation("SectorManager", fields: [managerId], references: [id], onDelete: SetNull)
+  createdAt           DateTime                @default(now())
+  updatedAt           DateTime                @updatedAt
+  members             User[]                  @relation("SectorMembers")
+  originCommunications InternalCommunication[] @relation("InternalCommunicationOrigin")
+  destinationCommunications InternalCommunication[] @relation("InternalCommunicationDestination")
+  recipientLinks      InternalRecipient[]
+  numbers             SectorNumber[]
+
+  @@index([isActive, name])
+  @@index([managerId])
+}
+
+/// Parent entity for both internal demands and announcements. Author and
+/// assignee FKs deliberately use SetNull while snapshots preserve history.
+model InternalCommunication {
+  id                  String                    @id @default(cuid())
+  sequence            Int                       @unique @default(autoincrement())
+  reference           String                    @unique
+  clientRequestId     String                    @unique
+  kind                InternalCommunicationKind
+  subject             String
+  message             String
+  authorId            String?
+  author              User?                     @relation("InternalCommunicationAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  authorSnapshot      Json?
+  originSectorId      String
+  originSector        Sector                    @relation("InternalCommunicationOrigin", fields: [originSectorId], references: [id], onDelete: Restrict)
+  destinationSectorId String
+  destinationSector   Sector                    @relation("InternalCommunicationDestination", fields: [destinationSectorId], references: [id], onDelete: Restrict)
+  assigneeId          String?
+  assignee            User?                     @relation("InternalCommunicationAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  priority            InternalPriority?
+  dueDate             DateTime?                 @db.Date
+  status              InternalDemandStatus?
+  version             Int                       @default(0)
+  notifyTeam          Boolean                   @default(true)
+  notifyAssignee      Boolean                   @default(true)
+  completedAt         DateTime?
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+  recipients          InternalRecipient[]
+  events              InternalEvent[]
+  reads               InternalRead[]
+
+  @@index([originSectorId, status, updatedAt])
+  @@index([destinationSectorId, status, dueDate])
+  @@index([assigneeId, status])
+}
+
+model InternalRecipient {
+  communicationId String
+  sectorId        String
+  createdAt       DateTime              @default(now())
+  communication  InternalCommunication @relation(fields: [communicationId], references: [id], onDelete: Cascade)
+  sector         Sector                @relation(fields: [sectorId], references: [id], onDelete: Restrict)
+
+  @@id([communicationId, sectorId])
+  @@index([sectorId])
+}
+
+model InternalEvent {
+  id              String                @id @default(cuid())
+  communicationId String
+  kind            InternalEventKind
+  message         String?
+  actorId         String?
+  actor           User?                 @relation("InternalEventActor", fields: [actorId], references: [id], onDelete: SetNull)
+  actorSnapshot   Json?
+  createdAt       DateTime              @default(now())
+  communication   InternalCommunication @relation(fields: [communicationId], references: [id], onDelete: Cascade)
+
+  @@index([communicationId, createdAt])
+}
+
+model InternalRead {
+  communicationId String
+  userId          String
+  readAt          DateTime              @default(now())
+  communication   InternalCommunication @relation(fields: [communicationId], references: [id], onDelete: Cascade)
+  user            User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([communicationId, userId])
+  @@index([userId, readAt])
+}
+
+model SectorNumber {
+  id            String               @id @default(cuid())
+  name          String
+  phone         String               @unique
+  provider      SectorNumberProvider
+  sectorId      String?
+  sector        Sector?              @relation(fields: [sectorId], references: [id], onDelete: SetNull)
+  routeToSector Boolean              @default(false)
+  channelId     String?              @unique
+  channel       Channel?             @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  @@index([sectorId])
 }
 
 model Contact {
@@ -1147,6 +1305,7 @@ model Channel {
 
   botId String?
   bot   Bot?    @relation(fields: [botId], references: [id], onDelete: SetNull)
+  sectorNumber SectorNumber?
 
   @@index([ownerUserId, isActive])
   @@index([botId])

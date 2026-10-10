@@ -1,17 +1,16 @@
+/* global document, window */
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
 import { useRouter } from '@tanstack/react-router';
 import {
-  FileSpreadsheet,
   LogOut,
   Search,
-  Send,
   SunMoon,
-  UserPlus,
   type LucideIcon,
 } from 'lucide-react';
 import { useTheme } from '@/lib/theme';
 import { logoutRemote } from '@/lib/api-client';
-import { NAV } from '@/lib/nav';
+import { navItemsForRole, type NavRole } from '@/lib/nav';
+import { useAuthStore } from '@/stores/auth.store';
 
 type CommandGroup = 'navegar' | 'criar' | 'ações' | 'sistema';
 
@@ -42,9 +41,9 @@ type PaletteContentProps = {
 
 const GROUPS: CommandGroup[] = ['navegar', 'criar', 'ações', 'sistema'];
 
-function useCommands(router: ReturnType<typeof useRouter>, toggle: () => void): Command[] {
+function useCommands(router: ReturnType<typeof useRouter>, toggle: () => void, role?: NavRole): Command[] {
   return useMemo(() => [
-    ...NAV.map((item) => ({
+    ...navItemsForRole(role).map((item) => ({
       id: `go-${item.to.replace(/\//g, '')}`,
       label: `Ir para ${item.label}`,
       group: 'navegar' as const,
@@ -53,7 +52,7 @@ function useCommands(router: ReturnType<typeof useRouter>, toggle: () => void): 
       run: () => router.navigate({ to: item.to as never }),
     })),
     ...createCommands(router, toggle),
-  ], [router, toggle]);
+  ], [router, toggle, role]);
 }
 
 function createCommands(
@@ -61,9 +60,6 @@ function createCommands(
   toggle: () => void,
 ): Command[] {
   return [
-    { id: 'new-campaign', label: 'Nova campanha', group: 'criar', keywords: 'nova campanha new campaign', icon: Send, run: () => router.navigate({ to: '/campaigns/new' }) },
-    { id: 'new-contact', label: 'Novo contato', group: 'criar', keywords: 'novo contato new contact', icon: UserPlus, run: () => router.navigate({ to: '/contacts' }) },
-    { id: 'import-sheet', label: 'Importar planilha', group: 'criar', keywords: 'importar planilha excel xlsx import', icon: FileSpreadsheet, run: () => router.navigate({ to: '/imports/new' as never }) },
     { id: 'theme-toggle', label: 'Mudar tema', group: 'ações', keywords: 'tema dark light theme', icon: SunMoon, run: toggle },
     { id: 'logout', label: 'Sair', group: 'sistema', keywords: 'sair logout', icon: LogOut, run: () => signOut(router) },
   ];
@@ -116,11 +112,12 @@ export function CommandPalette({ open, onOpenChange }: Props) {
 
 function PaletteDialog({ onOpenChange }: Pick<Props, 'onOpenChange'>) {
   const router = useRouter();
+  const role = useAuthStore((state) => state.user?.role) as NavRole | undefined;
   const { toggle } = useTheme();
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const commands = useCommands(router, toggle);
+  const commands = useCommands(router, toggle, role);
   const filtered = useMemo(() => filterCommands(commands, query), [commands, query]);
 
   useFocusTrap(inputRef);

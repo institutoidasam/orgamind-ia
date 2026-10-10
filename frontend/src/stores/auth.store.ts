@@ -1,13 +1,27 @@
-import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { create } from "zustand";
+import { persist } from "zustand/middleware";
 
-type User = { id: string; email: string; name: string | null; role: 'ADMIN' | 'OPERATOR' };
+export type AuthUser = {
+  id: string;
+  email: string;
+  name: string | null;
+  role: "ADMIN" | "SUPERVISOR" | "OPERATOR" | "VIEWER";
+  // Optional only while a persisted session from before the internal modules
+  // is being refreshed; auth schemas normalize fresh API data to null/true.
+  sectorId?: string | null;
+  sector?: { id: string; name: string; code: string; isActive: boolean } | null;
+  isActive?: boolean;
+};
 
 type AuthState = {
   accessToken: string | null;
-  user: User | null;
+  user: AuthUser | null;
   mustChangePassword: boolean;
-  setSession: (s: { accessToken: string; user: User; mustChangePassword: boolean }) => void;
+  setSession: (s: {
+    accessToken: string;
+    user: AuthUser;
+    mustChangePassword: boolean;
+  }) => void;
   clearMustChangePassword: () => void;
   logout: () => void;
 };
@@ -25,12 +39,16 @@ export const useAuthStore = create<AuthState>()(
           mustChangePassword: s.mustChangePassword,
         }),
       clearMustChangePassword: () => set({ mustChangePassword: false }),
-      logout: () => set({ accessToken: null, user: null, mustChangePassword: false }),
+      logout: () =>
+        set({ accessToken: null, user: null, mustChangePassword: false }),
     }),
     {
-      name: 'picoa-auth',
+      name: "picoa-auth",
       // CRITICAL: do not persist accessToken (XSS risk). Only user identity + flag.
-      partialize: (state) => ({ user: state.user, mustChangePassword: state.mustChangePassword }),
+      partialize: (state) => ({
+        user: state.user,
+        mustChangePassword: state.mustChangePassword,
+      }),
     },
   ),
 );

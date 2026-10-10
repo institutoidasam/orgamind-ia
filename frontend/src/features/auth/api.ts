@@ -1,5 +1,5 @@
 import { useMutation } from '@tanstack/react-query';
-import { api } from '@/lib/api-client';
+import { api, logoutRemote } from '@/lib/api-client';
 import { useAuthStore } from '@/stores/auth.store';
 import { loginResponseSchema, type LoginInput, type LoginResponse } from './schemas';
 
@@ -23,11 +23,10 @@ export function useLogin() {
 }
 
 export function useChangePassword() {
-  const clearMustChangePassword = useAuthStore((s) => s.clearMustChangePassword);
   return useMutation({
     mutationFn: async (input: { currentPassword: string; newPassword: string }) => {
       await api.post('auth/change-password', { json: input });
     },
-    onSuccess: () => clearMustChangePassword(),
+    onSuccess: () => logoutRemote(),
   });
 }

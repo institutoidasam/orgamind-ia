@@ -2131,7 +2131,9 @@ describe('A.3 — passo final: criar + 1º lote', () => {
     await renderWizardAtConfirmStep({ previewCount: 13400 });
 
     expect(
-      screen.getByRole('button', { name: /Criar e enviar 1º lote — 5\.000$/ }),
+      await screen.findByRole('button', {
+        name: /Criar e enviar 1º lote — 5\.000$/,
+      }),
     ).toBeInTheDocument();
   });
 

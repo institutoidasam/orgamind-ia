@@ -1,5 +1,10 @@
 import { test, expect } from '@playwright/test';
-import { E2E_PASSWORD, describeLoginStatus, submitLogin } from './helpers/auth';
+import {
+  E2E_PASSWORD,
+  describeLoginStatus,
+  dismissReleaseNotes,
+  submitLogin,
+} from './helpers/auth';
 
 test.describe('login', () => {
   test('redirects to dashboard with valid credentials', async ({ page }) => {
@@ -14,6 +19,7 @@ test.describe('login', () => {
     expect(status, describeLoginStatus(status)).toBe(200);
 
     await expect(page).toHaveURL(/\/dashboard$/);
+    await dismissReleaseNotes(page);
     await expect(page.getByRole('heading', { name: 'Visão geral' })).toBeVisible();
   });
 

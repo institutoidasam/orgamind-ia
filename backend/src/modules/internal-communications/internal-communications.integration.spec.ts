@@ -216,44 +216,87 @@ describe('internal communications (Postgres + Nest HTTP)', () => {
       datasources: { db: { url: postgres.getConnectionUri() } },
     });
     await locker.$connect();
-    let inTransaction = false;
+    let resolveLockAcquired!: () => void;
+    let rejectLockAcquired!: (reason: unknown) => void;
+    const lockAcquired = new Promise<void>((resolve, reject) => {
+      resolveLockAcquired = resolve;
+      rejectLockAcquired = reject;
+    });
+    let releaseLock!: () => void;
+    const lockReleased = new Promise<void>((resolve) => {
+      releaseLock = resolve;
+    });
+    let lockerPid = 0;
+    const lockingTransaction = locker
+      .$transaction(async (tx) => {
+        const [{ pid }] = await tx.$queryRawUnsafe<Array<{ pid: number }>>(
+          'SELECT pg_backend_pid() AS pid',
+        );
+        lockerPid = pid;
+        await tx.$queryRawUnsafe(
+          'SELECT "id" FROM "User" WHERE "id" = $1 FOR UPDATE',
+          ids.operatorB,
+        );
+        resolveLockAcquired();
+        await lockReleased;
+        await tx.$queryRawUnsafe(
+          'UPDATE "User" SET "sectorId" = $1 WHERE "id" = $2',
+          ids.sectorC,
+          ids.operatorB,
+        );
+      })
+      .catch((error: unknown) => {
+        rejectLockAcquired(error);
+        throw error;
+      });
+    let assigning: Promise<unknown> | undefined;
+    let hasPrimaryError = false;
+    let primaryError: unknown;
+    let hasCleanupFailure = false;
+    let cleanupFailure: unknown;
     try {
-      await locker.$executeRawUnsafe('BEGIN');
-      inTransaction = true;
-      await locker.$queryRawUnsafe(
-        'SELECT "id" FROM "User" WHERE "id" = $1 FOR UPDATE',
-        ids.operatorB,
-      );
-      let completed = false;
-      const assigning = request(app.getHttpServer())
+      await lockAcquired;
+      assigning = request(app.getHttpServer())
         .patch(`/internal/communications/${created.body.id}/demand`)
         .set(auth(tokens.admin))
         .send({
           expectedVersion: created.body.version,
           assigneeId: ids.operatorB,
         })
-        .then((response) => {
-          completed = true;
-          return response;
-        });
-      await new Promise((resolve) => setTimeout(resolve, 40));
-      expect(completed).toBe(false);
-      await locker.$queryRawUnsafe(
-        'UPDATE "User" SET "sectorId" = $1 WHERE "id" = $2',
-        ids.sectorC,
-        ids.operatorB,
-      );
-      await locker.$executeRawUnsafe('COMMIT');
-      inTransaction = false;
+        .then((response) => response);
+      await waitForBlockedRequest(lockerPid);
+      releaseLock();
+      await lockingTransaction;
       await expect(assigning).resolves.toMatchObject({ status: 400 });
+    } catch (error) {
+      hasPrimaryError = true;
+      primaryError = error;
     } finally {
-      if (inTransaction) await locker.$executeRawUnsafe('ROLLBACK');
-      await locker.$disconnect();
-      await prisma.user.update({
-        where: { id: ids.operatorB },
-        data: { sectorId: ids.sectorB, isActive: true },
-      });
+      releaseLock();
+      const lockingResult = await Promise.allSettled([lockingTransaction]);
+      const assigningResult = assigning
+        ? await Promise.allSettled([assigning])
+        : [];
+      const disconnectResult = await Promise.allSettled([locker.$disconnect()]);
+      const restoreResult = await Promise.allSettled([
+        prisma.user.update({
+          where: { id: ids.operatorB },
+          data: { sectorId: ids.sectorB, isActive: true },
+        }),
+      ]);
+      const failedCleanup = [
+        ...lockingResult,
+        ...assigningResult,
+        ...disconnectResult,
+        ...restoreResult,
+      ].find((result) => result.status === 'rejected');
+      if (failedCleanup?.status === 'rejected') {
+        hasCleanupFailure = true;
+        cleanupFailure = failedCleanup.reason;
+      }
     }
+    if (hasPrimaryError) throw primaryError;
+    if (hasCleanupFailure) throw cleanupFailure;
     await prisma.user.update({
       where: { id: ids.operatorB },
       data: { sectorId: ids.sectorB, isActive: false },
@@ -333,7 +376,7 @@ describe('internal communications (Postgres + Nest HTTP)', () => {
   });
 
   it('counts completed demands from Monday midnight in Manaus, not UTC', async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-10-13T12:00:00.000Z'));
     try {
       const operatorB = await prisma.user.findUniqueOrThrow({
@@ -427,6 +470,27 @@ describe('internal communications (Postgres + Nest HTTP)', () => {
       .set(auth(token))
       .expect(200);
     return response.body as { completedThisWeek: number };
+  }
+
+  async function waitForBlockedRequest(lockerPid: number) {
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      const [activity] = await prisma.$queryRawUnsafe<
+        Array<{ waiting: boolean }>
+      >(
+        `SELECT EXISTS (
+          SELECT 1
+          FROM pg_stat_activity
+          WHERE wait_event_type = 'Lock'
+            AND $1 = ANY(pg_blocking_pids(pid))
+            AND query LIKE '%SELECT "id" FROM "User"%'
+        ) AS "waiting"`,
+        lockerPid,
+      );
+      if (activity?.waiting) return;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    throw new Error('A atribuição concorrente não aguardou o lock da linha.');
   }
 
   function seedCompletedDemand(clientRequestId: string, completedAt: string) {

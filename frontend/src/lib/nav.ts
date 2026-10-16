@@ -5,6 +5,7 @@ import {
   FileText,
   Filter,
   Send,
+  MessageCircle,
   FileSpreadsheet,
   Wifi,
   UserCog,
@@ -75,6 +76,7 @@ export const NAV: NavItem[] = [
   { to: '/dashboard', label: 'Visão geral', icon: Home, section: 'ops', roles: ALL_INTERNAL_ROLES },
   { to: '/caixa-de-entrada', label: 'Caixa de entrada', icon: MessageSquare, section: 'ops', roles: ALL_INTERNAL_ROLES },
   { to: '/nova-comunicacao', label: 'Nova comunicação', icon: Send, section: 'ops', roles: WRITE_INTERNAL_ROLES },
+  { to: '/whatsapp-equipe', label: 'WhatsApp da equipe', icon: MessageCircle, section: 'ops', roles: WRITE_INTERNAL_ROLES },
   { to: '/demandas', label: 'Demandas', icon: FileText, section: 'sys', roles: ALL_INTERNAL_ROLES },
   { to: '/comunicados', label: 'Comunicados', icon: MessageSquare, section: 'sys', roles: ALL_INTERNAL_ROLES },
   { to: '/setores', label: 'Setores', icon: Users, section: 'admin', roles: ['ADMIN'] },
@@ -159,15 +161,28 @@ export function isNavActive(path: string, to: string): boolean {
   return path === to || path.startsWith(`${to}/`);
 }
 
+/** Entrada do NAV dona de `path` — prefixo mais longo primeiro (`/campaigns` vence `/`). */
+function navItemFor(path: string): NavItem | undefined {
+  return [...NAV]
+    .sort((a, b) => b.to.length - a.to.length)
+    .find((n) => isNavActive(path, n.to));
+}
+
+/**
+ * O papel pode abrir `path`? Decide pelo `roles` da entrada do NAV dona da
+ * rota. Rota fora do manifesto ou papel ausente: não — quem chama esconde o
+ * atalho em vez de levar a uma tela cujo backend responde 403.
+ */
+export function canAccessPath(path: string, role?: NavRole): boolean {
+  if (!role) return false;
+  return Boolean(navItemFor(path)?.roles?.includes(role));
+}
+
 /**
  * Breadcrumb label for a path. Falls back to "—" when nothing matches.
  * A campaign detail page (`/campaigns/:id`) reads as "Campanha" (singular).
  */
 export function navLabelFor(path: string): string {
   if (path.startsWith('/campaigns/')) return 'Campanha';
-  // Longest `to` first so `/campaigns` beats `/` on nested paths.
-  const match = [...NAV]
-    .sort((a, b) => b.to.length - a.to.length)
-    .find((n) => isNavActive(path, n.to));
-  return match?.label ?? '—';
+  return navItemFor(path)?.label ?? '—';
 }

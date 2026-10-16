@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, useWatch, type UseFormReturn } from "react-hook-form";
 import { toast } from "sonner";
@@ -9,9 +9,12 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSectors } from "@/features/internal-admin/api";
 import { extractApiError } from "@/lib/api-error";
+import { formatPhoneBR } from "@/lib/format-phone";
 import { useUpdateUser } from "../api";
 import { editableUserPayload } from "../edit-user-payload";
-import { editUserSchema, type EditUserInput, type UserSummary } from "../schemas";
+import { reportUserPhoneError } from "../phone-errors";
+import { editUserSchemaFor, type EditUserInput, type UserSummary } from "../schemas";
+import { PhoneField } from "./phone-field";
 import { RoleSelect, SectorSelect } from "./role-sector-selects";
 
 type Props = { user: UserSummary; open: boolean; onOpenChange: (open: boolean) => void; isSelf: boolean };
@@ -25,14 +28,17 @@ export function EditUserDialog({ user, open, onOpenChange, isSelf }: Props) {
 function useEditUserForm(user: UserSummary, isSelf: boolean, onOpenChange: Props["onOpenChange"]) {
   const update = useUpdateUser();
   const sectors = useSectors(true);
-  const form = useForm<EditUserInput>({ resolver: zodResolver(editUserSchema) });
-  useEffect(() => form.reset({ name: user.name ?? "", role: user.role, sectorId: user.sectorId, isActive: user.isActive }), [user, form]);
+  const schema = useMemo(() => editUserSchemaFor(Boolean(user.phoneE164)), [user.phoneE164]);
+  const form = useForm<EditUserInput>({ resolver: zodResolver(schema) as never });
+  const initialPhone = user.phoneE164 ? formatPhoneBR(user.phoneE164) : "";
+  useEffect(() => form.reset({ name: user.name ?? "", phone: initialPhone, role: user.role, sectorId: user.sectorId, isActive: user.isActive }), [user, initialPhone, form]);
   const submit = async (data: EditUserInput) => {
     try {
-      await update.mutateAsync({ id: user.id, data: editableUserPayload(data, isSelf) });
+      await update.mutateAsync({ id: user.id, data: editableUserPayload(data, isSelf, (data.phone ?? "") !== initialPhone) });
       toast.success("Usuário atualizado.");
       onOpenChange(false);
     } catch (error) {
+      if (await reportUserPhoneError(form, error)) return;
       const { title, message } = await extractApiError(error);
       toast.error(title, { description: message });
     }
@@ -45,7 +51,7 @@ function EditUserForm({ state, user, isSelf, onCancel }: { state: State; user: U
 }
 
 function UserIdentity({ form, user }: { form: Form; user: UserSummary }) {
-  return <><div className="space-y-1"><Label>Email (não editável)</Label><Input value={user.email} disabled /></div><div className="space-y-1"><Label>Nome</Label><Input {...form.register("name")} /></div></>;
+  return <><div className="space-y-1"><Label>Email (não editável)</Label><Input value={user.email} disabled /></div><div className="space-y-1"><Label>Nome</Label><Input {...form.register("name")} /></div><PhoneField id="edit-phone" registration={form.register("phone")} error={form.formState.errors.phone?.message} /></>;
 }
 
 function RoleAndSectorFields({ state, user, isSelf }: { state: State; user: UserSummary; isSelf: boolean }) {

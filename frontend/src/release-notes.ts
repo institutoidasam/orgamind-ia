@@ -31,6 +31,22 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.10.16',
+    date: '2026-10-16',
+    title: 'Telefone no cadastro e WhatsApp para a equipe',
+    items: [
+      {
+        text: '"Convidar usuário" agora se chama "Cadastrar usuário" e pede o telefone (WhatsApp) da pessoa. A lista de usuários mostra o telefone de cada um.',
+        where: '/users',
+      },
+      {
+        text: 'Nova tela "WhatsApp da equipe": o administrador e o gestor do setor mandam uma mensagem de WhatsApp para uma pessoa ou para o setor inteiro. As mensagens saem aos poucos, no ritmo do canal: para um setor grande pode levar alguns minutos. As respostas chegam no WhatsApp do número conectado.',
+        where: '/whatsapp-equipe',
+      },
+      { text: 'O link "Ver" das Novidades só aparece quando você tem acesso à tela.' },
+    ],
+  },
+  {
     version: '2026.10.10',
     date: '2026-10-10',
     title: 'Comunicação entre setores no OrgaMind',

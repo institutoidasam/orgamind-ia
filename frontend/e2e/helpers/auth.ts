@@ -78,13 +78,14 @@ const LOGIN_RATE_LIMIT_WINDOW_MS = 65_000;
  * Igual a {@link submitLogin}, mas espera a janela do rate limit expirar e
  * tenta UMA vez mais se levar 429.
  *
- * Só o `setup` usa isto, e só por causa da reexecução rápida contra o mesmo
- * banco: nesse caminho ele gasta um login a mais (fallback) e pode encostar no
+ * Usado pelo `setup` e por e2e/users-phone.spec.ts (o 6º login do CI, que já
+ * nasce no teto de 5/min). No `setup` é por causa da reexecução rápida contra o
+ * mesmo banco: nesse caminho ele gasta um login a mais (fallback) e pode encostar no
  * teto de 5/min deixado pela execução anterior — um 429 que não é defeito de
  * ninguém, só a suíte rodando duas vezes em menos de um minuto. No CI, com
- * banco semeado do zero, este ramo nunca é alcançado.
+ * banco semeado do zero, só o users-phone chega a esperar a janela (6º login).
  *
- * Os specs propriamente ditos continuam com o `submitLogin` estrito: lá, um 429
+ * Os demais specs continuam com o `submitLogin` estrito: lá, um 429
  * significa que o orçamento de logins estourou de verdade, e isso tem de falhar
  * alto em vez de virar um minuto de espera silenciosa.
  */

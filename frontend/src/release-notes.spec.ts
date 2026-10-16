@@ -25,12 +25,12 @@ describe('RELEASE_NOTES', () => {
     expect(RELEASE_NOTES.length).toBeGreaterThan(0);
   });
 
-  it('registra os módulos internos como a novidade mais recente', () => {
-    expect(RELEASE_NOTES[0]).toMatchObject({
+  it('registra os módulos internos entre as novidades', () => {
+    expect(RELEASE_NOTES.find((n) => n.version === '2026.10.10')).toMatchObject({
       version: '2026.10.10',
       date: '2026-10-10',
     });
-    expect(RELEASE_NOTES[0].title).toMatch(/comunicação entre setores/i);
+    expect(RELEASE_NOTES.find((n) => n.version === '2026.10.10')?.title).toMatch(/comunicação entre setores/i);
   });
 
   it('está em ordem decrescente por version (mais nova primeiro)', () => {
@@ -174,5 +174,12 @@ describe('entregas registradas (uma entrada por fase visível)', () => {
     );
     expect(entrada).toBeDefined();
     expect(entrada?.items.some((i) => i.text.includes('Validação'))).toBe(true);
+  });
+});
+
+describe('novidade 2026.10.16', () => {
+  it('é a primeira entrada e aponta para /whatsapp-equipe', () => {
+    expect(RELEASE_NOTES[0].version).toBe('2026.10.16');
+    expect(RELEASE_NOTES[0].items.some((i) => i.where === '/whatsapp-equipe')).toBe(true);
   });
 });

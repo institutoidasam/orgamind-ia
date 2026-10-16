@@ -9,18 +9,20 @@ import { Label } from "@/components/ui/label";
 import { useSectors } from "@/features/internal-admin/api";
 import { extractApiError } from "@/lib/api-error";
 import { useInviteUser } from "../api";
+import { reportUserPhoneError } from "../phone-errors";
 import { inviteUserSchema, type InviteUserOutput } from "../schemas";
+import { PhoneField } from "./phone-field";
 import { RoleSelect, SectorSelect } from "./role-sector-selects";
 import { TemporaryPasswordModal } from "./temporary-password-modal";
 
 type Props = { open: boolean; onOpenChange: (open: boolean) => void };
 type Form = UseFormReturn<InviteUserOutput>;
-const EMPTY_INVITE: InviteUserOutput = { email: "", name: "", role: "OPERATOR", sectorId: null };
+const EMPTY_INVITE: InviteUserOutput = { email: "", name: "", phone: "", role: "OPERATOR", sectorId: null };
 
 export function InviteUserDialog({ open, onOpenChange }: Props) {
   const [tmpPwd, setTmpPwd] = useState<string | null>(null);
   const state = useInviteForm(open, onOpenChange, setTmpPwd);
-  return <><Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>Convidar usuário</DialogTitle></DialogHeader><InviteForm state={state} onCancel={() => onOpenChange(false)} /></DialogContent></Dialog>{tmpPwd && <TemporaryPasswordModal password={tmpPwd} onClose={() => setTmpPwd(null)} />}</>;
+  return <><Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>Cadastrar usuário</DialogTitle></DialogHeader><InviteForm state={state} onCancel={() => onOpenChange(false)} /></DialogContent></Dialog>{tmpPwd && <TemporaryPasswordModal password={tmpPwd} onClose={() => setTmpPwd(null)} />}</>;
 }
 
 function useInviteForm(open: boolean, onOpenChange: Props["onOpenChange"], setTmpPwd: (password: string) => void) {
@@ -35,6 +37,7 @@ function useInviteForm(open: boolean, onOpenChange: Props["onOpenChange"], setTm
       form.reset(EMPTY_INVITE);
       onOpenChange(false);
     } catch (error) {
+      if (await reportUserPhoneError(form, error)) return;
       const { title, message } = await extractApiError(error);
       toast.error(title, { description: message });
     }
@@ -43,11 +46,11 @@ function useInviteForm(open: boolean, onOpenChange: Props["onOpenChange"], setTm
 }
 
 function InviteForm({ state, onCancel }: { state: State; onCancel: () => void }) {
-  return <form onSubmit={state.form.handleSubmit(state.submit)} className="space-y-4 py-2"><InviteIdentity form={state.form} /><InviteAssignment state={state} /><DialogFooter><Button type="button" variant="ghost" onClick={onCancel}>Cancelar</Button><Button type="submit" disabled={state.pending}>{state.pending ? "Convidando..." : "Convidar"}</Button></DialogFooter></form>;
+  return <form onSubmit={state.form.handleSubmit(state.submit)} className="space-y-4 py-2"><InviteIdentity form={state.form} /><InviteAssignment state={state} /><DialogFooter><Button type="button" variant="ghost" onClick={onCancel}>Cancelar</Button><Button type="submit" disabled={state.pending}>{state.pending ? "Cadastrando..." : "Cadastrar"}</Button></DialogFooter></form>;
 }
 
 function InviteIdentity({ form }: { form: Form }) {
-  return <><div className="space-y-1"><Label>Email</Label><Input type="email" {...form.register("email")} />{form.formState.errors.email && <p className="text-xs text-destructive">{form.formState.errors.email.message}</p>}</div><div className="space-y-1"><Label>Nome (opcional)</Label><Input {...form.register("name")} /></div></>;
+  return <><div className="space-y-1"><Label>Email</Label><Input type="email" {...form.register("email")} />{form.formState.errors.email && <p className="text-xs text-destructive">{form.formState.errors.email.message}</p>}</div><div className="space-y-1"><Label>Nome (opcional)</Label><Input {...form.register("name")} /></div><PhoneField id="invite-phone" registration={form.register("phone")} error={form.formState.errors.phone?.message} /></>;
 }
 
 function InviteAssignment({ state }: { state: State }) {

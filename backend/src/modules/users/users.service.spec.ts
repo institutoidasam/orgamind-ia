@@ -3,10 +3,13 @@ import { UsersService } from './users.service';
 import { UsersRepository } from './users.repository';
 import { AuditService } from '../../shared/audit/audit.service';
 import { RefreshService } from '../auth/refresh.service';
+import { UserPhoneService } from './user-phone.service';
 import argon2 from 'argon2';
 import { Prisma } from '@prisma/client';
 
 vi.mock('argon2');
+
+const PHONE = '92991234567';
 
 const adminUser = {
   id: 'u1',
@@ -48,6 +51,11 @@ type UsersRepositoryDouble = {
 
 type AuditDouble = { log: ReturnType<typeof vi.fn> };
 type RefreshDouble = { revokeAllForUser: ReturnType<typeof vi.fn> };
+type PhonesDouble = {
+  normalize: ReturnType<typeof vi.fn>;
+  assertAvailable: ReturnType<typeof vi.fn>;
+  resolveContactId: ReturnType<typeof vi.fn>;
+};
 
 const makeRepo = (overrides: Partial<UsersRepositoryDouble> = {}) =>
   ({
@@ -70,15 +78,25 @@ const makeRefresh = () =>
     revokeAllForUser: vi.fn().mockResolvedValue(undefined),
   }) satisfies RefreshDouble;
 
+// Telefone tem spec próprio (users.service.phone.spec.ts); aqui só não atrapalha.
+const makePhones = () =>
+  ({
+    normalize: vi.fn().mockReturnValue('+5592991234567'),
+    assertAvailable: vi.fn().mockResolvedValue(undefined),
+    resolveContactId: vi.fn().mockResolvedValue('contact-1'),
+  }) satisfies PhonesDouble;
+
 function makeService(
   repo: UsersRepositoryDouble,
   audit: AuditDouble,
   refresh: RefreshDouble,
+  phones: PhonesDouble = makePhones(),
 ): UsersService {
   return new UsersService(
     repo as unknown as UsersRepository,
     audit as unknown as AuditService,
     refresh as unknown as RefreshService,
+    phones as unknown as UserPhoneService,
   );
 }
 
@@ -109,7 +127,10 @@ describe('UsersService.createUser', () => {
     });
     const svc = makeService(repo, makeAudit(), makeRefresh());
     await expect(
-      svc.createUser({ email: 'admin@test.com', role: 'OPERATOR' }, 'creator1'),
+      svc.createUser(
+        { email: 'admin@test.com', role: 'OPERATOR', phone: PHONE },
+        'creator1',
+      ),
     ).rejects.toMatchObject({ code: 'user.email_taken' });
   });
 
@@ -118,7 +139,12 @@ describe('UsersService.createUser', () => {
     const repo = makeRepo();
     const svc = makeService(repo, makeAudit(), makeRefresh());
     const result = await svc.createUser(
-      { email: 'new@test.com', role: 'OPERATOR', sectorId: 'sector-1' },
+      {
+        email: 'new@test.com',
+        role: 'OPERATOR',
+        sectorId: 'sector-1',
+        phone: PHONE,
+      },
       'c1',
     );
     expect(result.temporaryPassword).toHaveLength(12);
@@ -130,7 +156,12 @@ describe('UsersService.createUser', () => {
     const repo = makeRepo();
     const svc = makeService(repo, makeAudit(), makeRefresh());
     const result = await svc.createUser(
-      { email: 'new@test.com', role: 'OPERATOR', sectorId: 'sector-1' },
+      {
+        email: 'new@test.com',
+        role: 'OPERATOR',
+        sectorId: 'sector-1',
+        phone: PHONE,
+      },
       'c1',
     );
     expect(result.user).not.toHaveProperty('password');

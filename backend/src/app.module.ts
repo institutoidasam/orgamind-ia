@@ -42,6 +42,7 @@ import { BotsModule } from './modules/bots/bots.module';
 import { ConsentModule } from './modules/consent/consent.module';
 import { OrganizationModule } from './modules/organization/organization.module';
 import { InternalSectorsModule } from './modules/internal-sectors/internal-sectors.module';
+import { TeamWhatsappModule } from './modules/team-whatsapp/team-whatsapp.module';
 import { InternalNumbersModule } from './modules/internal-numbers/internal-numbers.module';
 import { InternalCommunicationsModule } from './modules/internal-communications/internal-communications.module';
 import { QUEUE_NAMES } from './modules/queue/queue.constants';
@@ -100,6 +101,7 @@ export const LOG_REDACT_PATHS = [
     AuthModule,
     UsersModule,
     InternalSectorsModule,
+    TeamWhatsappModule,
     InternalNumbersModule,
     InternalCommunicationsModule,
     ContactsModule,

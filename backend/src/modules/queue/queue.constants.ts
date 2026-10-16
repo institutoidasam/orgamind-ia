@@ -69,6 +69,8 @@ export const QUEUE_NAMES = {
   ZERNIO_BROADCAST_CANCEL: 'zernio.broadcast-cancel',
   EXCEL_IMPORT: 'imports.excel',
   BOT_REPLY: 'bot.reply',
+  // Recado da equipe (ADMIN/gestor → usuários): um job por destinatário, jobId = recipientId.
+  TEAM_WHATSAPP_SEND: 'team-whatsapp.send',
 } as const;
 
 /** ZB — um lote de mensagens do orgamind para virar UM broadcast no Zernio. */
@@ -167,3 +169,6 @@ export type BotReplyJob = {
   messageId: string;
   correlationId?: string;
 };
+
+/** Job da fila TEAM_WHATSAPP_SEND: o processor relê destinatário, usuário e canal pelo id. */
+export type TeamWhatsappSendJob = { recipientId: string };

@@ -7,35 +7,36 @@ import {
 } from '@testcontainers/postgresql';
 import { UsersRepository } from './users.repository';
 
+// One container + `migrate deploy` for the whole file (both describes).
+let postgres: StartedPostgreSqlContainer;
+let prisma: PrismaClient;
+let repo: UsersRepository;
+
+beforeAll(async () => {
+  postgres = await new PostgreSqlContainer('postgres:16-alpine')
+    .withDatabase('orgamind_test')
+    .withUsername('orgamind')
+    .withPassword('orgamind')
+    .start();
+  const url = postgres.getConnectionUri();
+  execFileSync(
+    process.execPath,
+    [require.resolve('prisma/build/index.js'), 'migrate', 'deploy'],
+    {
+      stdio: 'inherit',
+      env: { ...process.env, DATABASE_URL: url },
+    },
+  );
+  prisma = new PrismaClient({ datasources: { db: { url } } });
+  repo = new UsersRepository(prisma as never);
+}, 180_000);
+
+afterAll(async () => {
+  await prisma?.$disconnect();
+  await postgres?.stop();
+});
+
 describe('UsersRepository last active admin guard (real Postgres)', () => {
-  let postgres: StartedPostgreSqlContainer;
-  let prisma: PrismaClient;
-  let repo: UsersRepository;
-
-  beforeAll(async () => {
-    postgres = await new PostgreSqlContainer('postgres:16-alpine')
-      .withDatabase('orgamind_test')
-      .withUsername('orgamind')
-      .withPassword('orgamind')
-      .start();
-    const url = postgres.getConnectionUri();
-    execFileSync(
-      process.execPath,
-      [require.resolve('prisma/build/index.js'), 'migrate', 'deploy'],
-      {
-        stdio: 'inherit',
-        env: { ...process.env, DATABASE_URL: url },
-      },
-    );
-    prisma = new PrismaClient({ datasources: { db: { url } } });
-    repo = new UsersRepository(prisma as never);
-  }, 180_000);
-
-  afterAll(async () => {
-    await prisma?.$disconnect();
-    await postgres?.stop();
-  });
-
   it('allows only one of two concurrent deactivations of the last active admins', async () => {
     const [first, second] = await Promise.all([
       prisma.user.create({
@@ -74,5 +75,31 @@ describe('UsersRepository last active admin guard (real Postgres)', () => {
     await expect(
       prisma.user.findUnique({ where: { id: active.id } }),
     ).resolves.not.toBeNull();
+  }, 60_000);
+});
+
+describe('UsersRepository phone + contact link (real Postgres)', () => {
+  it('acha o titular por qualquer grafia e o FK SetNull desliga ao apagar o contato', async () => {
+    const contact = await prisma.contact.create({
+      data: { phoneE164: '+559291234567' },
+    });
+    const user = await prisma.user.create({
+      data: {
+        email: 'phone@test.local',
+        password: 'x',
+        phoneE164: '+5592991234567',
+        contactId: contact.id,
+      },
+    });
+    await expect(
+      repo.findIdByPhoneVariants(['+5592991234567', '+559291234567']),
+    ).resolves.toBe(user.id);
+    await expect(repo.findContactId(user.id)).resolves.toBe(contact.id);
+
+    await prisma.contact.delete({ where: { id: contact.id } });
+
+    await expect(
+      prisma.user.findUnique({ where: { id: user.id } }),
+    ).resolves.toMatchObject({ contactId: null, phoneE164: '+5592991234567' });
   }, 60_000);
 });

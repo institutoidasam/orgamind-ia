@@ -57,6 +57,14 @@ model User {
   sessionVersion        Int            @default(0)
   mustChangePassword    Boolean        @default(true)
   lastLoginAt           DateTime?
+  // E.164 do WhatsApp do usuário. Opcional no banco (usuários anteriores ficam
+  // null), obrigatório no convite. Igualdade de titular usa as duas grafias do
+  // 9º dígito no serviço; o @unique protege a corrida entre dois cadastros.
+  phoneE164             String?        @unique
+  // Contato do mesmo número. SetNull: apagar o contato desliga o usuário (o
+  // script de fusão reaponta antes de apagar o gêmeo; editar o telefone religa).
+  contactId             String?        @unique
+  contact               Contact?       @relation("UserContact", fields: [contactId], references: [id], onDelete: SetNull)
   createdAt             DateTime       @default(now())
   updatedAt             DateTime       @updatedAt
   createdById           String?
@@ -71,6 +79,8 @@ model User {
   assignedInternalCommunications InternalCommunication[] @relation("InternalCommunicationAssignee")
   internalEvents        InternalEvent[] @relation("InternalEventActor")
   internalReads         InternalRead[]
+  teamWhatsappDispatches TeamWhatsappDispatch[] @relation("TeamWhatsappDispatchAuthor")
+  teamWhatsappRecipients TeamWhatsappRecipient[] @relation("TeamWhatsappRecipientUser")
 }
 
 enum Role {
@@ -295,6 +305,7 @@ model Contact {
   messages          Message[]
   conversations     Conversation[]
   consents          ContactConsent[]
+  user              User?          @relation("UserContact")
 
   // WhatsApp validation cache (populated by /chat/whatsappNumbers + fetchProfilePictureUrl).
   // null = never checked. We refresh on demand or in batch — there's no automatic
@@ -1302,6 +1313,8 @@ model Channel {
   zernioBroadcasts   ZernioBroadcast[]
   // ZD — fotografia diária do volume de mensagens no lado do Zernio.
   zernioSnapshots    ZernioAnalyticsSnapshot[]
+  // Recados da equipe enviados por este canal (SetNull: remover o canal não apaga o histórico).
+  teamWhatsappDispatches TeamWhatsappDispatch[]
 
   botId String?
   bot   Bot?    @relation(fields: [botId], references: [id], onDelete: SetNull)
@@ -1535,4 +1548,63 @@ model ZernioAnalyticsSnapshot {
 
   @@unique([channelId, day])
   @@index([day])
+}
+
+// ── WhatsApp da equipe ────────────────────────────────────────────────────────
+// Recado interno de ADMIN/gestor para um usuário ou para os membros ativos de um
+// setor. Um envio (dispatch) gera um destinatário por pessoa; cada destinatário
+// QUEUED vira um job da fila `team-whatsapp.send` (jobId = recipientId).
+// O telefone NÃO é copiado para o destinatário: o processor relê do usuário.
+
+enum TeamWhatsappTargetType {
+  USER
+  SECTOR
+}
+
+enum TeamWhatsappRecipientStatus {
+  QUEUED
+  SENT
+  FAILED
+  SKIPPED
+}
+
+enum TeamWhatsappSkipReason {
+  NO_PHONE
+  SUPPRESSED
+}
+
+model TeamWhatsappDispatch {
+  id          String                  @id @default(cuid())
+  authorId    String?
+  author      User?                   @relation("TeamWhatsappDispatchAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  targetType  TeamWhatsappTargetType
+  targetId    String
+  targetLabel String
+  // SetNull: remover o canal não apaga nem bloqueia o histórico (o front mostra "canal removido").
+  channelId   String?
+  channel     Channel?                @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  text        String
+  createdAt   DateTime                @default(now())
+  recipients  TeamWhatsappRecipient[]
+
+  @@index([createdAt])
+  @@index([authorId, createdAt])
+}
+
+model TeamWhatsappRecipient {
+  id         String                      @id @default(cuid())
+  dispatchId String
+  dispatch   TeamWhatsappDispatch        @relation(fields: [dispatchId], references: [id], onDelete: Cascade)
+  userId     String?
+  user       User?                       @relation("TeamWhatsappRecipientUser", fields: [userId], references: [id], onDelete: SetNull)
+  userName   String
+  status     TeamWhatsappRecipientStatus @default(QUEUED)
+  skipReason TeamWhatsappSkipReason?
+  // Gravado ANTES do envio (fase 1 do processor); a retentativa reaproveita a mesma Message.
+  messageId  String?
+  errorCode  String?
+  createdAt  DateTime                    @default(now())
+  updatedAt  DateTime                    @updatedAt
+
+  @@index([dispatchId, status])
 }

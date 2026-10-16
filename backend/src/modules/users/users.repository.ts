@@ -16,6 +16,8 @@ const USER_SUMMARY_SELECT = {
   sessionVersion: true,
   mustChangePassword: true,
   lastLoginAt: true,
+  // Telefone sim; `contactId` NÃO entra no summary nem no contrato público.
+  phoneE164: true,
   createdAt: true,
   updatedAt: true,
   createdById: true,
@@ -66,6 +68,24 @@ export class UsersRepository {
 
   create(data: Prisma.UserCreateInput): Promise<User> {
     return this.prisma.user.create({ data });
+  }
+
+  /** Id do usuário dono de qualquer uma das grafias do número (ou null). */
+  async findIdByPhoneVariants(variants: string[]): Promise<string | null> {
+    const row = await this.prisma.user.findFirst({
+      where: { phoneE164: { in: variants } },
+      select: { id: true },
+    });
+    return row?.id ?? null;
+  }
+
+  /** Só para o PATCH com o mesmo número: o contato ainda está ligado? */
+  async findContactId(id: string): Promise<string | null> {
+    const row = await this.prisma.user.findUnique({
+      where: { id },
+      select: { contactId: true },
+    });
+    return row?.contactId ?? null;
   }
 
   /**

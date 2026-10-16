@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import argon2 from 'argon2';
 import { UsersRepository } from './users.repository';
+import { UserPhoneService } from './user-phone.service';
 import { AuditService } from '../../shared/audit/audit.service';
 import { RefreshService } from '../auth/refresh.service';
 import {
@@ -20,7 +21,26 @@ type UserPatch = {
   role?: Role;
   sectorId?: string | null;
   isActive?: boolean;
+  /** Sem null: quem já tem telefone não pode apagá-lo; ausente = mantém. */
+  phone?: string;
 };
+type CreateUserInput = {
+  email: string;
+  name?: string;
+  role: 'ADMIN' | 'OPERATOR' | 'SUPERVISOR' | 'VIEWER';
+  sectorId?: string;
+  phone: string;
+};
+type PhoneLink = { phoneE164: string; contactId: string };
+
+// P2002 em phoneE164/contactId = dois cadastros do mesmo número em corrida (o
+// assertAvailable de cada um passou antes do outro gravar) → user.phone_taken.
+function rethrowPhoneConflict(error: unknown): never {
+  if (UserPhoneService.isPhoneUniqueViolation(error)) {
+    throw new ConflictError('Phone already taken', 'user.phone_taken');
+  }
+  throw error;
+}
 
 // Defense-in-depth: strip any unexpected fields that the repo might leak (e.g.
 // if a future change accidentally swaps the allowlisted select back to a full
@@ -37,6 +57,7 @@ function toUserSummary(u: UserSummary): UserSummary {
     sessionVersion: u.sessionVersion,
     mustChangePassword: u.mustChangePassword,
     lastLoginAt: u.lastLoginAt,
+    phoneE164: u.phoneE164,
     createdAt: u.createdAt,
     updatedAt: u.updatedAt,
     createdById: u.createdById,
@@ -50,6 +71,7 @@ export class UsersService {
     private readonly repo: UsersRepository,
     private readonly audit: AuditService,
     private readonly refresh: RefreshService,
+    private readonly phones: UserPhoneService,
   ) {}
 
   async listUsers(page: number, pageSize: number): Promise<UserListResponse> {
@@ -58,24 +80,32 @@ export class UsersService {
   }
 
   async createUser(
-    input: {
-      email: string;
-      name?: string;
-      role: 'ADMIN' | 'OPERATOR' | 'SUPERVISOR' | 'VIEWER';
-      sectorId?: string;
-    },
+    input: CreateUserInput,
     createdById: string,
   ): Promise<{ user: UserSummary | null; temporaryPassword: string }> {
+    const phoneE164 = this.phones.normalize(input.phone);
     const existing = await this.repo.findByEmail(input.email);
     await this.assertCreatable(input, existing);
+    await this.phones.assertAvailable(phoneE164);
     const temporaryPassword = UsersRepository.generateTempPassword();
     const passwordHash = await argon2.hash(temporaryPassword, {
       type: argon2.argon2id,
     });
+    // M7 (risco aceito): o contato é resolvido ANTES de gravar o usuário; numa
+    // corrida de e-mail ele fica sem usuário, mas é um Contact legítimo do
+    // número (ver UserPhoneService.resolveContactId).
+    const contactId = await this.phones.resolveContactId(
+      phoneE164,
+      input.name?.trim() || input.email,
+    );
     const created = await this.createInvitation(
       input,
       createdById,
       passwordHash,
+      {
+        phoneE164,
+        contactId,
+      },
     );
 
     await this.audit.log('user.invited', 'User', created.id, {
@@ -90,7 +120,7 @@ export class UsersService {
   }
 
   private async assertCreatable(
-    input: Parameters<UsersService['createUser']>[0],
+    input: CreateUserInput,
     existing: Awaited<ReturnType<UsersRepository['findByEmail']>>,
   ): Promise<void> {
     if (existing)
@@ -108,21 +138,26 @@ export class UsersService {
   }
 
   private createInvitation(
-    input: Parameters<UsersService['createUser']>[0],
+    input: CreateUserInput,
     createdById: string,
     password: string,
+    phone: PhoneLink,
   ) {
-    return this.repo.create({
-      email: input.email,
-      name: input.name ?? null,
-      role: input.role,
-      ...(input.sectorId
-        ? { sector: { connect: { id: input.sectorId } } }
-        : {}),
-      password,
-      mustChangePassword: true,
-      createdBy: { connect: { id: createdById } },
-    });
+    return this.repo
+      .create({
+        email: input.email,
+        name: input.name ?? null,
+        role: input.role,
+        ...(input.sectorId
+          ? { sector: { connect: { id: input.sectorId } } }
+          : {}),
+        password,
+        mustChangePassword: true,
+        phoneE164: phone.phoneE164,
+        contact: { connect: { id: phone.contactId } },
+        createdBy: { connect: { id: createdById } },
+      })
+      .catch(rethrowPhoneConflict);
   }
 
   async updateUser(
@@ -136,7 +171,10 @@ export class UsersService {
     this.assertSelfChangeAllowed(id, actorId, input);
     await this.assertValidAssignment(user, input);
     const changesIdentity = this.changesIdentity(input);
-    const data = this.toUpdateData(input, changesIdentity);
+    const data = {
+      ...this.toUpdateData(input, changesIdentity),
+      ...(await this.phoneUpdate(user, input.phone, input.name)),
+    };
 
     // Transactional update with last-admin guard. Two concurrent demotions of
     // the only two admins would otherwise both pass a separate countAdmins
@@ -232,6 +270,31 @@ export class UsersService {
     };
   }
 
+  /**
+   * Telefone do PATCH → dados do Prisma. Ausente = mantém. Mesmo número com
+   * contato ligado = nada a fazer; mesmo número sem contato (apagado, SetNull)
+   * = só religa. Número novo = confere titular e religa ao contato dele (o
+   * contato antigo fica). O telefone não vai para a auditoria. Nome do contato:
+   * o novo do PATCH, senão o atual, senão o e-mail (só preenche nome vazio).
+   */
+  private async phoneUpdate(
+    user: UserSummary,
+    raw: string | undefined,
+    newName: string | undefined,
+  ): Promise<Prisma.UserUpdateInput> {
+    if (raw === undefined) return {};
+    const phoneE164 = this.phones.normalize(raw);
+    const sameNumber = phoneE164 === user.phoneE164;
+    if (sameNumber && (await this.repo.findContactId(user.id))) return {};
+    if (!sameNumber) await this.phones.assertAvailable(phoneE164, user.id);
+    const contactId = await this.phones.resolveContactId(
+      phoneE164,
+      newName?.trim() || user.name?.trim() || user.email,
+    );
+    const contact = { connect: { id: contactId } };
+    return sameNumber ? { contact } : { phoneE164, contact };
+  }
+
   private async lastAdminGuard<T>(operation: () => Promise<T>): Promise<T> {
     try {
       return await operation();
@@ -245,7 +308,7 @@ export class UsersService {
           'user.concurrent_admin_change',
         );
       }
-      throw error;
+      rethrowPhoneConflict(error);
     }
   }
 

@@ -23,6 +23,8 @@ import { InviteUserDialog } from '@/features/users/components/invite-user-dialog
 import { EditUserDialog } from '@/features/users/components/edit-user-dialog';
 import { TemporaryPasswordModal } from '@/features/users/components/temporary-password-modal';
 import { UserPermissionsDialog } from '@/features/users/components/user-permissions-dialog';
+import { SendWhatsappDialog } from '@/features/team-whatsapp/components/send-whatsapp-dialog';
+import { formatPhoneBR } from '@/lib/format-phone';
 import { ROLE_LABEL } from '@/features/users/role';
 import type { UserSummary } from '@/features/users/schemas';
 
@@ -74,8 +76,9 @@ function useUserDialogState() {
   const [permissionsTarget, setPermissionsTarget] = useState<UserSummary | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<UserSummary | null>(null);
   const [resetTarget, setResetTarget] = useState<UserSummary | null>(null);
+  const [whatsappTarget, setWhatsappTarget] = useState<UserSummary | null>(null);
   const [tmpPwd, setTmpPwd] = useState<string | null>(null);
-  return { inviteOpen, setInviteOpen, editTarget, setEditTarget, permissionsTarget, setPermissionsTarget, deleteTarget, setDeleteTarget, resetTarget, setResetTarget, tmpPwd, setTmpPwd };
+  return { whatsappTarget, setWhatsappTarget, inviteOpen, setInviteOpen, editTarget, setEditTarget, permissionsTarget, setPermissionsTarget, deleteTarget, setDeleteTarget, resetTarget, setResetTarget, tmpPwd, setTmpPwd };
 }
 
 type UserDialogState = ReturnType<typeof useUserDialogState>;
@@ -98,7 +101,7 @@ function UsersHeader({ onInvite }: { onInvite: () => void }) {
         <h1 className="text-2xl font-bold">Usuários</h1>
         <p className="text-sm" style={{ color: 'var(--foreground-muted)' }}>Cada pessoa tem um setor principal e um papel de acesso.</p>
       </div>
-      <Button onClick={onInvite}><UserPlus className="size-4 mr-2" />Convidar usuário</Button>
+      <Button onClick={onInvite}><UserPlus className="size-4 mr-2" />Cadastrar usuário</Button>
     </div>
   );
 }
@@ -107,11 +110,17 @@ function UsersTable({ users, selfId, dialogs }: { users: UserSummary[]; selfId?:
   return (
     <div className="rounded-md border" style={{ borderColor: 'var(--border)' }}>
       <Table>
-        <TableHeader><TableRow><TableHead>Nome</TableHead><TableHead>Email</TableHead><TableHead>Setor</TableHead><TableHead>Perfil</TableHead><TableHead>Acesso</TableHead><TableHead className="w-10" /></TableRow></TableHeader>
+        <TableHeader><TableRow><TableHead>Nome</TableHead><TableHead>Email</TableHead><TableHead>Telefone</TableHead><TableHead>Setor</TableHead><TableHead>Perfil</TableHead><TableHead>Acesso</TableHead><TableHead className="w-10" /></TableRow></TableHeader>
         <TableBody>{users.map((user) => <UserRow key={user.id} user={user} isSelf={user.id === selfId} dialogs={dialogs} />)}</TableBody>
       </Table>
     </div>
   );
+}
+
+/** Dica do item "Enviar WhatsApp" quando desabilitado; undefined quando a pessoa pode receber. */
+function whatsappHint(user: UserSummary): string | undefined {
+  if (!user.phoneE164) return 'Usuário sem telefone';
+  return user.isActive ? undefined : 'Usuário inativo';
 }
 
 function UserRow({ user, isSelf, dialogs }: { user: UserSummary; isSelf: boolean; dialogs: UserDialogState }) {
@@ -119,6 +128,7 @@ function UserRow({ user, isSelf, dialogs }: { user: UserSummary; isSelf: boolean
     <TableRow>
       <TableCell className="font-medium">{user.name ?? '—'}</TableCell>
       <TableCell className="text-sm" style={{ color: 'var(--foreground-muted)' }}>{user.email}</TableCell>
+      <TableCell className="text-sm">{formatPhoneBR(user.phoneE164)}</TableCell>
       <TableCell>{user.sector?.name ?? 'Sem setor'}</TableCell>
       <TableCell><Badge variant={user.role === 'ADMIN' ? 'default' : 'secondary'}>{ROLE_LABEL[user.role]}</Badge></TableCell>
       <TableCell><Badge variant={user.isActive ? 'default' : 'outline'}>{user.isActive ? 'Ativo' : 'Inativo'}</Badge></TableCell>
@@ -128,6 +138,7 @@ function UserRow({ user, isSelf, dialogs }: { user: UserSummary; isSelf: boolean
           <DropdownMenuContent align="end">
             <DropdownMenuItem onClick={() => dialogs.setEditTarget(user)}>Editar</DropdownMenuItem>
             <DropdownMenuItem onClick={() => dialogs.setPermissionsTarget(user)}>Ver permissões</DropdownMenuItem>
+            <DropdownMenuItem disabled={!user.phoneE164 || !user.isActive} title={whatsappHint(user)} onClick={() => dialogs.setWhatsappTarget(user)}>Enviar WhatsApp</DropdownMenuItem>
             <DropdownMenuItem disabled={isSelf} onClick={() => dialogs.setResetTarget(user)}>Resetar senha</DropdownMenuItem>
             <DropdownMenuItem className="text-destructive" disabled={isSelf} onClick={() => dialogs.setDeleteTarget(user)}>Remover usuário</DropdownMenuItem>
           </DropdownMenuContent>
@@ -142,6 +153,7 @@ function UserDialogs({ dialogs, selfId, deletePending, resetPending, onDelete, o
     <InviteUserDialog open={dialogs.inviteOpen} onOpenChange={dialogs.setInviteOpen} />
     {dialogs.editTarget && <EditUserDialog user={dialogs.editTarget} open onOpenChange={(open) => { if (!open) dialogs.setEditTarget(null); }} isSelf={dialogs.editTarget.id === selfId} />}
     {dialogs.permissionsTarget && <UserPermissionsDialog user={dialogs.permissionsTarget} open onOpenChange={(open) => { if (!open) dialogs.setPermissionsTarget(null); }} />}
+    {dialogs.whatsappTarget && <SendWhatsappDialog open target={{ type: 'user', userId: dialogs.whatsappTarget.id, label: dialogs.whatsappTarget.name ?? dialogs.whatsappTarget.email }} onOpenChange={(open) => { if (!open) dialogs.setWhatsappTarget(null); }} />}
     <DeleteUserDialog user={dialogs.deleteTarget} pending={deletePending} onOpenChange={(open) => { if (!open) dialogs.setDeleteTarget(null); }} onDelete={onDelete} />
     <ResetUserDialog user={dialogs.resetTarget} pending={resetPending} onOpenChange={(open) => { if (!open) dialogs.setResetTarget(null); }} onReset={onReset} />
     {dialogs.tmpPwd && <TemporaryPasswordModal password={dialogs.tmpPwd} onClose={() => dialogs.setTmpPwd(null)} />}

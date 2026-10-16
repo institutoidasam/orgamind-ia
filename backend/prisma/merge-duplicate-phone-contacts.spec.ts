@@ -35,6 +35,22 @@ function armaTransacaoEColisoes(db: DeepMockProxy<PrismaClient>) {
   db.message.findMany.mockResolvedValue([] as never);
 }
 
+/** Par sem evidência de entrega (sem conversa, mensagem achada ou importação). */
+function armaParSemEvidencia(
+  db: DeepMockProxy<PrismaClient>,
+  contatos: unknown[],
+  mensagens = 0,
+) {
+  db.contact.findMany.mockResolvedValue(contatos as never);
+  db.importItem.count.mockResolvedValue(0);
+  db.message.count.mockResolvedValue(mensagens);
+  db.conversation.findMany.mockResolvedValue([] as never);
+  db.conversation.findFirst.mockResolvedValue(null);
+  db.message.findFirst.mockResolvedValue(null);
+  db.conversation.findUnique.mockResolvedValue(null);
+  armaTransacaoEColisoes(db);
+}
+
 describe('mergeDuplicatePhoneContacts', () => {
   let db: DeepMockProxy<PrismaClient>;
 
@@ -62,14 +78,7 @@ describe('mergeDuplicatePhoneContacts', () => {
 
   beforeEach(() => {
     db = mockDeep<PrismaClient>();
-    db.contact.findMany.mockResolvedValue([CANONICAL, DUPLICATE] as never);
-    db.importItem.count.mockResolvedValue(0 as never);
-    db.message.count.mockResolvedValue(3 as never);
-    db.conversation.findMany.mockResolvedValue([] as never);
-    db.conversation.findFirst.mockResolvedValue(null as never);
-    db.message.findFirst.mockResolvedValue(null as never);
-    db.conversation.findUnique.mockResolvedValue(null as never);
-    armaTransacaoEColisoes(db);
+    armaParSemEvidencia(db, [CANONICAL, DUPLICATE], 3);
   });
 
   it('acha o par pelas variantes corrigidas e elege o de 9 dígitos como canônico', async () => {
@@ -775,20 +784,20 @@ describe('mergeDuplicatePhoneContacts — a colisão com "uma linha viva por (ca
  * Antes, o erro subia e a varredura morria no primeiro par ruim — em TODO deploy,
  * sempre no mesmo lugar, deixando todos os pares seguintes eternamente sujos.
  */
+const P = (id: string, phone: string) => ({
+  id,
+  phoneE164: phone,
+  name: null,
+  city: null,
+  group: null,
+  tags: [],
+  whatsappValid: null,
+  optedOut: false,
+  createdAt: new Date('2026-07-08T10:00:00Z'),
+});
+
 describe('mergeDuplicatePhoneContacts — falha de um par não mata o lote', () => {
   let db: DeepMockProxy<PrismaClient>;
-
-  const P = (id: string, phone: string) => ({
-    id,
-    phoneE164: phone,
-    name: null,
-    city: null,
-    group: null,
-    tags: [],
-    whatsappValid: null,
-    optedOut: false,
-    createdAt: new Date('2026-07-08T10:00:00Z'),
-  });
 
   beforeEach(() => {
     db = mockDeep<PrismaClient>();
@@ -822,6 +831,60 @@ describe('mergeDuplicatePhoneContacts — falha de um par não mata o lote', () 
     // O par que falhou NÃO teve o contato apagado; o outro sim.
     expect(db.contact.delete).toHaveBeenCalledTimes(1);
     expect(db.contact.delete).toHaveBeenCalledWith({ where: { id: 'd8' } });
+  });
+});
+
+/**
+ * User.contactId é onDelete: SetNull e o script roda com --apply em todo deploy:
+ * sem reapontar, cada deploy desligaria o usuário da equipe do contato dele.
+ */
+describe('mergeDuplicatePhoneContacts — usuário ligado ao contato descartado', () => {
+  let db: DeepMockProxy<PrismaClient>;
+
+  beforeEach(() => {
+    db = mockDeep<PrismaClient>();
+    armaParSemEvidencia(db, [
+      P('c9', '+5592991234567'),
+      P('c8', '+559291234567'),
+    ]);
+    db.user.findFirst.mockImplementation(((a: {
+      where: { contactId: string };
+    }) =>
+      Promise.resolve(
+        a.where.contactId === 'c8' ? { id: 'u-perdedor' } : null,
+      )) as never);
+  });
+
+  it('reaponta User.contactId do perdedor para o sobrevivente antes de apagar', async () => {
+    const r = await mergeDuplicatePhoneContacts(db, { apply: true });
+    expect(r.merges[0]).toMatchObject({ survivorId: 'c9', deletedId: 'c8' });
+    expect(db.user.updateMany.mock.calls).toContainEqual([
+      {
+        where: { contactId: 'c8' },
+        data: { contactId: 'c9' },
+      },
+    ]);
+    expect(db.user.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+      db.contact.delete.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("sobrevivente já tem usuário: registra 'user' em conflicts, não reaponta e não falha", async () => {
+    db.user.findFirst.mockResolvedValue({ id: 'u-qualquer' } as never);
+    const r = await mergeDuplicatePhoneContacts(db, { apply: true });
+    expect(r.failedPairs).toHaveLength(0);
+    expect(r.conflicts[0]?.fields).toContain('user');
+    expect(db.user.updateMany.mock.calls).toHaveLength(0);
+    expect(db.contact.delete.mock.calls).toContainEqual([
+      { where: { id: 'c8' } },
+    ]);
+  });
+
+  it('não toca User no dry-run, mas já relata o conflito', async () => {
+    db.user.findFirst.mockResolvedValue({ id: 'u-qualquer' } as never);
+    const r = await mergeDuplicatePhoneContacts(db, { apply: false });
+    expect(r.conflicts[0]?.fields).toContain('user');
+    expect(db.user.updateMany.mock.calls).toHaveLength(0);
   });
 });
 

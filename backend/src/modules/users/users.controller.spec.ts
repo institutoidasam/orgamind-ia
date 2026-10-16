@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, type Mock } from 'vitest';
 import { HttpStatus } from '@nestjs/common';
 import { HTTP_CODE_METADATA } from '@nestjs/common/constants';
 import { UsersController } from './users.controller';
@@ -26,9 +26,17 @@ describe('UsersController', () => {
   });
 
   it('POST /users returns user + temporaryPassword', async () => {
-    const ctrl = new UsersController(makeService());
-    const result = await ctrl.createUser({ email: 'new@x.com', role: 'OPERATOR' }, adminReq);
+    const svc = makeService();
+    const ctrl = new UsersController(svc);
+    const body = {
+      email: 'new@x.com',
+      role: 'OPERATOR',
+      phone: '92991234567',
+    } as const;
+    const result = await ctrl.createUser(body, adminReq);
     expect(result).toHaveProperty('temporaryPassword');
+    const { createUser } = svc as unknown as { createUser: Mock };
+    expect(createUser).toHaveBeenCalledWith(body, 'admin1');
   });
 
   it('PATCH /users/:id delegates actorId from JWT', async () => {
@@ -37,7 +45,9 @@ describe('UsersController', () => {
     await ctrl.updateUser('u2', { name: 'New' }, adminReq);
     expect(svc.updateUser).toHaveBeenCalledWith('u2', { name: 'New' }, 'admin1');
   });
+});
 
+describe('UsersController — status e reset', () => {
   it('PATCH /users/:id is declared 204 No Content (empty-body contract — frontend must not .json() it)', () => {
     // @HttpCode is reflected metadata, not observable from a direct method call,
     // so assert the metadata directly. Removing the decorator regresses the

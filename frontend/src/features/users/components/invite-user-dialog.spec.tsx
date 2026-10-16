@@ -9,6 +9,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { HTTPError } from "ky";
 import { InviteUserDialog } from "./invite-user-dialog";
 
 // jsdom lacks the APIs the Radix Select primitive relies on.
@@ -39,6 +40,8 @@ vi.mock("@/features/internal-admin/api", () => ({
 }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 
+const PHONE = "92 99123-4567";
+
 function wrap(ui: React.ReactElement) {
   return render(
     <QueryClientProvider
@@ -60,53 +63,32 @@ function emailInput(): HTMLInputElement {
   return el as HTMLInputElement;
 }
 
+const phoneInput = () => screen.getByLabelText("Telefone (WhatsApp)");
+const submitButton = () => screen.getByRole("button", { name: /^Cadastrar$/i });
+const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+const dialog = (open: boolean, onOpenChange = () => {}) => (
+  <QueryClientProvider client={qc}>
+    <InviteUserDialog open={open} onOpenChange={onOpenChange} />
+  </QueryClientProvider>
+);
+
 describe("InviteUserDialog", () => {
   it("clears a typed email after the dialog is closed and reopened", async () => {
-    const onOpenChange = vi.fn();
-    const { rerender } = wrap(
-      <InviteUserDialog open onOpenChange={onOpenChange} />,
-    );
-
+    const { rerender } = wrap(dialog(true));
     await userEvent.type(emailInput(), "typed@x.com");
     expect(emailInput().value).toBe("typed@x.com");
-
-    // Close
-    rerender(
-      <QueryClientProvider
-        client={
-          new QueryClient({ defaultOptions: { queries: { retry: false } } })
-        }
-      >
-        <InviteUserDialog open={false} onOpenChange={onOpenChange} />
-      </QueryClientProvider>,
-    );
-    // Reopen
-    rerender(
-      <QueryClientProvider
-        client={
-          new QueryClient({ defaultOptions: { queries: { retry: false } } })
-        }
-      >
-        <InviteUserDialog open onOpenChange={onOpenChange} />
-      </QueryClientProvider>,
-    );
-
+    rerender(dialog(false));
+    rerender(dialog(true));
     await waitFor(() => expect(emailInput().value).toBe(""));
   });
 
   it("submits the role chosen in the Select (controlled, in sync)", async () => {
-    wrap(<InviteUserDialog open onOpenChange={() => {}} />);
-
+    wrap(dialog(true));
     await userEvent.type(emailInput(), "admin@x.com");
-
-    // Open the role select and pick Admin.
+    await userEvent.type(phoneInput(), PHONE);
     fireEvent.click(screen.getByRole("combobox", { name: "Perfil" }));
-    fireEvent.click(
-      await screen.findByRole("option", { name: "Administrador" }),
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: /^Convidar$/i }));
-
+    fireEvent.click(await screen.findByRole("option", { name: "Administrador" }));
+    fireEvent.click(submitButton());
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
     expect(mutateAsync).toHaveBeenCalledWith(
       expect.objectContaining({ email: "admin@x.com", role: "ADMIN" }),
@@ -114,28 +96,82 @@ describe("InviteUserDialog", () => {
   });
 
   it("defaults the role to OPERATOR when left unchanged", async () => {
-    wrap(<InviteUserDialog open onOpenChange={() => {}} />);
+    wrap(dialog(true));
     await userEvent.type(emailInput(), "op@x.com");
+    await userEvent.type(phoneInput(), PHONE);
     fireEvent.click(screen.getByRole("combobox", { name: "Setor principal" }));
     fireEvent.click(await screen.findByRole("option", { name: "Engenharia" }));
-    fireEvent.click(screen.getByRole("button", { name: /^Convidar$/i }));
+    fireEvent.click(submitButton());
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
     expect(mutateAsync).toHaveBeenCalledWith(
-      expect.objectContaining({
-        email: "op@x.com",
-        role: "OPERATOR",
-        sectorId: "sector-1",
-      }),
+      expect.objectContaining({ email: "op@x.com", role: "OPERATOR", sectorId: "sector-1" }),
     );
   });
 
   it("does not invite a non-admin without an active sector selection", async () => {
-    wrap(<InviteUserDialog open onOpenChange={() => {}} />);
+    wrap(dialog(true));
     await userEvent.type(emailInput(), "operator@x.com");
-    fireEvent.click(screen.getByRole("button", { name: /^Convidar$/i }));
+    await userEvent.type(phoneInput(), PHONE);
+    fireEvent.click(submitButton());
     await waitFor(() =>
       expect(screen.getByText("Selecione o setor principal")).toBeTruthy(),
     );
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+});
+
+function rejectOnce(code: string, status: number) {
+  const response = new Response(JSON.stringify({ code }), { status });
+  mutateAsync.mockRejectedValueOnce(new HTTPError(response, new Request("https://x"), {} as never));
+}
+
+describe("InviteUserDialog phone", () => {
+  async function fillAdmin(phone?: string) {
+    await userEvent.type(emailInput(), "admin@x.com");
+    if (phone) await userEvent.type(phoneInput(), phone);
+    fireEvent.click(screen.getByRole("combobox", { name: "Perfil" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Administrador" }));
+    fireEvent.click(submitButton());
+  }
+
+  it("shows the dialog title and the phone field", () => {
+    wrap(dialog(true));
+    expect(screen.getByText("Cadastrar usuário")).toBeTruthy();
+    expect(phoneInput().getAttribute("type")).toBe("tel");
+  });
+
+  it("requires the phone and does not call the mutation without it", async () => {
+    wrap(dialog(true));
+    await fillAdmin();
+    await waitFor(() => expect(screen.getByText("Telefone obrigatório")).toBeTruthy());
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("sends the typed phone to the mutation", async () => {
+    wrap(dialog(true));
+    await fillAdmin(PHONE);
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ phone: PHONE }));
+  });
+
+  it("shows phone_taken next to the phone field", async () => {
+    rejectOnce("user.phone_taken", 409);
+    wrap(dialog(true));
+    await fillAdmin(PHONE);
+    expect(await screen.findByText("Este telefone já está em uso por outro usuário.")).toBeTruthy();
+  });
+
+  it("maps invalid_phone to the phone field error", async () => {
+    rejectOnce("user.invalid_phone", 400);
+    wrap(dialog(true));
+    await fillAdmin(PHONE);
+    expect(await screen.findByText("Telefone inválido. Use DDD + número, com ou sem +55.")).toBeTruthy();
+  });
+
+  it("asks for DDD + number when the phone is too short", async () => {
+    wrap(dialog(true));
+    await fillAdmin("99123");
+    expect(await screen.findByText("Informe DDD + número")).toBeTruthy();
     expect(mutateAsync).not.toHaveBeenCalled();
   });
 });

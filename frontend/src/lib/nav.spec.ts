@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { NAV, navItemsForRole, navLabelFor, navSection } from './nav';
+import { NAV, canAccessPath, navItemsForRole, navLabelFor, navSection } from './nav';
 
 // Every authenticated top-level route that the app exposes. The manifest is the
 // single source of truth for sidebar / topbar / command-palette, so it must
@@ -8,6 +8,7 @@ const KNOWN_ROUTES = [
   '/dashboard',
   '/caixa-de-entrada',
   '/nova-comunicacao',
+  '/whatsapp-equipe',
   '/demandas',
   '/comunicados',
   '/setores',
@@ -34,7 +35,7 @@ describe('NAV manifest', () => {
 
   it('organiza exatamente os oito módulos internos nos três grupos do painel', () => {
     expect(navSection('ops', 'ADMIN').map((item) => item.label)).toEqual([
-      'Visão geral', 'Caixa de entrada', 'Nova comunicação',
+      'Visão geral', 'Caixa de entrada', 'Nova comunicação', 'WhatsApp da equipe',
     ]);
     expect(navSection('sys', 'ADMIN').map((item) => item.label)).toEqual([
       'Demandas', 'Comunicados',
@@ -118,5 +119,33 @@ describe('navLabelFor', () => {
 
   it('returns the fallback for an unknown route', () => {
     expect(navLabelFor('/totally-unknown')).toBe('—');
+  });
+});
+
+describe('canAccessPath', () => {
+  it.each([
+    ['/contacts', 'VIEWER', false],
+    ['/dashboard', 'VIEWER', true],
+    ['/contacts', 'ADMIN', true],
+    ['/setores', 'ADMIN', true],
+    ['/setores', 'OPERATOR', false],
+    ['/setores/abc', 'ADMIN', true],
+    ['/rota-inexistente', 'ADMIN', false],
+  ] as const)('%s para %s → %s', (path, role, expected) => {
+    expect(canAccessPath(path, role)).toBe(expected);
+  });
+
+  it('sem papel nunca acessa', () => {
+    expect(canAccessPath('/dashboard', undefined)).toBe(false);
+  });
+});
+
+describe('NAV WhatsApp da equipe', () => {
+  it('mostra WhatsApp da equipe para ADMIN, SUPERVISOR e OPERATOR, não para VIEWER', () => {
+    expect(navSection('ops', 'SUPERVISOR').map((item) => item.to)).toContain('/whatsapp-equipe');
+    expect(navSection('ops', 'VIEWER').map((item) => item.to)).not.toContain('/whatsapp-equipe');
+    expect(canAccessPath('/whatsapp-equipe', 'OPERATOR')).toBe(true);
+    expect(canAccessPath('/whatsapp-equipe', 'VIEWER')).toBe(false);
+    expect(navLabelFor('/whatsapp-equipe')).toBe('WhatsApp da equipe');
   });
 });

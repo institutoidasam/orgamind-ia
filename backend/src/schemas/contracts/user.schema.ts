@@ -16,6 +16,8 @@ export const userSummarySchema = z.object({
     .nullable(),
   isActive: z.boolean(),
   lastLoginAt: z.string().nullable(),
+  // E.164 do WhatsApp do usuário; null em usuários anteriores ao campo.
+  phoneE164: z.string().nullable(),
   createdAt: z.string(),
   createdBy: z.object({ email: z.string() }).nullable(),
 });

@@ -679,6 +679,40 @@ async function neutralizeLiveCollisions(
   return doomed.length;
 }
 
+/**
+ * O usuário da equipe ligado ao gêmeo segue a pessoa: User.contactId é
+ * onDelete: SetNull — sem isto, todo deploy desligaria o usuário do contato.
+ * Se o sobrevivente JÁ tem usuário, o @unique recusaria: não pode virar
+ * failedPairs (exit != 0 bloqueia o deploy) — vai para conflicts ('user') e o
+ * usuário do perdedor fica sem contato (religa ao editar o telefone).
+ * As leituras valem no dry-run (o relatório mostra o conflito antes do
+ * --apply); a escrita só com apply, na transação do par, antes do delete.
+ */
+async function relinkTeamUser(
+  db: Db,
+  survivor: ContactRow,
+  loser: ContactRow,
+  apply: boolean,
+): Promise<string[]> {
+  const loserUser = await db.user.findFirst({
+    where: { contactId: loser.id },
+    select: { id: true },
+  });
+  if (!loserUser) return [];
+  const survivorUser = await db.user.findFirst({
+    where: { contactId: survivor.id },
+    select: { id: true },
+  });
+  if (survivorUser) return ['user'];
+  if (apply) {
+    await db.user.updateMany({
+      where: { contactId: loser.id },
+      data: { contactId: survivor.id },
+    });
+  }
+  return [];
+}
+
 async function mergePair(
   db: Db,
   survivor: ContactRow,
@@ -788,12 +822,10 @@ async function mergePair(
   // pode desaparecer com ele. Calculado sempre (o dry-run também reporta os
   // conflitos), aplicado só com --apply.
   const { data, conflicts } = mergeFields(survivor, loser, wonByRealTraffic);
+  conflicts.push(...(await relinkTeamUser(db, survivor, loser, apply)));
 
   if (apply) {
-    await db.contact.update({
-      where: { id: survivor.id },
-      data,
-    });
+    await db.contact.update({ where: { id: survivor.id }, data });
 
     for (const conversationId of touched) {
       // O resumo é derivado e só lê/reescreve a própria Conversation — roda

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'fs';
 import path from 'path';
 import { signIn } from './helpers/auth';
@@ -19,6 +19,18 @@ function fixturePath(name: string): string {
 
 const XLSX_MIME =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+/**
+ * Contatos voltou ao menu, na seção WhatsApp (spec
+ * 2026-10-15-orgamind-whatsapp-menu): o teste chega lá pelo sidebar.
+ */
+async function openContactsFromSidebar(page: Page): Promise<void> {
+  await page
+    .getByLabel('Navegação principal')
+    .getByRole('link', { name: 'Contatos', exact: true })
+    .click();
+  await expect(page).toHaveURL(/\/contacts$/);
+}
 
 test('import Excel and see contacts', async ({ page }) => {
   // Este teste não tem nada a dizer sobre autenticação: quer só uma sessão. A
@@ -74,8 +86,6 @@ test('import Excel and see contacts', async ({ page }) => {
     timeout: 60_000,
   });
 
-  // A rota legada de contatos continua acessível diretamente, embora não faça
-  // parte dos oito módulos exibidos na sidebar.
-  await page.goto('/contacts');
+  await openContactsFromSidebar(page);
   await expect(page.getByText('+5592987654321')).toBeVisible({ timeout: 10_000 });
 });

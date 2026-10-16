@@ -35,6 +35,7 @@ export function Sidebar({ collapsed, user, onNavigate }: Props) {
   const unreadTotal = unread.data?.count ?? 0;
   const work = navSection('ops', role);
   const followUp = navSection('sys', role);
+  const whatsapp = navSection('whatsapp', role);
   const administration = navSection('admin', role);
 
   return (
@@ -46,6 +47,7 @@ export function Sidebar({ collapsed, user, onNavigate }: Props) {
 
       <Section eyebrow="Trabalho" items={work} badges={{ '/caixa-de-entrada': unreadTotal }} collapsed={collapsed} isActive={isActive} onNavigate={onNavigate} />
       <Section eyebrow="Acompanhar" items={followUp} collapsed={collapsed} isActive={isActive} onNavigate={onNavigate} />
+      {whatsapp.length > 0 && <Section eyebrow="WhatsApp" items={whatsapp} collapsed={collapsed} isActive={isActive} onNavigate={onNavigate} />}
       {administration.length > 0 && <Section eyebrow="Administração" items={administration} collapsed={collapsed} isActive={isActive} onNavigate={onNavigate} />}
 
       <div className="flex-1" />

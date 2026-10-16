@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { NAV, navItemsForRole, navLabelFor, navSection } from './nav';
+import { NAV, canAccessPath, navItemsForRole, navLabelFor, navSection } from './nav';
 
 // Every authenticated top-level route that the app exposes. The manifest is the
 // single source of truth for sidebar / topbar / command-palette, so it must
@@ -62,7 +62,32 @@ describe('NAV manifest', () => {
     const dashboard = NAV.find((n) => n.to === '/dashboard');
     expect(dashboard?.roles).toContain('VIEWER');
   });
+});
 
+describe('NAV manifest — seção WhatsApp', () => {
+  it('mostra a seção WhatsApp do menu antigo para ADMIN e OPERATOR, na ordem antiga', () => {
+    for (const role of ['ADMIN', 'OPERATOR'] as const) {
+      expect(navSection('whatsapp', role).map((item) => item.to)).toEqual([
+        '/inbox', '/contacts', '/templates', '/segments', '/campaigns',
+      ]);
+    }
+  });
+
+  it('não mostra a seção WhatsApp para SUPERVISOR, VIEWER ou papel ausente', () => {
+    expect(navSection('whatsapp', 'SUPERVISOR')).toEqual([]);
+    expect(navSection('whatsapp', 'VIEWER')).toEqual([]);
+    expect(navSection('whatsapp', undefined)).toEqual([]);
+  });
+
+  it('mantém Imports, opt-in e Configurações fora de todas as seções, com breadcrumb', () => {
+    const inSidebar = (['ops', 'sys', 'whatsapp', 'admin'] as const).flatMap((s) =>
+      navSection(s, 'ADMIN').map((n) => n.to),
+    );
+    for (const route of ['/imports', '/consentimento', '/opt-in-links', '/configuracoes']) {
+      expect(inSidebar).not.toContain(route);
+      expect(navLabelFor(route)).not.toBe('—');
+    }
+  });
 });
 
 describe('NAV', () => {
@@ -85,7 +110,7 @@ describe('telas de opt-in: fora do menu, vivas na rota', () => {
   const OPTIN_ROUTES = ['/consentimento', '/opt-in-links'];
 
   it('não aparecem na barra lateral (nenhuma seção)', () => {
-    const inSidebar = (['ops', 'sys', 'admin'] as const).flatMap((s) =>
+    const inSidebar = (['ops', 'sys', 'whatsapp', 'admin'] as const).flatMap((s) =>
       navSection(s, 'ADMIN').map((n) => n.to),
     );
     for (const route of OPTIN_ROUTES) {
@@ -118,5 +143,21 @@ describe('navLabelFor', () => {
 
   it('returns the fallback for an unknown route', () => {
     expect(navLabelFor('/totally-unknown')).toBe('—');
+  });
+});
+
+describe('canAccessPath', () => {
+  it('libera a rota pelo papel do NAV, inclusive em rota aninhada', () => {
+    expect(canAccessPath('/contacts', 'OPERATOR')).toBe(true);
+    expect(canAccessPath('/campaigns/new', 'ADMIN')).toBe(true);
+    expect(canAccessPath('/dashboard', 'VIEWER')).toBe(true);
+  });
+
+  it('nega rota legada a SUPERVISOR/VIEWER, administração a OPERATOR, e papel ausente ou rota fora do NAV', () => {
+    expect(canAccessPath('/contacts', 'VIEWER')).toBe(false);
+    expect(canAccessPath('/campaigns', 'SUPERVISOR')).toBe(false);
+    expect(canAccessPath('/setores', 'OPERATOR')).toBe(false);
+    expect(canAccessPath('/contacts', undefined)).toBe(false);
+    expect(canAccessPath('/rota-inexistente', 'ADMIN')).toBe(false);
   });
 });

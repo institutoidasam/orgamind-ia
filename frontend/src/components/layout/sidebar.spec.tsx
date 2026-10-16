@@ -76,3 +76,42 @@ describe('Sidebar', () => {
     expect(screen.getByRole('link', { name: 'Visão geral' })).toHaveAttribute('aria-current', 'page');
   });
 });
+
+describe('Sidebar — seção WhatsApp', () => {
+  it('mostra a seção WhatsApp só para ADMIN e OPERATOR, sem Imports', () => {
+    currentPath = '/contacts';
+    for (const [role, visible] of [['ADMIN', true], ['OPERATOR', true], ['SUPERVISOR', false], ['VIEWER', false]] as const) {
+      const { unmount } = render(<Sidebar collapsed={false} user={{ email: `${role}@orgamind.com`, name: role, role }} />);
+      if (visible) {
+        expect(screen.getByText('WhatsApp')).toBeInTheDocument();
+        expect(screen.getByRole('link', { name: 'Contatos' })).toHaveAttribute('aria-current', 'page');
+        for (const name of ['Inbox externo', 'Templates', 'Segmentos', 'Campanhas']) {
+          expect(screen.getByRole('link', { name })).toBeInTheDocument();
+        }
+      } else {
+        expect(screen.queryByText('WhatsApp')).not.toBeInTheDocument();
+        expect(screen.queryByRole('link', { name: 'Contatos' })).not.toBeInTheDocument();
+      }
+      expect(screen.queryByRole('link', { name: 'Imports' })).not.toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it('marca Campanhas em rota aninhada e fecha a gaveta ao navegar pela seção WhatsApp', () => {
+    currentPath = '/campaigns/cmp-1';
+    const onNavigate = vi.fn();
+    render(<Sidebar collapsed={false} user={{ email: 'op@orgamind.com', name: 'Op', role: 'OPERATOR' }} onNavigate={onNavigate} />);
+
+    expect(screen.getByRole('link', { name: 'Campanhas' })).toHaveAttribute('aria-current', 'page');
+    fireEvent.click(screen.getByRole('link', { name: 'Contatos' }));
+    expect(onNavigate).toHaveBeenCalledOnce();
+  });
+
+  it('mantém tooltip nos links da seção WhatsApp com a barra recolhida', () => {
+    currentPath = '/dashboard';
+    render(<Sidebar collapsed user={{ email: 'ana@orgamind.com', name: 'Ana', role: 'ADMIN' }} />);
+
+    expect(screen.queryByText('WhatsApp')).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Contatos' })).toHaveAttribute('title', 'Contatos');
+  });
+});

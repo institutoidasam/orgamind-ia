@@ -24,7 +24,7 @@ import {
  */
 
 /** Sidebar grouping. Order here is the order sections render in the sidebar. */
-export type NavSection = 'ops' | 'sys' | 'admin';
+export type NavSection = 'ops' | 'sys' | 'whatsapp' | 'admin';
 
 export type NavRole = 'ADMIN' | 'SUPERVISOR' | 'OPERATOR' | 'VIEWER';
 
@@ -81,19 +81,23 @@ export const NAV: NavItem[] = [
   { to: '/users', label: 'Usuários', icon: UserCog, section: 'admin', roles: ['ADMIN'] },
   { to: '/connect', label: 'Números e canais', icon: Wifi, section: 'admin', roles: ['ADMIN'] },
 
-  // Telas legadas preservam URLs e breadcrumbs, mas não fazem parte do painel
-  // interno. O backend legado só aceita ADMIN/OPERATOR; SUPERVISOR/VIEWER não
-  // as veem na paleta para não receberem atalhos que terminariam em 403.
-  { to: '/inbox', label: 'Inbox externo', icon: MessageSquare, section: 'ops', roles: LEGACY_ROLES, hideInSidebar: true },
-  { to: '/contacts', label: 'Contatos', icon: Users, section: 'ops', roles: LEGACY_ROLES, hideInSidebar: true },
-  { to: '/templates', label: 'Templates', icon: FileText, section: 'ops', roles: LEGACY_ROLES, hideInSidebar: true },
-  { to: '/segments', label: 'Segmentos', icon: Filter, section: 'ops', roles: LEGACY_ROLES, hideInSidebar: true },
-  { to: '/campaigns', label: 'Campanhas', icon: Send, section: 'ops', roles: LEGACY_ROLES, hideInSidebar: true },
+  // Seção WhatsApp — o fluxo de contato externo da versão antiga (spec
+  // 2026-10-15-orgamind-whatsapp-menu): cadastrar a pessoa com telefone,
+  // enviar por campanha e seguir a conversa no Inbox. O backend legado só
+  // aceita ADMIN/OPERATOR; SUPERVISOR/VIEWER não veem a seção nem a paleta
+  // para não receberem atalhos que terminariam em 403.
+  { to: '/inbox', label: 'Inbox externo', icon: MessageSquare, section: 'whatsapp', roles: LEGACY_ROLES },
+  { to: '/contacts', label: 'Contatos', icon: Users, section: 'whatsapp', roles: LEGACY_ROLES },
+  { to: '/templates', label: 'Templates', icon: FileText, section: 'whatsapp', roles: LEGACY_ROLES },
+  { to: '/segments', label: 'Segmentos', icon: Filter, section: 'whatsapp', roles: LEGACY_ROLES },
+  { to: '/campaigns', label: 'Campanhas', icon: Send, section: 'whatsapp', roles: LEGACY_ROLES },
+  // Contatos já tem os botões de importar (`contacts.tsx`), então Imports
+  // fica fora do menu — alcançável por ali, pela URL e pela paleta.
   {
     to: '/imports',
     label: 'Imports',
     icon: FileSpreadsheet,
-    section: 'ops',
+    section: 'whatsapp',
     roles: LEGACY_ROLES,
     hideInSidebar: true,
   },
@@ -159,15 +163,28 @@ export function isNavActive(path: string, to: string): boolean {
   return path === to || path.startsWith(`${to}/`);
 }
 
+/** Entrada do NAV dona de `path` — prefixo mais longo primeiro (`/campaigns` vence `/`). */
+function navItemFor(path: string): NavItem | undefined {
+  return [...NAV]
+    .sort((a, b) => b.to.length - a.to.length)
+    .find((n) => isNavActive(path, n.to));
+}
+
+/**
+ * O papel pode abrir `path`? Decide pelo `roles` da entrada do NAV dona da
+ * rota. Rota fora do manifesto ou papel ausente: não — quem chama esconde o
+ * atalho em vez de levar a uma tela cujo backend responde 403.
+ */
+export function canAccessPath(path: string, role?: NavRole): boolean {
+  if (!role) return false;
+  return Boolean(navItemFor(path)?.roles?.includes(role));
+}
+
 /**
  * Breadcrumb label for a path. Falls back to "—" when nothing matches.
  * A campaign detail page (`/campaigns/:id`) reads as "Campanha" (singular).
  */
 export function navLabelFor(path: string): string {
   if (path.startsWith('/campaigns/')) return 'Campanha';
-  // Longest `to` first so `/campaigns` beats `/` on nested paths.
-  const match = [...NAV]
-    .sort((a, b) => b.to.length - a.to.length)
-    .find((n) => isNavActive(path, n.to));
-  return match?.label ?? '—';
+  return navItemFor(path)?.label ?? '—';
 }

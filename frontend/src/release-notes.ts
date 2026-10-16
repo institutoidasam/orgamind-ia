@@ -31,6 +31,17 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.10.15',
+    date: '2026-10-15',
+    title: 'WhatsApp de volta ao menu',
+    items: [
+      {
+        text: 'Contatos, Inbox externo, Templates, Segmentos e Campanhas voltaram ao menu, na seção WhatsApp: cadastre a pessoa com o telefone e envie a mensagem como na versão anterior.',
+        where: '/contacts',
+      },
+    ],
+  },
+  {
     version: '2026.10.10',
     date: '2026-10-10',
     title: 'Comunicação entre setores no OrgaMind',

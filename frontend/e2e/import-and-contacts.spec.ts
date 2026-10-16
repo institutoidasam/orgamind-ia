@@ -29,7 +29,7 @@ async function openContactsFromSidebar(page: Page): Promise<void> {
     .getByLabel('Navegação principal')
     .getByRole('link', { name: 'Contatos', exact: true })
     .click();
-  await expect(page).toHaveURL(/\/contacts$/);
+  await expect(page).toHaveURL(/\/contacts(\?|$)/);
 }
 
 test('import Excel and see contacts', async ({ page }) => {

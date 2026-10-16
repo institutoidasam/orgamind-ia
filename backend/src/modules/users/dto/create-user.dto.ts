@@ -10,7 +10,14 @@ export const createUserSchema = z.object({
   role: z
     .enum(['ADMIN', 'OPERATOR', 'SUPERVISOR', 'VIEWER'])
     .default('OPERATOR'),
-  sectorId: z.string().optional(),
+  // O front envia `sectorId: null` para ADMIN "Sem setor". Normaliza para
+  // undefined: o UsersService só conhece `string | undefined` e a regra
+  // "não-ADMIN exige setor" continua valendo (null → undefined → erro).
+  sectorId: z
+    .string()
+    .nullable()
+    .optional()
+    .transform((value) => value ?? undefined),
   // WhatsApp do usuário: obrigatório no convite. Só apara aqui; a normalização
   // para E.164 (e o erro user.invalid_phone) é do UserPhoneService.
   phone: z.string().trim().min(1).max(40),

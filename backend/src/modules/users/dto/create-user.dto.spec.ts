@@ -60,3 +60,25 @@ describe('updateUserSchema — phone', () => {
     expect(updateUserSchema.safeParse({ phone }).success).toBe(false);
   });
 });
+
+describe('createUserSchema — sectorId', () => {
+  const base = { email: 'a@b.com', phone: PHONE, role: 'ADMIN' };
+
+  it('aceita sectorId null ("Sem setor") e normaliza para undefined', () => {
+    // Regression: o front envia `sectorId: null` para ADMIN sem setor; antes
+    // o schema recusava com "expected string, received null" (POST /users 400).
+    const result = createUserSchema.safeParse({ ...base, sectorId: null });
+    expect(result.success).toBe(true);
+    expect(result.data?.sectorId).toBeUndefined();
+  });
+
+  it('preserva sectorId string', () => {
+    expect(
+      createUserSchema.parse({ ...base, sectorId: 'sector-1' }).sectorId,
+    ).toBe('sector-1');
+  });
+
+  it('mantém sectorId ausente como undefined', () => {
+    expect(createUserSchema.parse(base).sectorId).toBeUndefined();
+  });
+});

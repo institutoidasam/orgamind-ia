@@ -11,6 +11,9 @@ export const createUserSchema = z.object({
     .enum(['ADMIN', 'OPERATOR', 'SUPERVISOR', 'VIEWER'])
     .default('OPERATOR'),
   sectorId: z.string().optional(),
+  // WhatsApp do usuário: obrigatório no convite. Só apara aqui; a normalização
+  // para E.164 (e o erro user.invalid_phone) é do UserPhoneService.
+  phone: z.string().trim().min(1).max(40),
 });
 
 export class CreateUserDto extends createZodDto(createUserSchema) {}

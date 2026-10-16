@@ -13,6 +13,7 @@ import { ChatEventsService } from './chat-events.service';
 import { WhatsappProvidersService } from '../whatsapp-providers/whatsapp-providers.service';
 import { WhatsappSendError } from '../whatsapp-providers/errors/whatsapp.errors';
 import { toConversationSummary } from './conversation-summary.mapper';
+import { resolveConversationForOutbound } from './resolve-conversation';
 import { SESSION_WINDOW_MS, hasSessionWindow } from './session-window';
 import type { ListConversationsQuery, ListMessagesQuery, SendReplyInput } from '../../schemas/contracts/chat.schema';
 
@@ -61,6 +62,22 @@ const CHAT_TRANSIENT_FAILURE_MESSAGE =
  */
 const CHAT_INDETERMINATE_CODES = new Set(['gozap.timeout', 'zernio.timeout', 'twilio.timeout']);
 
+/**
+ * Códigos que o recado da equipe NUNCA reenvia: a requisição pode ter partido e
+ * a mensagem ter saído. Mais largo que CHAT_INDETERMINATE_CODES, que decide só a
+ * bolha do sendReply e por isso não muda aqui. Inclui o timeout da Evolution, o
+ * `evolution.unknown` (fallback do evolution-error-mapper, onde cai erro de rede
+ * sem resposta — socket hang up, ECONNRESET, EAI_AGAIN — que não prova que nada
+ * saiu; o GoZap trata o mesmo caso como timeout) e o `sending_stuck` do
+ * reconciler. Qualquer outro `*.timeout` também nunca é reenviado.
+ */
+const TEAM_NEVER_REDISPATCH_CODES = new Set([
+  ...CHAT_INDETERMINATE_CODES,
+  'evolution.timeout',
+  'evolution.unknown',
+  'sending_stuck',
+]);
+
 const CHAT_INDETERMINATE_MESSAGE =
   'Sem confirmação do provedor: a mensagem PODE ter sido enviada. Confira a conversa no WhatsApp antes de mandar de novo — reenviar pode duplicar.';
 
@@ -71,7 +88,7 @@ const CHAT_INDETERMINATE_MESSAGE =
  * "Este canal não está configurado como Evolution" — um erro de implementação
  * vazando para a tela de quem só queria responder uma mensagem.
  */
-class ChatProviderNoReplyError extends ConflictError {
+export class ChatProviderNoReplyError extends ConflictError {
   constructor(provider: string) {
     super(
       `O provedor ${provider} deste canal não permite responder pelo inbox. Responda pelo aparelho/painel do provedor, ou use um canal que suporte resposta.`,
@@ -85,6 +102,25 @@ class ChatProviderNoReplyError extends ConflictError {
 type OutboundConversation = NonNullable<Awaited<ReturnType<ChatRepository['getConversationForSend']>>>;
 // Quoted reply fields after the undefined -> null normalization.
 type QuotedFields = { quotedWaMessageId: string | null; quotedPreview: string | null };
+// Recado da equipe nunca cita mensagem.
+const NO_QUOTE: QuotedFields = { quotedWaMessageId: null, quotedPreview: null };
+
+/**
+ * Desfecho do envio ao provedor. `retryable` só quando o erro PROVA que nada
+ * saiu (WhatsappSendError não fatal, com código e fora dos indeterminados):
+ * é o que o processor da equipe usa para decidir se a fila pode reenviar.
+ */
+type OutboundResult =
+  | { sent: true }
+  | { sent: false; errorCode: string | null; retryable: boolean };
+
+/** Resultado da fase 2 do recado da equipe (`sendTeamMessage`). */
+export type TeamSendResult = {
+  messageId: string;
+  sent: boolean;
+  errorCode: string | null;
+  retryable: boolean;
+};
 
 @Injectable()
 export class ChatService {
@@ -166,6 +202,119 @@ export class ChatService {
   }
 
   /**
+   * Fase 1 do recado da equipe: conversa resolvida/criada (contato + canal),
+   * Message QUEUED gravada com o autor e bot pausado (handoff, como na resposta
+   * humana). NÃO chama o provedor nem publica: o processor grava o messageId no
+   * destinatário ANTES do envio, para a retentativa reaproveitar esta linha.
+   * Sem guard de janela: só GOZAP/EVOLUTION chegam aqui (TEAM_PROVIDERS), ambos sem janela.
+   */
+  async prepareTeamMessage(args: {
+    instanceId: string;
+    contactId: string | null;
+    phoneE164: string;
+    text: string;
+    authorUserId: string | null;
+  }): Promise<{ messageId: string }> {
+    const resolved = await resolveConversationForOutbound(this.prisma, {
+      instanceId: args.instanceId,
+      contactId: args.contactId,
+      phoneE164: args.phoneE164,
+    });
+    const conv = await this.repo.getConversationForSend(resolved.id);
+    if (!conv) throw new NotFoundError('Conversation', resolved.id);
+    this.assertChatSendSupported(conv);
+    const messageId = await this.repo.createOutboundMessage({
+      conversationId: resolved.id,
+      instanceId: conv.instanceId,
+      contactId: conv.contactId,
+      content: args.text,
+      authorUserId: args.authorUserId,
+      botId: null,
+      ...NO_QUOTE,
+    });
+    await this.repo.setBotPaused(resolved.id);
+    return { messageId };
+  }
+
+  /**
+   * Fase 2: envia a Message EXISTENTE (1ª vez ou re-despacho de uma linha FAILED).
+   * QUEUED/FAILED vai para SENDING ANTES do provedor: QUEUED = "não começou"
+   * (reenvio seguro); SENDING = "pode ter saído", e o processor não a reenvia.
+   */
+  async sendTeamMessage(args: {
+    messageId: string;
+    text: string;
+  }): Promise<TeamSendResult> {
+    const { messageId, text } = args;
+    const conv = await this.teamConversationFor(messageId);
+    await this.claimTeamMessage(messageId);
+    const out = await this.dispatchOutboundResult(
+      conv,
+      messageId,
+      text,
+      NO_QUOTE,
+    );
+    await this.events.publish({
+      type: 'message.created',
+      conversationId: conv.id,
+      instanceId: conv.instanceId,
+      messageId,
+    });
+    if (!out.sent)
+      return {
+        messageId,
+        sent: false,
+        errorCode: out.errorCode,
+        retryable: out.retryable,
+      };
+    await this.repo.touchConversationOutbound(conv.id, text);
+    await this.events.publish({
+      type: 'conversation.updated',
+      conversationId: conv.id,
+      instanceId: conv.instanceId,
+    });
+    return { messageId, sent: true, errorCode: null, retryable: false };
+  }
+
+  /** A conversa da Message do recado, já com o canal conferido (recusa clara se ele não tem chat). */
+  private async teamConversationFor(
+    messageId: string,
+  ): Promise<OutboundConversation> {
+    const msg = await this.prisma.message.findUnique({
+      where: { id: messageId },
+      select: { conversationId: true },
+    });
+    if (!msg?.conversationId) throw new NotFoundError('Message', messageId);
+    const conv = await this.repo.getConversationForSend(msg.conversationId);
+    if (!conv) throw new NotFoundError('Conversation', msg.conversationId);
+    this.assertChatSendSupported(conv);
+    return conv;
+  }
+
+  /**
+   * Claim atômico (como o da campanha): só quem move QUEUED/FAILED → SENDING envia.
+   * count 0 = outra execução (job travado reexecutado em paralelo) já pegou a linha.
+   * sendingAt deixa o sending-reconciler fechar como FAILED 'sending_stuck' uma linha presa > 10 min.
+   */
+  private async claimTeamMessage(messageId: string): Promise<void> {
+    const claim = await this.prisma.message.updateMany({
+      where: { id: messageId, status: { in: ['QUEUED', 'FAILED'] } },
+      data: {
+        status: 'SENDING',
+        sendingAt: new Date(),
+        failedAt: null,
+        errorMessage: null,
+        errorCode: null,
+      },
+    });
+    if (claim.count === 0)
+      throw new ConflictError(
+        'Team message already claimed',
+        'team_whatsapp.not_claimed',
+      );
+  }
+
+  /**
    * Sends the outbound text to the provider and reconciles the persisted message
    * status. Returns true when the provider accepted it (marked SENT), false when
    * it failed (marked FAILED). Never throws on provider errors — a failed send is
@@ -177,6 +326,21 @@ export class ChatService {
     text: string,
     quoted: QuotedFields,
   ): Promise<boolean> {
+    return (await this.dispatchOutboundResult(conv, messageId, text, quoted))
+      .sent;
+  }
+
+  /**
+   * Corpo de `dispatchOutbound`, devolvendo também o código cru do provedor e
+   * se a falha é retentável (usado pelo recado da equipe). Mesmos efeitos:
+   * SENT em sucesso, FAILED em erro, nunca lança em erro de provedor.
+   */
+  private async dispatchOutboundResult(
+    conv: OutboundConversation,
+    messageId: string,
+    text: string,
+    quoted: QuotedFields,
+  ): Promise<OutboundResult> {
     // Send to the real phone when known, else to the remoteJid JID (works for
     // unresolved @lid — Evolution accepts a full JID in the number field).
     //
@@ -215,15 +379,48 @@ export class ChatService {
             instanceName: this.requireEvolutionInstanceName(conv), toE164: recipient, text, ...quoted,
           });
       await this.repo.markChatSent(messageId, conv.instanceId, result.providerMessageId, result.acceptedAt);
-      return true;
+      return { sent: true };
     } catch (err) {
       // Grava o código CRU do provedor (gozap.timeout, evolution.not_connected…)
       // junto da mensagem já traduzida para PT-BR — sem ele, uma falha relatada
       // pelo operador só era diagnosticável olhando o log da aplicação. Mesma
       // coluna que o caminho de campanha já preenche (ver providerErrorCodeFor).
       await this.repo.markChatFailed(messageId, this.chatFailureMessage(err, useRegistry), this.providerErrorCodeFor(err));
-      return false;
+      return this.failedOutbound(err);
     }
+  }
+
+  /** Desfecho de um envio que falhou: o código cru do provedor e se a fila pode reenviar. */
+  private failedOutbound(err: unknown): OutboundResult {
+    return {
+      sent: false,
+      errorCode: this.providerErrorCodeFor(err),
+      retryable: this.isRetryableSendError(err),
+    };
+  }
+
+  /**
+   * "Pode reenviar" uma Message FAILED com este código? Só quando há código e
+   * ele não está em TEAM_NEVER_REDISPATCH_CODES nem é um `*.timeout` (a
+   * requisição partiu, pode ter saído). `sending_stuck` = o reconciler fechou
+   * uma linha presa em SENDING — também pode ter saído. Sem código não há como
+   * provar que nada saiu.
+   */
+  isRedispatchableFailure(code: string | null): boolean {
+    return (
+      code !== null &&
+      !TEAM_NEVER_REDISPATCH_CODES.has(code) &&
+      !code.endsWith('.timeout')
+    );
+  }
+
+  /** Erro de provedor que PROVA que nada saiu e que vale reenviar (não fatal, código redispatchável). */
+  private isRetryableSendError(err: unknown): boolean {
+    return (
+      err instanceof WhatsappSendError &&
+      !err.fatal &&
+      this.isRedispatchableFailure(this.providerErrorCodeFor(err))
+    );
   }
 
   /** O `errorCode` cru do provedor por trás do erro, ou `null` quando o erro não carrega um. */

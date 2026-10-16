@@ -34,6 +34,7 @@ import { ExcelImportModule } from './modules/excel-import/excel-import.module';
 import { ExcelImportProcessor } from './modules/excel-import/excel-import.processor';
 import { BotsModule } from './modules/bots/bots.module';
 import { BotReplyProcessor } from './modules/bots/bot-reply.processor';
+import { TeamWhatsappSendProcessor } from './modules/team-whatsapp/team-whatsapp-send.processor';
 import { ConsentModule } from './modules/consent/consent.module';
 import { OrganizationModule } from './modules/organization/organization.module';
 import { serializeErrorForLog } from './shared/logging/pino-error-serializer';
@@ -115,6 +116,9 @@ import { serializeErrorForLog } from './shared/logging/pino-error-serializer';
     // module; a duplicate @Processor crashes the whole worker).
     ExcelImportProcessor,
     BotReplyProcessor,
+    // TEAM_WHATSAPP_SEND consumer — SÓ aqui, como os demais. ChatService vem do
+    // ChatModule, ConsentService do ConsentModule (@Global), REDIS_CLIENT do RedisModule.
+    TeamWhatsappSendProcessor,
   ],
 })
 export class WorkerModule {}

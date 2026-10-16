@@ -1,6 +1,6 @@
 import { render, screen, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@tanstack/react-router', () => ({
   Link: ({ children, to, onClick }: { children: React.ReactNode; to: string; onClick?: () => void }) => (
@@ -28,14 +28,24 @@ vi.mock('@/release-notes', () => ({
       items: [
         { text: 'Item com link.', where: '/contacts' },
         { text: 'Item sem link.' },
+        { text: 'Item da visão geral.', where: '/dashboard' },
       ],
     },
   ],
 }));
 
+import { useAuthStore } from '@/stores/auth.store';
 import { ReleaseNotesDialog } from './release-notes-dialog';
 
-afterEach(cleanup);
+function signInAs(role: 'ADMIN' | 'SUPERVISOR' | 'OPERATOR' | 'VIEWER') {
+  useAuthStore.setState({ user: { id: 'u1', email: 'u@orgamind.com', name: 'U', role } });
+}
+
+beforeEach(() => signInAs('ADMIN'));
+afterEach(() => {
+  cleanup();
+  useAuthStore.setState({ user: null });
+});
 
 describe('ReleaseNotesDialog', () => {
   it('não renderiza nada quando open é false', () => {
@@ -51,18 +61,27 @@ describe('ReleaseNotesDialog', () => {
     expect(screen.getByText('Item sem link.')).toBeInTheDocument();
   });
 
-  it('mostra "Ver" só no item que tem `where`, apontando para a rota', () => {
+  it('mostra "Ver" só nos itens que têm `where`, apontando para a rota', () => {
     render(<ReleaseNotesDialog open onOpenChange={() => {}} />);
-    const links = screen.getAllByText('Ver');
+    const links = screen.getAllByRole('link', { name: 'Ver' });
+    expect(links.map((l) => l.getAttribute('href'))).toEqual(['/contacts', '/dashboard']);
+  });
+
+  it('esconde "Ver" de rota que o papel não acessa, mantendo o texto', () => {
+    signInAs('VIEWER');
+    render(<ReleaseNotesDialog open onOpenChange={() => {}} />);
+
+    expect(screen.getByText(/Item com link\./)).toBeInTheDocument();
+    const links = screen.getAllByRole('link', { name: 'Ver' });
     expect(links).toHaveLength(1);
-    expect(links[0]).toHaveAttribute('href', '/contacts');
+    expect(links[0]).toHaveAttribute('href', '/dashboard');
   });
 
   it('clicar em "Ver" fecha o diálogo', async () => {
     const onOpenChange = vi.fn();
     const user = userEvent.setup();
     render(<ReleaseNotesDialog open onOpenChange={onOpenChange} />);
-    await user.click(screen.getByText('Ver'));
+    await user.click(screen.getAllByRole('link', { name: 'Ver' })[0]);
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 

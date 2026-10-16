@@ -8,14 +8,45 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { RELEASE_NOTES } from '@/release-notes';
+import { RELEASE_NOTES, type ReleaseNoteItem } from '@/release-notes';
 import { formatDatePtBr } from '@/lib/format-date-ptbr';
 import { PRODUCT_NAME } from '@/lib/brand';
+import { canAccessPath, type NavRole } from '@/lib/nav';
+import { useAuthStore } from '@/stores/auth.store';
 
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 };
+
+/**
+ * Um item da lista. O texto aparece para todos; "Ver" só para quem o papel
+ * consegue abrir (`canAccessPath`) — evita levar o usuário a uma tela que o
+ * backend recusa com 403.
+ */
+function ReleaseItem({ item, onClose }: { item: ReleaseNoteItem; onClose: () => void }) {
+  const role = useAuthStore((s) => s.user?.role) as NavRole | undefined;
+  return (
+    <li className="flex items-start gap-2 text-sm text-muted-foreground">
+      <span className="mt-1.5 size-1 shrink-0 rounded-full bg-current" aria-hidden />
+      <span className="flex-1">
+        {item.text}
+        {item.where && canAccessPath(item.where, role) && (
+          <>
+            {' '}
+            <Link
+              to={item.where}
+              onClick={onClose}
+              className="font-medium text-foreground underline underline-offset-2"
+            >
+              Ver
+            </Link>
+          </>
+        )}
+      </span>
+    </li>
+  );
+}
 
 /**
  * Lista as entradas de `RELEASE_NOTES` — data formatada em PT-BR e link "Ver"
@@ -48,24 +79,7 @@ export function ReleaseNotesDialog({ open, onOpenChange }: Props) {
               </div>
               <ul className="mt-1.5 space-y-1.5">
                 {release.items.map((item, idx) => (
-                  <li key={idx} className="flex items-start gap-2 text-sm text-muted-foreground">
-                    <span className="mt-1.5 size-1 shrink-0 rounded-full bg-current" aria-hidden />
-                    <span className="flex-1">
-                      {item.text}
-                      {item.where && (
-                        <>
-                          {' '}
-                          <Link
-                            to={item.where}
-                            onClick={() => onOpenChange(false)}
-                            className="font-medium text-foreground underline underline-offset-2"
-                          >
-                            Ver
-                          </Link>
-                        </>
-                      )}
-                    </span>
-                  </li>
+                  <ReleaseItem key={idx} item={item} onClose={() => onOpenChange(false)} />
                 ))}
               </ul>
             </section>

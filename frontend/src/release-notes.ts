@@ -31,6 +31,25 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.10.19',
+    date: '2026-10-19',
+    title: 'WhatsApp da equipe: canais mais claros e motivos dos envios',
+    items: [
+      {
+        text: 'No "Enviar WhatsApp", os canais desconectados ou aguardando conexão aparecem desabilitados, com a situação de cada um. Havendo um só canal conectado, ele já vem escolhido.',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'Em "Envios recentes", o botão "Ver motivos" mostra quem falhou ou foi pulado e por quê.',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: '"Copiar senha" da senha temporária agora funciona também quando o navegador bloqueia a área de transferência: a senha fica selecionada para você copiar com Ctrl+C.',
+        where: '/users',
+      },
+    ],
+  },
+  {
     version: '2026.10.16',
     date: '2026-10-16',
     title: 'Telefone no cadastro e WhatsApp para a equipe',

@@ -8,11 +8,15 @@ const personSchema = z.object({
   email: z.string(),
 });
 
+export const teamConnectionStateSchema = z.enum(['open', 'connecting', 'close']);
+
 export const teamChannelSchema = z.object({
   id: z.string(),
   name: z.string(),
   phoneE164: z.string().nullable(),
   provider: z.enum(['GOZAP', 'EVOLUTION']),
+  // null = sem evento recente (eventos expiram em 7 dias); não significa desconectado.
+  connectionState: teamConnectionStateSchema.nullable(),
 });
 
 export const teamMemberSchema = personSchema.extend({
@@ -51,6 +55,13 @@ export const dispatchCountsSchema = z.object({
   skipped: z.number().int(),
 });
 
+export const dispatchIssueSchema = z.object({
+  name: z.string(),
+  status: z.enum(['FAILED', 'SKIPPED']),
+  // errorCode quando FAILED; 'NO_PHONE' | 'SUPPRESSED' quando SKIPPED.
+  reason: z.string().nullable(),
+});
+
 export const dispatchListSchema = z.object({
   items: z
     .object({
@@ -65,6 +76,8 @@ export const dispatchListSchema = z.object({
       // null = canal removido depois do envio.
       channel: z.object({ id: z.string(), name: z.string() }).nullable(),
       counts: dispatchCountsSchema,
+      // FAILED antes de SKIPPED; dentro do grupo, por nome. Sem problema = [].
+      issues: dispatchIssueSchema.array(),
     })
     .array(),
 });

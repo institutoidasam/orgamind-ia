@@ -1,12 +1,28 @@
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
+import { issueLabel } from '../error-messages';
 import type { DispatchList } from '../schemas';
 
 type Item = DispatchList['items'][number];
 
 function countsText({ queued, sent, failed, skipped }: Item['counts']): string {
   return `Enfileirados ${queued} · Enviados ${sent} · Falhas ${failed} · Pulados ${skipped}`;
+}
+
+function IssuesDetails({ issues }: { issues: Item['issues'] }) {
+  if (issues.length === 0) return null;
+  return (
+    <details className="mt-1">
+      <summary className="cursor-pointer">Ver motivos</summary>
+      <ul className="mt-1 list-disc pl-4">
+        {issues.map((issue) => {
+          const text = `${issue.name} — ${issueLabel(issue)}`;
+          return <li key={`${issue.status}:${text}`}>{text}</li>;
+        })}
+      </ul>
+    </details>
+  );
 }
 
 function DispatchRow({ item }: { item: Item }) {
@@ -16,7 +32,10 @@ function DispatchRow({ item }: { item: Item }) {
       <TableCell>{item.author?.name ?? item.author?.email ?? '—'}</TableCell>
       <TableCell>{item.target.label}</TableCell>
       <TableCell>{item.channel?.name ?? 'canal removido'}</TableCell>
-      <TableCell className="text-sm">{countsText(item.counts)}</TableCell>
+      <TableCell className="text-sm">
+        {countsText(item.counts)}
+        <IssuesDetails issues={item.issues} />
+      </TableCell>
     </TableRow>
   );
 }

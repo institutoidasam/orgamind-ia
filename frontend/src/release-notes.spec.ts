@@ -177,9 +177,10 @@ describe('entregas registradas (uma entrada por fase visível)', () => {
   });
 });
 
-describe('novidade 2026.10.16', () => {
-  it('é a primeira entrada e aponta para /whatsapp-equipe', () => {
-    expect(RELEASE_NOTES[0].version).toBe('2026.10.16');
-    expect(RELEASE_NOTES[0].items.some((i) => i.where === '/whatsapp-equipe')).toBe(true);
+describe('novidade 2026.10.19', () => {
+  it('é a primeira entrada e cobre /whatsapp-equipe e /users', () => {
+    expect(RELEASE_NOTES[0].version).toBe('2026.10.19');
+    const where = RELEASE_NOTES[0].items.map((i) => i.where);
+    expect(where).toEqual(['/whatsapp-equipe', '/whatsapp-equipe', '/users']);
   });
 });

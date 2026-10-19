@@ -43,6 +43,7 @@ const dispatches = {
       target: { type: 'sector' as const, id: 's1', label: 'Compras' },
       channel: { id: 'ch1', name: 'GoZap Principal' },
       counts: { queued: 1, sent: 2, failed: 3, skipped: 4 },
+      issues: [],
     },
     {
       id: 'd2', createdAt: '2026-10-15T12:00:00.000Z',
@@ -50,6 +51,7 @@ const dispatches = {
       target: { type: 'user' as const, id: 'u1', label: 'Ana' },
       channel: null,
       counts: { queued: 0, sent: 1, failed: 0, skipped: 0 },
+      issues: [],
     },
   ],
 };
@@ -122,6 +124,38 @@ describe('WhatsApp da equipe: envios recentes', () => {
     const second = screen.getByRole('row', { name: /canal removido/ });
     expect(second).toHaveTextContent('Ana');
     expect(second).toHaveTextContent('—');
+  });
+
+  it('lista os motivos de falha e pulo em "Ver motivos"; sem problemas não mostra', async () => {
+    const [first, second] = dispatches.items;
+    useTeamDispatches.mockReturnValue({
+      data: {
+        items: [
+          {
+            ...first,
+            issues: [
+              { name: 'Bia', status: 'FAILED' as const, reason: 'evolution.session_closed' },
+              { name: 'Caio', status: 'SKIPPED' as const, reason: 'NO_PHONE' },
+            ],
+          },
+          second,
+        ],
+      },
+      isLoading: false,
+      isError: false,
+    });
+    render(<Page />);
+    const rows = screen.getAllByRole('row');
+    expect(screen.getAllByText('Ver motivos')).toHaveLength(1);
+    expect(within(rows[1]).getByText('Ver motivos').closest('details')).not.toBeNull();
+    await userEvent.click(screen.getByText('Ver motivos'));
+    const items = within(rows[1]).getAllByRole('listitem').map((li) => li.textContent);
+    expect(items).toEqual([
+      'Bia — Canal desconectado — reconecte em Números e canais',
+      'Caio — sem telefone',
+    ]);
+    expect(within(rows[2]).queryByText('Ver motivos')).not.toBeInTheDocument();
+    expect(screen.getByRole('table')).not.toHaveTextContent('+55');
   });
 
   it('mostra o vazio quando não há envios', () => {

@@ -169,16 +169,19 @@ describe('EvolutionApiAdapter — extended coverage', () => {
   let post: ReturnType<typeof vi.fn>;
   let get: ReturnType<typeof vi.fn>;
   let del: ReturnType<typeof vi.fn>;
+  let put: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     adapter = new EvolutionApiAdapter(config);
     post = vi.fn();
     get = vi.fn();
     del = vi.fn();
+    put = vi.fn();
     (adapter as unknown as { http: unknown }).http = {
       post,
       get,
       delete: del,
+      put,
     };
     vi.useRealTimers();
   });
@@ -1042,6 +1045,21 @@ describe('EvolutionApiAdapter — extended coverage', () => {
         },
       });
       expect(events).toEqual([]);
+    });
+  });
+
+  // -------------- adminRestart --------------
+
+  describe('adminRestart', () => {
+    // Evolution API v2 só expõe POST /instance/restart/:instanceName (PUT dá 404).
+    it('usa POST /instance/restart/:instanceName, sem PUT', async () => {
+      post.mockResolvedValueOnce({ data: {} });
+
+      await adapter.adminRestart('picoa-test');
+
+      expect(post).toHaveBeenCalledTimes(1);
+      expect(post).toHaveBeenCalledWith('/instance/restart/picoa-test');
+      expect(put).not.toHaveBeenCalled();
     });
   });
 

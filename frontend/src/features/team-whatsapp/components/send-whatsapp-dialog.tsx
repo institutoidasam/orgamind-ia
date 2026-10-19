@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/select';
 import { formatPhoneBR } from '@/lib/format-phone';
 import { useCreateTeamDispatch, useTeamTargets } from '../api';
+import { channelAvailability } from '../channel-availability';
 import { PACING_HINT, SKIP_REASON_LABEL, TARGETS_ERROR_MESSAGE, teamErrorMessage } from '../error-messages';
 import type { DispatchResult, SendTarget, TeamChannel } from '../schemas';
 
@@ -40,6 +41,8 @@ function notifyQueued(result: DispatchResult) {
   });
 }
 
+const NO_CONNECTED_CHANNEL = 'Nenhum canal conectado — reconecte em Números e canais.';
+
 type ChannelsStatus = 'loading' | 'error' | 'ready';
 
 function channelsStatusOf(q: { isLoading: boolean; isError: boolean }): ChannelsStatus {
@@ -47,15 +50,37 @@ function channelsStatusOf(q: { isLoading: boolean; isError: boolean }): Channels
   return q.isError ? 'error' : 'ready';
 }
 
+/** Utilizáveis primeiro (ordem estável); os demais aparecem desabilitados com a situação. */
+function orderChannels(channels: TeamChannel[]) {
+  const usable = channels.filter((c) => channelAvailability(c).usable);
+  const unusable = channels.filter((c) => !channelAvailability(c).usable);
+  return { usable, ordered: [...usable, ...unusable] };
+}
+
+/**
+ * Só resolve para canal utilizável. O canal escolhido que deixou de ser
+ * utilizável (refetch) não é trocado em silêncio por outro: fica vazio.
+ */
+function resolveChannelId(usable: TeamChannel[], picked: string): string {
+  if (picked) return usable.some((c) => c.id === picked) ? picked : '';
+  return usable.length === 1 ? usable[0].id : '';
+}
+
+function channelLabel(c: TeamChannel): string {
+  const base = `${c.name} · ${formatPhoneBR(c.phoneE164)}`;
+  const availability = channelAvailability(c);
+  return availability.usable ? base : `${base} · ${availability.label}`;
+}
+
 function useSendForm({ target, onOpenChange }: Pick<Props, 'target' | 'onOpenChange'>) {
   const targets = useTeamTargets();
-  const channels = targets.data?.channels ?? [];
+  const { usable, ordered: channels } = orderChannels(targets.data?.channels ?? []);
   const channelsStatus = channelsStatusOf(targets);
   const send = useCreateTeamDispatch();
   const [picked, setPicked] = useState('');
   const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const channelId = picked || (channels.length === 1 ? channels[0].id : '');
+  const channelId = resolveChannelId(usable, picked);
   const canSend = channelsStatus === 'ready' && !!channelId && text.trim() !== '' && !send.isPending;
 
   async function submit() {
@@ -70,17 +95,18 @@ function useSendForm({ target, onOpenChange }: Pick<Props, 'target' | 'onOpenCha
       setError(teamErrorMessage(await errorCode(err)));
     }
   }
-  return { channels, channelsStatus, channelId, setPicked, text, setText, error, canSend, pending: send.isPending, submit };
+  return { channels, hasUsable: usable.length > 0, channelsStatus, channelId, setPicked, text, setText, error, canSend, pending: send.isPending, submit };
 }
 
 type ChannelSelectProps = {
   channels: TeamChannel[];
+  hasUsable: boolean;
   status: ChannelsStatus;
   value: string;
   onChange: (id: string) => void;
 };
 
-function ChannelSelect({ channels, status, value, onChange }: ChannelSelectProps) {
+function ChannelSelect({ channels, hasUsable, status, value, onChange }: ChannelSelectProps) {
   if (status === 'loading') {
     return <p className="text-sm text-muted-foreground">Carregando canais…</p>;
   }
@@ -91,14 +117,17 @@ function ChannelSelect({ channels, status, value, onChange }: ChannelSelectProps
     return <p className="text-sm text-muted-foreground">Nenhum canal GoZap ou Evolution ativo.</p>;
   }
   return (
-    <Select value={value} onValueChange={onChange}>
-      <SelectTrigger aria-label="Canal"><SelectValue placeholder="Escolha o canal" /></SelectTrigger>
-      <SelectContent>
-        {channels.map((c) => (
-          <SelectItem key={c.id} value={c.id}>{c.name} · {formatPhoneBR(c.phoneE164)}</SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <div className="space-y-2">
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger aria-label="Canal"><SelectValue placeholder="Escolha o canal" /></SelectTrigger>
+        <SelectContent>
+          {channels.map((c) => (
+            <SelectItem key={c.id} value={c.id} disabled={!channelAvailability(c).usable}>{channelLabel(c)}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {!hasUsable && <p className="text-sm text-muted-foreground">{NO_CONNECTED_CHANNEL}</p>}
+    </div>
   );
 }
 
@@ -114,7 +143,7 @@ export function SendWhatsappDialog({ open, onOpenChange, target }: Props) {
         <div className="space-y-4">
           <div className="space-y-2">
             <Label>Canal</Label>
-            <ChannelSelect channels={form.channels} status={form.channelsStatus} value={form.channelId} onChange={form.setPicked} />
+            <ChannelSelect channels={form.channels} hasUsable={form.hasUsable} status={form.channelsStatus} value={form.channelId} onChange={form.setPicked} />
           </div>
           <div className="space-y-2">
             <Label htmlFor="team-whatsapp-text">Mensagem</Label>

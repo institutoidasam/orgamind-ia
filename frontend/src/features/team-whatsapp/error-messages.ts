@@ -22,3 +22,43 @@ export const SKIP_REASON_LABEL = {
 export function teamErrorMessage(code?: string): string {
   return (code && TEAM_ERROR_MESSAGES[code]) || FALLBACK_MESSAGE;
 }
+
+const DISCONNECTED_CODES = new Set([
+  'evolution.session_closed', 'evolution.not_connected', 'evolution.session_unstable',
+  'gozap.not_connected', 'team_whatsapp.channel_disconnected',
+]);
+const INVALID_NUMBER_CODES = new Set([
+  'evolution.number_not_on_whatsapp', 'gozap.not_on_whatsapp', 'gozap.invalid_recipient',
+]);
+const UNCONFIRMED_CODES = new Set([
+  'evolution.unknown', 'gozap.unknown', 'gozap.indeterminate', 'team_whatsapp.indeterminate',
+]);
+const RATE_LIMIT_CODES = new Set(['evolution.rate_limited', 'gozap.quota_exceeded']);
+const UNAVAILABLE_CODES = new Set([
+  'evolution.unreachable', 'evolution.unauthorized', 'evolution.provider_unauthorized',
+  'gozap.unreachable', 'gozap.unauthorized', 'gozap.no_token', 'team_whatsapp.queue_unavailable',
+]);
+
+/** Texto PT-BR, orientado à ação do operador, para o `errorCode` de uma falha de envio. */
+export function failureReasonLabel(code: string | null): string {
+  if (code === null) return 'Falha no envio';
+  if (DISCONNECTED_CODES.has(code)) return 'Canal desconectado — reconecte em Números e canais';
+  if (code === 'team_whatsapp.channel_invalid') {
+    return 'Canal removido ou inválido — escolha outro canal';
+  }
+  if (INVALID_NUMBER_CODES.has(code)) {
+    return 'Número sem WhatsApp ou inválido — confira o telefone no cadastro';
+  }
+  if (code.endsWith('.timeout') || UNCONFIRMED_CODES.has(code)) {
+    return 'Sem confirmação do WhatsApp — confira no celular antes de reenviar';
+  }
+  if (RATE_LIMIT_CODES.has(code)) return 'Limite de envios do canal atingido — tente mais tarde';
+  if (UNAVAILABLE_CODES.has(code)) return 'Serviço de WhatsApp indisponível — avise o administrador';
+  return `Falha no envio (código ${code})`;
+}
+
+/** Motivo de um destinatário com problema: pulo usa SKIP_REASON_LABEL; falha, failureReasonLabel. */
+export function issueLabel(issue: { status: 'FAILED' | 'SKIPPED'; reason: string | null }): string {
+  if (issue.status === 'FAILED') return failureReasonLabel(issue.reason);
+  return (issue.reason && (SKIP_REASON_LABEL as Record<string, string>)[issue.reason]) || 'pulado';
+}

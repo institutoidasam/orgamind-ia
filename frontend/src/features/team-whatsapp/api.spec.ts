@@ -20,6 +20,7 @@ function list(queued: number, ageMs: number): DispatchList {
       target: { type: 'sector', id: 's1', label: 'Compras' },
       channel: null,
       counts: { queued, sent: 0, failed: 0, skipped: 0 },
+      issues: [],
     }],
   };
 }

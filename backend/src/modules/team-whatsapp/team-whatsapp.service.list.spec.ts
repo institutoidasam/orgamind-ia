@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import type { TeamDispatchRow } from './team-whatsapp.repository';
+import type { TeamDispatchRow, TeamIssueRow } from './team-whatsapp.repository';
 import {
   teamDispatchListResponseSchema,
   teamTargetsResponseSchema,
@@ -22,6 +22,14 @@ const channelRow = {
   name: 'Canal',
   phoneE164: '+5592900000000',
   provider: 'GOZAP' as const,
+  connectionEvents: [{ state: 'open' }],
+};
+const channelOut = {
+  id: 'c1',
+  name: 'Canal',
+  phoneE164: '+5592900000000',
+  provider: 'GOZAP' as const,
+  connectionState: 'open' as const,
 };
 const sectorRow = {
   id: 's1',
@@ -49,7 +57,7 @@ describe('TeamWhatsappService.targets', () => {
     const out = await h.service.targets('a');
     expect(h.repo.listSectors.mock.calls).toContainEqual([null]);
     expect(teamTargetsResponseSchema.parse(out)).toEqual({
-      channels: [channelRow],
+      channels: [channelOut],
       sectors: [sectorRow],
     });
   });
@@ -69,6 +77,31 @@ describe('TeamWhatsappService.targets', () => {
     const out = await h.service.targets('a');
     expect(out.channels.map((c) => c.id)).toEqual(['c1']);
   });
+});
+
+describe('TeamWhatsappService.targets — connectionState e acesso', () => {
+  beforeEach(() => {
+    h.repo.listEligibleChannels.mockResolvedValue([channelRow]);
+    h.repo.listSectors.mockResolvedValue([sectorRow]);
+  });
+
+  it.each([
+    ['open', [{ state: 'open' }], 'open'],
+    ['connecting', [{ state: 'connecting' }], 'connecting'],
+    ['sem evento', [], null],
+    ['estado fora do enum', [{ state: 'qrcode' }], null],
+  ])(
+    'connectionState do canal: %s',
+    async (_label, connectionEvents, expected) => {
+      h.repo.findActor.mockResolvedValue(ADMIN);
+      h.repo.listEligibleChannels.mockResolvedValue([
+        { ...channelRow, connectionEvents },
+      ]);
+      const out = teamTargetsResponseSchema.parse(await h.service.targets('a'));
+      expect(out.channels[0].connectionState).toBe(expected);
+      expect(out.channels[0]).not.toHaveProperty('connectionEvents');
+    },
+  );
 
   it.each([
     null,
@@ -93,6 +126,15 @@ const row = (over: Partial<TeamDispatchRow> = {}): TeamDispatchRow => ({
   targetLabel: 'Financeiro',
   author: { id: 'm', name: 'Gestor', email: 'gestor@idasam.org' },
   channel: { id: 'c1', name: 'Canal' },
+  ...over,
+});
+
+const issue = (over: Partial<TeamIssueRow>): TeamIssueRow => ({
+  dispatchId: 'd1',
+  userName: 'Bia',
+  status: 'FAILED',
+  errorCode: null,
+  skipReason: null,
   ...over,
 });
 
@@ -152,6 +194,7 @@ describe('TeamWhatsappService.listDispatches — itens', () => {
       target: { type: 'sector', id: 's1', label: 'Financeiro' },
       channel: { id: 'c1', name: 'Canal' },
       counts: { queued: 2, sent: 3, failed: 0, skipped: 1 },
+      issues: [],
     });
     expect(out.items[1]).toMatchObject({
       target: { type: 'user', id: 'u1', label: 'Ana' },
@@ -159,5 +202,28 @@ describe('TeamWhatsappService.listDispatches — itens', () => {
       author: null,
       counts: { queued: 0, sent: 0, failed: 0, skipped: 0 },
     });
+  });
+});
+
+describe('TeamWhatsappService.listDispatches — issues', () => {
+  beforeEach(() => h.repo.findActor.mockResolvedValue(ADMIN));
+
+  it('issues: FAILED antes de SKIPPED, nome asc, motivo por status; sem problema → []', async () => {
+    h.repo.listDispatches.mockResolvedValue([row(), row({ id: 'd2' })]);
+    h.repo.listIssues.mockResolvedValue([
+      issue({ status: 'SKIPPED', userName: 'Caio', skipReason: 'NO_PHONE' }),
+      issue({ status: 'SKIPPED', userName: 'Ana', skipReason: 'SUPPRESSED' }),
+      issue({ userName: 'Bia', errorCode: 'evolution.session_closed' }),
+    ]);
+    const out = teamDispatchListResponseSchema.parse(
+      await h.service.listDispatches('a'),
+    );
+    expect(h.repo.listIssues.mock.calls).toEqual([[['d1', 'd2']]]);
+    expect(out.items[0].issues).toEqual([
+      { name: 'Bia', status: 'FAILED', reason: 'evolution.session_closed' },
+      { name: 'Ana', status: 'SKIPPED', reason: 'SUPPRESSED' },
+      { name: 'Caio', status: 'SKIPPED', reason: 'NO_PHONE' },
+    ]);
+    expect(out.items[1].issues).toEqual([]);
   });
 });

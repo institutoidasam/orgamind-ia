@@ -17,11 +17,20 @@ vi.mock('../api', () => ({
 vi.mock('sonner', () => ({ toast: { success: toastSuccess, error: vi.fn() } }));
 
 import { SendWhatsappDialog } from './send-whatsapp-dialog';
-import type { SendTarget } from '../schemas';
+import type { SendTarget, TeamChannel } from '../schemas';
 
 const sector: SendTarget = { type: 'sector', sectorId: 's1', label: 'Compras', recipientCount: 3 };
 const person: SendTarget = { type: 'user', userId: 'u1', label: 'Rui' };
-const channel = { id: 'ch1', name: 'GoZap Principal', phoneE164: '+5592991234567', provider: 'GOZAP' as const };
+const channel: TeamChannel = {
+  id: 'ch1', name: 'GoZap Principal', phoneE164: '+5592991234567', provider: 'GOZAP', connectionState: 'open',
+};
+const closed: TeamChannel = {
+  id: 'ch2', name: 'Atendimento', phoneE164: '+5592988887777', provider: 'EVOLUTION', connectionState: 'close',
+};
+const pending: TeamChannel = {
+  id: 'ch3', name: 'ROBO', phoneE164: null, provider: 'EVOLUTION', connectionState: 'connecting',
+};
+const second: TeamChannel = { ...channel, id: 'ch4', name: 'GoZap Reserva', phoneE164: '+5592977776666' };
 
 function setup(
   target: SendTarget = sector,
@@ -30,8 +39,8 @@ function setup(
 ) {
   useTeamTargets.mockReturnValue(query);
   const onOpenChange = vi.fn();
-  render(<SendWhatsappDialog open onOpenChange={onOpenChange} target={target} />);
-  return { onOpenChange, user: userEvent.setup() };
+  const view = render(<SendWhatsappDialog open onOpenChange={onOpenChange} target={target} />);
+  return { onOpenChange, user: userEvent.setup(), view };
 }
 
 async function submit(user: ReturnType<typeof userEvent.setup>, text = 'Oi equipe') {
@@ -42,6 +51,14 @@ async function submit(user: ReturnType<typeof userEvent.setup>, text = 'Oi equip
 function http409(code: string) {
   const response = new Response(JSON.stringify({ code }), { status: 409 });
   return new HTTPError(response, new Request('https://x'), {} as never);
+}
+
+// Radix Select (shadcn) usa PointerEvents/scrollIntoView, que o jsdom não tem.
+if (!Element.prototype.hasPointerCapture) {
+  Element.prototype.hasPointerCapture = () => false;
+}
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {};
 }
 
 beforeEach(() => {
@@ -70,11 +87,34 @@ describe('SendWhatsappDialog destino e formulário', () => {
     expect(screen.getByText('9/2000')).toBeInTheDocument();
   });
 
+  it('desabilita Enviar enquanto o envio está em andamento', async () => {
+    mutationState.isPending = true;
+    const { user } = setup();
+    await user.type(screen.getByRole('textbox'), 'Oi');
+    expect(screen.getByRole('button', { name: 'Enviando...' })).toBeDisabled();
+  });
+});
+
+describe('SendWhatsappDialog situação dos canais', () => {
   it('sem canais avisa e mantém Enviar desabilitado', async () => {
     const { user } = setup(sector, []);
     await user.type(screen.getByRole('textbox'), 'Oi');
     expect(screen.getByText('Nenhum canal GoZap ou Evolution ativo.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Enviar' })).toBeDisabled();
+  });
+
+  it('mostra canais inutilizáveis desabilitados com a situação, depois dos utilizáveis', async () => {
+    const { user } = setup(sector, [pending, closed, channel]);
+    await user.click(screen.getByRole('combobox', { name: 'Canal' }));
+    const options = screen.getAllByRole('option');
+    expect(options.map((o) => o.textContent)).toEqual([
+      'GoZap Principal · (92) 99123-4567',
+      'ROBO · — · Aguardando conexão',
+      'Atendimento · (92) 98888-7777 · Desconectado',
+    ]);
+    expect(options[0]).not.toHaveAttribute('data-disabled');
+    expect(options[1]).toHaveAttribute('data-disabled');
+    expect(options[2]).toHaveAttribute('data-disabled');
   });
 
   it('enquanto os canais carregam mostra "Carregando canais…" e mantém Enviar desabilitado', async () => {
@@ -92,12 +132,42 @@ describe('SendWhatsappDialog destino e formulário', () => {
     expect(screen.queryByText(/Nenhum canal/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Enviar' })).toBeDisabled();
   });
+});
 
-  it('desabilita Enviar enquanto o envio está em andamento', async () => {
-    mutationState.isPending = true;
-    const { user } = setup();
+describe('SendWhatsappDialog auto-seleção, sem canal utilizável e refetch', () => {
+  it('escolhe sozinho o único canal utilizável entre vários', async () => {
+    const { user } = setup(sector, [pending, closed, channel]);
     await user.type(screen.getByRole('textbox'), 'Oi');
-    expect(screen.getByRole('button', { name: 'Enviando...' })).toBeDisabled();
+    expect(screen.getByRole('combobox', { name: 'Canal' })).toHaveTextContent('GoZap Principal');
+    expect(screen.getByRole('button', { name: 'Enviar' })).toBeEnabled();
+  });
+
+  it('com dois utilizáveis nada vem escolhido', async () => {
+    const { user } = setup(sector, [channel, second]);
+    await user.type(screen.getByRole('textbox'), 'Oi');
+    expect(screen.getByRole('combobox', { name: 'Canal' })).toHaveTextContent('Escolha o canal');
+    expect(screen.getByRole('button', { name: 'Enviar' })).toBeDisabled();
+  });
+
+  it('com canais mas nenhum utilizável avisa para reconectar e mantém Enviar desabilitado', async () => {
+    const { user } = setup(sector, [pending, closed]);
+    await user.type(screen.getByRole('textbox'), 'Oi');
+    expect(screen.getByText('Nenhum canal conectado — reconecte em Números e canais.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Enviar' })).toBeDisabled();
+  });
+
+  it('desabilita Enviar quando o canal escolhido fica inutilizável num refetch', async () => {
+    const { user, view } = setup(sector, [channel, second]);
+    await user.click(screen.getByRole('combobox', { name: 'Canal' }));
+    await user.click(screen.getByRole('option', { name: /GoZap Reserva/ }));
+    await user.type(screen.getByRole('textbox'), 'Oi');
+    expect(screen.getByRole('button', { name: 'Enviar' })).toBeEnabled();
+    useTeamTargets.mockReturnValue({
+      data: { channels: [channel, { ...second, connectionState: 'close' as const }], sectors: [] },
+    });
+    view.rerender(<SendWhatsappDialog open onOpenChange={vi.fn()} target={sector} />);
+    expect(screen.getByRole('button', { name: 'Enviar' })).toBeDisabled();
+    expect(screen.getByRole('combobox', { name: 'Canal' })).toHaveTextContent('Escolha o canal');
   });
 });
 

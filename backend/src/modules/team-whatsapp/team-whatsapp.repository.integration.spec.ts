@@ -81,36 +81,42 @@ describe('TeamWhatsappRepository — ator e alvo (Postgres real)', () => {
   }, 60_000);
 });
 
+// Autor + canal + envio com dois destinatários (QUEUED e SKIPPED).
+async function criarEnvioComDoisDestinatarios() {
+  const author = await prisma.user.create({
+    data: { email: 'autor@test.local', password: 'x' },
+  });
+  const channel = await prisma.channel.create({
+    data: { name: 'Canal equipe', provider: 'GOZAP' },
+  });
+  const created = await repo.createDispatch({
+    authorId: author.id,
+    targetType: 'USER',
+    targetId: author.id,
+    targetLabel: 'Autor',
+    channelId: channel.id,
+    text: 'oi',
+    recipients: [
+      {
+        userId: author.id,
+        userName: 'Autor',
+        status: 'QUEUED',
+        skipReason: null,
+      },
+      {
+        userId: author.id,
+        userName: 'Autor',
+        status: 'SKIPPED',
+        skipReason: 'NO_PHONE',
+      },
+    ],
+  });
+  return { author, channel, created };
+}
+
 describe('TeamWhatsappRepository — envio e histórico (Postgres real)', () => {
   it('grava, marca falha só nos QUEUED, conta por status e sobrevive à remoção do canal', async () => {
-    const author = await prisma.user.create({
-      data: { email: 'autor@test.local', password: 'x' },
-    });
-    const channel = await prisma.channel.create({
-      data: { name: 'Canal equipe', provider: 'GOZAP' },
-    });
-    const created = await repo.createDispatch({
-      authorId: author.id,
-      targetType: 'USER',
-      targetId: author.id,
-      targetLabel: 'Autor',
-      channelId: channel.id,
-      text: 'oi',
-      recipients: [
-        {
-          userId: author.id,
-          userName: 'Autor',
-          status: 'QUEUED',
-          skipReason: null,
-        },
-        {
-          userId: author.id,
-          userName: 'Autor',
-          status: 'SKIPPED',
-          skipReason: 'NO_PHONE',
-        },
-      ],
-    });
+    const { author, channel, created } = await criarEnvioComDoisDestinatarios();
     const ids = created.recipients.map((r) => r.id);
     await expect(
       repo.markFailed(ids, 'team_whatsapp.queue_unavailable'),
@@ -120,6 +126,27 @@ describe('TeamWhatsappRepository — envio e histórico (Postgres real)', () => 
       { dispatchId: created.id, status: 'FAILED', count: 1 },
       { dispatchId: created.id, status: 'SKIPPED', count: 1 },
     ]);
+    await expect(repo.listIssues([])).resolves.toEqual([]);
+    const issues = await repo.listIssues([created.id]);
+    expect(issues).toHaveLength(2);
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        {
+          dispatchId: created.id,
+          userName: 'Autor',
+          status: 'FAILED',
+          errorCode: 'team_whatsapp.queue_unavailable',
+          skipReason: null,
+        },
+        {
+          dispatchId: created.id,
+          userName: 'Autor',
+          status: 'SKIPPED',
+          errorCode: null,
+          skipReason: 'NO_PHONE',
+        },
+      ]),
+    );
     await prisma.channel.delete({ where: { id: channel.id } });
     const [row] = await repo.listDispatches(author.id);
     expect(row).toMatchObject({
@@ -128,5 +155,26 @@ describe('TeamWhatsappRepository — envio e histórico (Postgres real)', () => 
       author: { id: author.id },
     });
     await expect(repo.listDispatches('someone-else')).resolves.toEqual([]);
+  }, 60_000);
+});
+
+describe('TeamWhatsappRepository — canais elegíveis (Postgres real)', () => {
+  it('listEligibleChannels traz só o último evento de conexão do canal', async () => {
+    const channel = await prisma.channel.create({
+      data: {
+        name: 'Canal estado',
+        provider: 'EVOLUTION',
+        connectionEvents: {
+          create: [
+            { state: 'open', occurredAt: new Date('2026-10-19T10:00:00Z') },
+            { state: 'close', occurredAt: new Date('2026-10-19T11:00:00Z') },
+          ],
+        },
+      },
+    });
+    const found = (await repo.listEligibleChannels()).find(
+      (c) => c.id === channel.id,
+    );
+    expect(found?.connectionEvents).toEqual([{ state: 'close' }]);
   }, 60_000);
 });

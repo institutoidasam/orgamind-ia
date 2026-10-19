@@ -76,6 +76,7 @@ export function createHarness(): Harness {
   );
   repo.findChannel.mockResolvedValue(channel());
   repo.countByStatus.mockResolvedValue([]);
+  repo.listIssues.mockResolvedValue([]);
   repo.createDispatch.mockImplementation((data) =>
     Promise.resolve({
       id: 'd1',

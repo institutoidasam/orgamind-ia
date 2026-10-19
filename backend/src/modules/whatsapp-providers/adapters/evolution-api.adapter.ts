@@ -1039,7 +1039,7 @@ export class EvolutionApiAdapter implements MessageProvider {
   }
 
   async adminRestart(instanceName: string): Promise<void> {
-    await this.http.put(`/instance/restart/${instanceName}`);
+    await this.http.post(`/instance/restart/${instanceName}`);
   }
 
   parseInboundMessages(payload: unknown): InboundMessageEvent[] {

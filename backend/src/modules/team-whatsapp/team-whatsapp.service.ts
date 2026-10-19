@@ -11,11 +11,12 @@ import {
   QUEUE_NAMES,
   type TeamWhatsappSendJob,
 } from '../queue/queue.constants';
-import type {
-  CreateTeamDispatchResponse,
-  TeamDispatchCounts,
-  TeamDispatchListResponse,
-  TeamTargetsResponse,
+import {
+  teamConnectionStateSchema,
+  type CreateTeamDispatchResponse,
+  type TeamDispatchCounts,
+  type TeamDispatchListResponse,
+  type TeamTargetsResponse,
 } from '../../schemas/contracts/team-whatsapp.schema';
 import type { CreateTeamDispatchInput } from './dto/create-team-dispatch.dto';
 import {
@@ -35,6 +36,7 @@ import {
   TeamWhatsappRepository,
   type NewTeamRecipient,
   type TeamDispatchRow,
+  type TeamIssueRow,
   type TeamMember,
   type TeamStatusCount,
 } from './team-whatsapp.repository';
@@ -119,8 +121,17 @@ export class TeamWhatsappService {
       this.repo.listEligibleChannels(),
       this.repo.listSectors(onlyIds),
     ]);
-    const eligible = channels.flatMap(({ provider, ...rest }) =>
-      isTeamProvider(provider) ? [{ ...rest, provider }] : [],
+    const eligible = channels.flatMap(
+      ({ provider, connectionEvents, ...rest }) =>
+        isTeamProvider(provider)
+          ? [
+              {
+                ...rest,
+                provider,
+                connectionState: toConnectionState(connectionEvents[0]?.state),
+              },
+            ]
+          : [],
     );
     return { channels: eligible, sectors };
   }
@@ -131,10 +142,14 @@ export class TeamWhatsappService {
     const rows = await this.repo.listDispatches(
       actor.role === 'ADMIN' ? null : actor.id,
     );
-    const counts = countsByDispatch(
-      await this.repo.countByStatus(rows.map((r) => r.id)),
-    );
-    return { items: rows.map((row) => toListItem(row, counts.get(row.id))) };
+    const ids = rows.map((r) => r.id);
+    const counts = countsByDispatch(await this.repo.countByStatus(ids));
+    const issues = issuesByDispatch(await this.repo.listIssues(ids));
+    return {
+      items: rows.map((row) =>
+        toListItem(row, counts.get(row.id), issues.get(row.id) ?? []),
+      ),
+    };
   }
 
   private async requireSender(actorId: string): Promise<TeamActor> {
@@ -271,9 +286,42 @@ function countsByDispatch(
   return byDispatch;
 }
 
+type TeamIssue = TeamDispatchListResponse['items'][number]['issues'][number];
+
+/** Estado fora do enum (ex.: `qrcode`) ou ausente vira null: o front não adivinha. */
+function toConnectionState(
+  state: string | undefined,
+): TeamTargetsResponse['channels'][number]['connectionState'] {
+  const parsed = teamConnectionStateSchema.safeParse(state);
+  return parsed.success ? parsed.data : null;
+}
+
+/** FAILED antes de SKIPPED; dentro do grupo, nome asc. */
+function issuesByDispatch(
+  rows: readonly TeamIssueRow[],
+): Map<string, TeamIssue[]> {
+  const sorted = [...rows].sort(
+    (a, b) =>
+      Number(a.status === 'SKIPPED') - Number(b.status === 'SKIPPED') ||
+      a.userName.localeCompare(b.userName),
+  );
+  const byDispatch = new Map<string, TeamIssue[]>();
+  for (const r of sorted) {
+    const list = byDispatch.get(r.dispatchId) ?? [];
+    list.push({
+      name: r.userName,
+      status: r.status === 'FAILED' ? 'FAILED' : 'SKIPPED',
+      reason: r.status === 'FAILED' ? r.errorCode : r.skipReason,
+    });
+    byDispatch.set(r.dispatchId, list);
+  }
+  return byDispatch;
+}
+
 function toListItem(
   row: TeamDispatchRow,
   counts: TeamDispatchCounts | undefined,
+  issues: TeamIssue[],
 ): TeamDispatchListResponse['items'][number] {
   return {
     id: row.id,
@@ -286,5 +334,6 @@ function toListItem(
     },
     channel: row.channel,
     counts: counts ?? zeroCounts(),
+    issues,
   };
 }

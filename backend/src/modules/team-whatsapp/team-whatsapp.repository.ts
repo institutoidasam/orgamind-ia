@@ -36,6 +36,14 @@ export type TeamDispatchRow = Prisma.TeamWhatsappDispatchGetPayload<{
   select: typeof dispatchListSelect;
 }>;
 
+export type TeamIssueRow = {
+  dispatchId: string;
+  userName: string;
+  status: TeamWhatsappRecipientStatus;
+  errorCode: string | null;
+  skipReason: TeamWhatsappSkipReason | null;
+};
+
 export type NewTeamRecipient = {
   userId: string;
   userName: string;
@@ -123,7 +131,17 @@ export class TeamWhatsappRepository {
   async listEligibleChannels() {
     return this.prisma.channel.findMany({
       where: { isActive: true, provider: { in: [...TEAM_PROVIDERS] } },
-      select: { id: true, name: true, phoneE164: true, provider: true },
+      select: {
+        id: true,
+        name: true,
+        phoneE164: true,
+        provider: true,
+        connectionEvents: {
+          orderBy: { occurredAt: 'desc' },
+          take: 1,
+          select: { state: true },
+        },
+      },
       orderBy: [{ isDefault: 'desc' }, { createdAt: 'asc' }],
     });
   }
@@ -195,6 +213,24 @@ export class TeamWhatsappRepository {
       status: r.status,
       count: r._count._all,
     }));
+  }
+
+  /** Destinatários FAILED/SKIPPED dos envios já filtrados por `listDispatches`. */
+  async listIssues(dispatchIds: readonly string[]): Promise<TeamIssueRow[]> {
+    if (dispatchIds.length === 0) return [];
+    return this.prisma.teamWhatsappRecipient.findMany({
+      where: {
+        dispatchId: { in: [...dispatchIds] },
+        status: { in: ['FAILED', 'SKIPPED'] },
+      },
+      select: {
+        dispatchId: true,
+        userName: true,
+        status: true,
+        errorCode: true,
+        skipReason: true,
+      },
+    });
   }
 }
 

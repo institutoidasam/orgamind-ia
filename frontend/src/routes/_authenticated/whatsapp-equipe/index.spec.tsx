@@ -22,36 +22,69 @@ vi.mock('@/features/team-whatsapp/components/send-whatsapp-dialog', () => ({
   ),
 }));
 
+import type { DispatchRecipient } from '@/features/team-whatsapp/schemas';
 import { Route } from './index';
 
 const Page = (Route as unknown as { component: ComponentType }).component;
 
+// Radix Select (shadcn) usa PointerEvents/scrollIntoView, que o jsdom não tem.
+if (!Element.prototype.hasPointerCapture) {
+  Element.prototype.hasPointerCapture = () => false;
+}
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {};
+}
+
+type User = ReturnType<typeof userEvent.setup>;
+
+async function pick(user: User, trigger: 'Setor' | 'Turno', option: string) {
+  await user.click(screen.getByRole('combobox', { name: trigger }));
+  await user.click(screen.getByRole('option', { name: option }));
+}
+
+async function openProducao(turno: string) {
+  const user = userEvent.setup();
+  render(<Page />);
+  await pick(user, 'Setor', 'Produção');
+  await pick(user, 'Turno', turno);
+  return user;
+}
+
+const checkboxNames = () => screen.getAllByRole('checkbox').map((c) => c.getAttribute('aria-label'));
+const dialogTarget = () => JSON.parse((screen.getByRole('dialog').textContent ?? '').replace('Diálogo ', ''));
+const NEEDS_CHOICE = 'Escolha o setor e o turno';
+
+const member = (id: string, name: string, shift: 'FIRST' | 'SECOND' | null, phone: string | null) => ({
+  id, name, email: `${id}@x.test`, phoneE164: phone, isActive: true, shift,
+});
 const members = [
-  { id: 'u1', name: 'Ana', email: 'ana@x.test', phoneE164: '+5592991234567', isActive: true },
-  { id: 'u2', name: 'Bruno', email: 'bruno@x.test', phoneE164: null, isActive: true },
-  { id: 'u3', name: 'Carla', email: 'carla@x.test', phoneE164: '+5592988887777', isActive: false },
+  member('ana', 'Ana', 'FIRST', '+5592991234567'),
+  member('joao', 'João', 'SECOND', '+5592988887777'),
+  { ...member('lia', 'Lia', 'SECOND', '+5592977776666'), isActive: false },
+  member('maria', 'Maria', 'SECOND', '+5592966665555'),
+  member('pedro', 'Pedro', 'SECOND', null),
+  member('ze', 'Zé', null, '+5592955554444'),
 ];
-const targets = {
-  channels: [],
-  sectors: [{ id: 's1', name: 'Compras', code: 'COMP', members }],
-};
+const producao = { id: 's1', name: 'Produção', code: 'PROD', members };
+const expedicao = { id: 's2', name: 'Expedição', code: 'EXP', members: [] };
+const targets = { channels: [], sectors: [producao, expedicao] };
 const dispatches = {
   items: [
     {
       id: 'd1', createdAt: '2026-10-16T12:00:00.000Z',
       author: { id: 'a1', name: 'Ada', email: 'ada@x.test' },
-      target: { type: 'sector' as const, id: 's1', label: 'Compras' },
+      target: { type: 'sector' as const, id: 's1', label: 'Compras', shift: null },
       channel: { id: 'ch1', name: 'GoZap Principal' },
       counts: { queued: 1, sent: 2, failed: 3, skipped: 4 },
-      issues: [],
+      recipients: [],
     },
     {
       id: 'd2', createdAt: '2026-10-15T12:00:00.000Z',
       author: null,
-      target: { type: 'user' as const, id: 'u1', label: 'Ana' },
+      target: { type: 'user' as const, id: 'u1', label: 'Ana', shift: null },
       channel: null,
       counts: { queued: 0, sent: 1, failed: 0, skipped: 0 },
-      issues: [],
+      recipients: [],
     },
   ],
 };
@@ -77,40 +110,109 @@ describe('WhatsApp da equipe: acesso', () => {
     useTeamTargets.mockReturnValue({ data: undefined, isLoading: true, isError: false });
     render(<Page />);
     expect(screen.getByText('WhatsApp da equipe')).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'Compras' })).not.toBeInTheDocument();
+    expect(screen.queryByText(NEEDS_CHOICE)).not.toBeInTheDocument();
+  });
+
+  it('sem setor ativo, quem pode enviar vê o aviso no lugar dos seletores', () => {
+    useTeamTargets.mockReturnValue({ data: { channels: [], sectors: [] }, isLoading: false, isError: false });
+    render(<Page />);
+    expect(screen.getByText('Nenhum setor ativo para envio. Cadastre setores em Setores.')).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: 'Setor' })).not.toBeInTheDocument();
+    expect(screen.getByText('Envios recentes')).toBeInTheDocument();
   });
 });
 
-describe('WhatsApp da equipe: setores e membros', () => {
-  it('lista membros com telefone, sem telefone e inativo', () => {
+describe('WhatsApp da equipe: seletores', () => {
+  it('pede setor e turno até escolher os dois', async () => {
+    const user = userEvent.setup();
     render(<Page />);
-    expect(screen.getByRole('heading', { name: 'Compras' })).toBeInTheDocument();
-    expect(screen.getByText('(92) 99123-4567')).toBeInTheDocument();
-    expect(screen.getByText('sem telefone')).toBeInTheDocument();
-    expect(screen.getByText('Inativo')).toBeInTheDocument();
+    expect(screen.getByText(NEEDS_CHOICE)).toBeInTheDocument();
+    await pick(user, 'Turno', '2º turno');
+    expect(screen.getByText(NEEDS_CHOICE)).toBeInTheDocument();
+    await pick(user, 'Setor', 'Produção');
+    expect(screen.queryByText(NEEDS_CHOICE)).not.toBeInTheDocument();
   });
 
-  it('desabilita Enviar para quem não tem telefone ou está inativo', () => {
+  it('pré-seleciona o setor quando há um só e pede só o turno', async () => {
+    useTeamTargets.mockReturnValue({ data: { ...targets, sectors: [producao] }, isLoading: false, isError: false });
+    const user = userEvent.setup();
     render(<Page />);
-    const enviar = (name: RegExp) => within(screen.getByRole('listitem', { name })).getByRole('button', { name: 'Enviar' });
-    expect(enviar(/Ana/)).toBeEnabled();
-    expect(enviar(/Bruno/)).toBeDisabled();
-    expect(enviar(/Carla/)).toBeDisabled();
+    expect(screen.getByRole('combobox', { name: 'Setor' })).toHaveTextContent('Produção');
+    expect(screen.getByText(NEEDS_CHOICE)).toBeInTheDocument();
+    await pick(user, 'Turno', '1º turno');
+    expect(screen.queryByText(NEEDS_CHOICE)).not.toBeInTheDocument();
   });
 
-  it('Enviar ao setor abre o diálogo com os membros ativos com telefone', async () => {
-    render(<Page />);
-    await userEvent.click(screen.getByRole('button', { name: 'Enviar ao setor' }));
-    expect(screen.getByRole('dialog')).toHaveTextContent(
-      '{"type":"sector","sectorId":"s1","label":"Compras","recipientCount":1}',
-    );
+  it('2º turno lista só os ativos do turno, com a nota de quem está sem turno', async () => {
+    await openProducao('2º turno');
+    expect(checkboxNames()).toEqual(['João', 'Maria', 'Pedro']);
+    expect(screen.getByRole('checkbox', { name: 'Pedro' })).toBeDisabled();
+    expect(screen.getByRole('listitem', { name: 'Pedro' })).toHaveTextContent('sem telefone');
+    expect(screen.getByRole('listitem', { name: 'João' })).toHaveTextContent('2º turno');
+    expect(screen.getByText('1 pessoa(s) deste setor estão sem turno definido — defina em Usuários')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Enviar para todos do turno (2)' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Enviar para selecionados (0)' })).toBeDisabled();
   });
 
-  it('Enviar para uma pessoa abre o diálogo com o usuário', async () => {
+  it('Todos os turnos lista quem está sem turno e manda o alvo sem turno', async () => {
+    const user = await openProducao('Todos os turnos');
+    expect(checkboxNames()).toEqual(['Ana', 'João', 'Maria', 'Pedro', 'Zé']);
+    expect(screen.queryByText(/sem turno definido/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Enviar para todos do turno (4)' }));
+    expect(dialogTarget()).toMatchObject({ shift: null, userIds: null, label: 'Produção · todos os turnos' });
+  });
+});
+
+describe('WhatsApp da equipe: seleção e envio', () => {
+  it('selecionados: userIds na ordem do back, não na do clique', async () => {
+    const user = await openProducao('2º turno');
+    await user.click(screen.getByRole('checkbox', { name: 'Maria' }));
+    await user.click(screen.getByRole('checkbox', { name: 'João' }));
+    await user.click(screen.getByRole('button', { name: 'Enviar para selecionados (2)' }));
+    expect(dialogTarget()).toEqual({
+      type: 'sector', sectorId: 's1', shift: 'SECOND', userIds: ['joao', 'maria'],
+      label: 'Produção · 2º turno · seleção de 2',
+      recipients: [{ id: 'joao', name: 'João' }, { id: 'maria', name: 'Maria' }],
+      leftOut: [],
+    });
+  });
+
+  it('todos do turno: sem userIds, e o sem telefone fica de fora', async () => {
+    const user = await openProducao('2º turno');
+    await user.click(screen.getByRole('button', { name: 'Enviar para todos do turno (2)' }));
+    expect(dialogTarget()).toEqual({
+      type: 'sector', sectorId: 's1', shift: 'SECOND', userIds: null, label: 'Produção · 2º turno',
+      recipients: [{ id: 'joao', name: 'João' }, { id: 'maria', name: 'Maria' }],
+      leftOut: [{ id: 'pedro', name: 'Pedro' }],
+    });
+  });
+
+  it('Marcar todos marca e desmarca só os habilitados', async () => {
+    const user = await openProducao('2º turno');
+    await user.click(screen.getByRole('button', { name: 'Marcar todos' }));
+    expect(screen.getByRole('button', { name: 'Enviar para selecionados (2)' })).toBeEnabled();
+    expect(screen.getByRole('checkbox', { name: 'Pedro' })).not.toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Marcar todos' }));
+    expect(screen.getByRole('button', { name: 'Enviar para selecionados (0)' })).toBeDisabled();
+  });
+
+  it('trocar o turno ou o setor limpa a seleção', async () => {
+    const user = await openProducao('2º turno');
+    await user.click(screen.getByRole('checkbox', { name: 'João' }));
+    await pick(user, 'Turno', 'Todos os turnos');
+    expect(screen.getByRole('button', { name: 'Enviar para selecionados (0)' })).toBeDisabled();
+    await user.click(screen.getByRole('checkbox', { name: 'João' }));
+    await pick(user, 'Setor', 'Expedição');
+    await pick(user, 'Setor', 'Produção');
+    expect(screen.getByRole('button', { name: 'Enviar para selecionados (0)' })).toBeDisabled();
+  });
+});
+
+describe('WhatsApp da equipe: página', () => {
+  it('não tem mais os cards por setor e explica o fluxo novo', () => {
     render(<Page />);
-    const row = screen.getByRole('listitem', { name: /Ana/ });
-    await userEvent.click(within(row).getByRole('button', { name: 'Enviar' }));
-    expect(screen.getByRole('dialog')).toHaveTextContent('{"type":"user","userId":"u1","label":"Ana"}');
+    expect(screen.queryByRole('button', { name: 'Enviar ao setor' })).not.toBeInTheDocument();
+    expect(screen.getByText('Escolha o setor e o turno e envie para todos ou só para quem você marcar.')).toBeInTheDocument();
   });
 });
 
@@ -126,41 +228,42 @@ describe('WhatsApp da equipe: envios recentes', () => {
     expect(second).toHaveTextContent('—');
   });
 
-  it('lista os motivos de falha e pulo em "Ver motivos"; sem problemas não mostra', async () => {
-    const [first, second] = dispatches.items;
-    useTeamDispatches.mockReturnValue({
-      data: {
-        items: [
-          {
-            ...first,
-            issues: [
-              { name: 'Bia', status: 'FAILED' as const, reason: 'evolution.session_closed' },
-              { name: 'Caio', status: 'SKIPPED' as const, reason: 'NO_PHONE' },
-            ],
-          },
-          second,
-        ],
-      },
-      isLoading: false,
-      isError: false,
-    });
-    render(<Page />);
-    const rows = screen.getAllByRole('row');
-    expect(screen.getAllByText('Ver motivos')).toHaveLength(1);
-    expect(within(rows[1]).getByText('Ver motivos').closest('details')).not.toBeNull();
-    await userEvent.click(screen.getByText('Ver motivos'));
-    const items = within(rows[1]).getAllByRole('listitem').map((li) => li.textContent);
-    expect(items).toEqual([
-      'Bia — Canal desconectado — reconecte em Números e canais',
-      'Caio — sem telefone',
-    ]);
-    expect(within(rows[2]).queryByText('Ver motivos')).not.toBeInTheDocument();
-    expect(screen.getByRole('table')).not.toHaveTextContent('+55');
-  });
-
   it('mostra o vazio quando não há envios', () => {
     useTeamDispatches.mockReturnValue({ data: { items: [] }, isLoading: false, isError: false });
     render(<Page />);
     expect(screen.getByText('Nenhum envio ainda.')).toBeInTheDocument();
+  });
+});
+
+describe('WhatsApp da equipe: Ver destinatários', () => {
+  const recipient = (name: string, shift: 'FIRST' | 'SECOND' | null, status: DispatchRecipient['status'], reason: string | null) => ({
+    userId: `id-${name}`, name, shift, status, reason,
+  });
+  const withRecipients = {
+    ...dispatches.items[0],
+    target: { type: 'sector' as const, id: 's1', label: 'Produção · 2º turno', shift: 'SECOND' as const },
+    recipients: [
+      recipient('Ana', 'SECOND', 'SENT', null),
+      recipient('Bia', 'SECOND', 'FAILED', 'evolution.session_closed'),
+      recipient('Caio', null, 'SKIPPED', 'NO_PHONE'),
+      recipient('Davi', 'FIRST', 'QUEUED', null),
+    ],
+  };
+
+  it('mostra o destino com turno e lista todos os destinatários, sem telefone', async () => {
+    useTeamDispatches.mockReturnValue({ data: { items: [withRecipients, dispatches.items[1]] }, isLoading: false, isError: false });
+    render(<Page />);
+    const rows = screen.getAllByRole('row');
+    expect(rows[1]).toHaveTextContent('Produção · 2º turno');
+    expect(screen.queryByText('Ver motivos')).not.toBeInTheDocument();
+    expect(within(rows[2]).queryByText('Ver destinatários')).not.toBeInTheDocument();
+    await userEvent.click(within(rows[1]).getByText('Ver destinatários'));
+    expect(within(rows[1]).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      'Ana · 2º turno — Enviado',
+      'Bia · 2º turno — Falhou: Canal desconectado — reconecte em Números e canais',
+      'Caio · Sem turno — Pulado: sem telefone',
+      'Davi · 1º turno — Na fila',
+    ]);
+    expect(screen.getByRole('table')).not.toHaveTextContent('+55');
   });
 });

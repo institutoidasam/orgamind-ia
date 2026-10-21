@@ -31,6 +31,25 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.10.21',
+    date: '2026-10-21',
+    title: 'Turnos no WhatsApp da equipe',
+    items: [
+      {
+        text: 'O cadastro de usuário ganhou o campo Turno (1º turno, 2º turno ou sem turno), e a lista de usuários mostra o turno de cada pessoa.',
+        where: '/users',
+      },
+      {
+        text: 'No WhatsApp da equipe, escolha o setor e o turno, marque as pessoas e envie para todos do turno ou só para as selecionadas. Antes de enviar, você confere os nomes de quem vai receber e de quem fica de fora por não ter telefone.',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'Em Envios recentes, "Ver destinatários" mostra todos que estavam no envio, com o turno e a situação de cada um.',
+        where: '/whatsapp-equipe',
+      },
+    ],
+  },
+  {
     version: '2026.10.19',
     date: '2026-10-19',
     title: 'WhatsApp da equipe: canais mais claros e motivos dos envios',

@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import type { TeamDispatchRow, TeamIssueRow } from './team-whatsapp.repository';
+import type {
+  TeamDispatchRow,
+  TeamRecipientRow,
+} from './team-whatsapp.repository';
 import {
   teamDispatchListResponseSchema,
   teamTargetsResponseSchema,
@@ -42,6 +45,7 @@ const sectorRow = {
       email: 'ana@idasam.org',
       phoneE164: PHONE,
       isActive: true,
+      shift: 'FIRST' as const,
     },
   ],
 };
@@ -124,15 +128,18 @@ const row = (over: Partial<TeamDispatchRow> = {}): TeamDispatchRow => ({
   targetType: 'SECTOR',
   targetId: 's1',
   targetLabel: 'Financeiro',
+  shift: null,
   author: { id: 'm', name: 'Gestor', email: 'gestor@idasam.org' },
   channel: { id: 'c1', name: 'Canal' },
   ...over,
 });
 
-const issue = (over: Partial<TeamIssueRow>): TeamIssueRow => ({
+const recipient = (over: Partial<TeamRecipientRow>): TeamRecipientRow => ({
   dispatchId: 'd1',
+  userId: 'u1',
   userName: 'Bia',
-  status: 'FAILED',
+  shift: null,
+  status: 'QUEUED',
   errorCode: null,
   skipReason: null,
   ...over,
@@ -191,10 +198,10 @@ describe('TeamWhatsappService.listDispatches — itens', () => {
       id: 'd1',
       createdAt: '2026-10-16T12:00:00.000Z',
       author: { id: 'm', name: 'Gestor', email: 'gestor@idasam.org' },
-      target: { type: 'sector', id: 's1', label: 'Financeiro' },
+      target: { type: 'sector', id: 's1', label: 'Financeiro', shift: null },
       channel: { id: 'c1', name: 'Canal' },
       counts: { queued: 2, sent: 3, failed: 0, skipped: 1 },
-      issues: [],
+      recipients: [],
     });
     expect(out.items[1]).toMatchObject({
       target: { type: 'user', id: 'u1', label: 'Ana' },
@@ -205,25 +212,83 @@ describe('TeamWhatsappService.listDispatches — itens', () => {
   });
 });
 
-describe('TeamWhatsappService.listDispatches — issues', () => {
+// Fora de ordem e com os quatro status; Bia teve o usuário apagado (userId null).
+const recipientRows: TeamRecipientRow[] = [
+  recipient({
+    userId: 'u3',
+    userName: 'Caio',
+    status: 'SKIPPED',
+    skipReason: 'NO_PHONE',
+  }),
+  recipient({
+    userId: null,
+    userName: 'Bia',
+    status: 'FAILED',
+    errorCode: 'evolution.session_closed',
+    shift: 'SECOND',
+  }),
+  recipient({ userName: 'Ana', status: 'SENT', shift: 'SECOND' }),
+  recipient({ userId: 'u4', userName: 'Davi', shift: 'FIRST' }),
+];
+const listed = (r: {
+  userId: string | null;
+  name: string;
+  shift: TeamRecipientRow['shift'];
+  status: TeamRecipientRow['status'];
+  reason: string | null;
+}) => ({
+  userId: r.userId,
+  name: r.name,
+  shift: r.shift,
+  status: r.status,
+  reason: r.reason,
+});
+
+describe('TeamWhatsappService.listDispatches — destinatários', () => {
   beforeEach(() => h.repo.findActor.mockResolvedValue(ADMIN));
 
-  it('issues: FAILED antes de SKIPPED, nome asc, motivo por status; sem problema → []', async () => {
-    h.repo.listDispatches.mockResolvedValue([row(), row({ id: 'd2' })]);
-    h.repo.listIssues.mockResolvedValue([
-      issue({ status: 'SKIPPED', userName: 'Caio', skipReason: 'NO_PHONE' }),
-      issue({ status: 'SKIPPED', userName: 'Ana', skipReason: 'SUPPRESSED' }),
-      issue({ userName: 'Bia', errorCode: 'evolution.session_closed' }),
+  it('lista todos os destinatários com turno e situação, por nome, sem telefone', async () => {
+    h.repo.listDispatches.mockResolvedValue([
+      row({ shift: 'SECOND' }),
+      row({ id: 'd2' }),
     ]);
-    const out = teamDispatchListResponseSchema.parse(
-      await h.service.listDispatches('a'),
-    );
-    expect(h.repo.listIssues.mock.calls).toEqual([[['d1', 'd2']]]);
-    expect(out.items[0].issues).toEqual([
-      { name: 'Bia', status: 'FAILED', reason: 'evolution.session_closed' },
-      { name: 'Ana', status: 'SKIPPED', reason: 'SUPPRESSED' },
-      { name: 'Caio', status: 'SKIPPED', reason: 'NO_PHONE' },
+    h.repo.listRecipients.mockResolvedValue(recipientRows);
+    const res = await h.service.listDispatches('a');
+    const out = teamDispatchListResponseSchema.parse(res);
+    expect(h.repo.listRecipients.mock.calls).toEqual([[['d1', 'd2']]]);
+    expect(out.items[0].target.shift).toBe('SECOND');
+    expect(out.items[0].recipients).toEqual([
+      listed({
+        userId: 'u1',
+        name: 'Ana',
+        shift: 'SECOND',
+        status: 'SENT',
+        reason: null,
+      }),
+      listed({
+        userId: null,
+        name: 'Bia',
+        shift: 'SECOND',
+        status: 'FAILED',
+        reason: 'evolution.session_closed',
+      }),
+      listed({
+        userId: 'u3',
+        name: 'Caio',
+        shift: null,
+        status: 'SKIPPED',
+        reason: 'NO_PHONE',
+      }),
+      listed({
+        userId: 'u4',
+        name: 'Davi',
+        shift: 'FIRST',
+        status: 'QUEUED',
+        reason: null,
+      }),
     ]);
-    expect(out.items[1].issues).toEqual([]);
+    expect(out.items[1].recipients).toEqual([]);
+    expect(res.items[0]).not.toHaveProperty('issues');
+    expect(JSON.stringify(res)).not.toContain('+55');
   });
 });

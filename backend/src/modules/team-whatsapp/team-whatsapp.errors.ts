@@ -34,3 +34,12 @@ export function channelDisconnected(): ConflictError {
     'team_whatsapp.channel_disconnected',
   );
 }
+
+/** Algum `userIds` fora do setor/turno atual, inativo ou inexistente: nada é criado. */
+export function invalidSelection(): DomainError {
+  return new DomainError({
+    code: 'team_whatsapp.invalid_selection',
+    message: 'Seleção de destinatários inválida',
+    status: 422,
+  });
+}

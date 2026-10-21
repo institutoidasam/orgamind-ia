@@ -175,3 +175,19 @@ describe("InviteUserDialog phone", () => {
     expect(mutateAsync).not.toHaveBeenCalled();
   });
 });
+
+describe("InviteUserDialog shift", () => {
+  it("starts at Sem turno and sends the chosen shift", async () => {
+    wrap(dialog(true));
+    expect(screen.getByRole("combobox", { name: "Turno" })).toHaveTextContent("Sem turno");
+    await userEvent.type(emailInput(), "op@x.com");
+    await userEvent.type(phoneInput(), PHONE);
+    fireEvent.click(screen.getByRole("combobox", { name: "Setor principal" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Engenharia" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Turno" }));
+    fireEvent.click(await screen.findByRole("option", { name: "2º turno" }));
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ shift: "SECOND" }));
+  });
+});

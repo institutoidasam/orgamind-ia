@@ -37,6 +37,7 @@ export const member = (over: Partial<TeamMember> = {}): TeamMember => ({
   sector: { isActive: true },
   phoneE164: PHONE,
   contact: null,
+  shift: null,
   ...over,
 });
 
@@ -76,7 +77,7 @@ export function createHarness(): Harness {
   );
   repo.findChannel.mockResolvedValue(channel());
   repo.countByStatus.mockResolvedValue([]);
-  repo.listIssues.mockResolvedValue([]);
+  repo.listRecipients.mockResolvedValue([]);
   repo.createDispatch.mockImplementation((data) =>
     Promise.resolve({
       id: 'd1',

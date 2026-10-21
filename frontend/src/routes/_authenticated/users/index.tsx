@@ -25,6 +25,7 @@ import { TemporaryPasswordModal } from '@/features/users/components/temporary-pa
 import { UserPermissionsDialog } from '@/features/users/components/user-permissions-dialog';
 import { SendWhatsappDialog } from '@/features/team-whatsapp/components/send-whatsapp-dialog';
 import { formatPhoneBR } from '@/lib/format-phone';
+import { shiftLabel } from '@/lib/work-shift';
 import { ROLE_LABEL } from '@/features/users/role';
 import type { UserSummary } from '@/features/users/schemas';
 
@@ -110,7 +111,7 @@ function UsersTable({ users, selfId, dialogs }: { users: UserSummary[]; selfId?:
   return (
     <div className="rounded-md border" style={{ borderColor: 'var(--border)' }}>
       <Table>
-        <TableHeader><TableRow><TableHead>Nome</TableHead><TableHead>Email</TableHead><TableHead>Telefone</TableHead><TableHead>Setor</TableHead><TableHead>Perfil</TableHead><TableHead>Acesso</TableHead><TableHead className="w-10" /></TableRow></TableHeader>
+        <TableHeader><TableRow><TableHead>Nome</TableHead><TableHead>Email</TableHead><TableHead>Telefone</TableHead><TableHead>Setor</TableHead><TableHead>Turno</TableHead><TableHead>Perfil</TableHead><TableHead>Acesso</TableHead><TableHead className="w-10" /></TableRow></TableHeader>
         <TableBody>{users.map((user) => <UserRow key={user.id} user={user} isSelf={user.id === selfId} dialogs={dialogs} />)}</TableBody>
       </Table>
     </div>
@@ -130,6 +131,7 @@ function UserRow({ user, isSelf, dialogs }: { user: UserSummary; isSelf: boolean
       <TableCell className="text-sm" style={{ color: 'var(--foreground-muted)' }}>{user.email}</TableCell>
       <TableCell className="text-sm">{formatPhoneBR(user.phoneE164)}</TableCell>
       <TableCell>{user.sector?.name ?? 'Sem setor'}</TableCell>
+      <TableCell>{shiftLabel(user.shift)}</TableCell>
       <TableCell><Badge variant={user.role === 'ADMIN' ? 'default' : 'secondary'}>{ROLE_LABEL[user.role]}</Badge></TableCell>
       <TableCell><Badge variant={user.isActive ? 'default' : 'outline'}>{user.isActive ? 'Ativo' : 'Inativo'}</Badge></TableCell>
       <TableCell>

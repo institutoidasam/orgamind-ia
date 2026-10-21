@@ -17,10 +17,10 @@ function list(queued: number, ageMs: number): DispatchList {
       id: 'd1',
       createdAt: new Date(NOW - ageMs).toISOString(),
       author: null,
-      target: { type: 'sector', id: 's1', label: 'Compras' },
+      target: { type: 'sector', id: 's1', label: 'Compras', shift: null },
       channel: null,
       counts: { queued, sent: 0, failed: 0, skipped: 0 },
-      issues: [],
+      recipients: [],
     }],
   };
 }

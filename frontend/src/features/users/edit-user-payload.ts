@@ -4,8 +4,10 @@ export function editableUserPayload(
   data: EditUserInput,
   isSelf: boolean,
   phoneChanged = false,
+  shiftChanged = false,
 ): EditUserInput {
-  const { phone, ...rest } = data;
+  const { phone, shift, ...rest } = data;
   const base = isSelf ? (rest.name === undefined ? {} : { name: rest.name }) : rest;
-  return phoneChanged && phone ? { ...base, phone } : base;
+  const withPhone = phoneChanged && phone ? { ...base, phone } : base;
+  return shiftChanged ? { ...withPhone, shift: shift ?? null } : withPhone;
 }

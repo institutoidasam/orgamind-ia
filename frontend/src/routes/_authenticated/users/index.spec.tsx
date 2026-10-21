@@ -165,6 +165,20 @@ describe('UsersPage coluna Telefone', () => {
   });
 });
 
+describe('UsersPage coluna Turno', () => {
+  it('mostra o turno ou "Sem turno" quando não há', () => {
+    getState.mockReturnValue(authState);
+    useUsers.mockReturnValue({
+      data: { data: [{ ...users[0], shift: 'SECOND' as const }, { ...users[1], shift: null }], total: 2 }, isLoading: false, isError: false,
+      error: null, refetch: vi.fn(),
+    });
+    render(<UsersPage />);
+    expect(screen.getByRole('columnheader', { name: 'Turno' })).toBeInTheDocument();
+    expect(within(screen.getByRole('row', { name: /Ada/ })).getByText('2º turno')).toBeInTheDocument();
+    expect(within(screen.getByRole('row', { name: /Bia/ })).getByText('Sem turno')).toBeInTheDocument();
+  });
+});
+
 describe('UsersPage Enviar WhatsApp', () => {
   beforeEach(() => {
     getState.mockReturnValue(authState);

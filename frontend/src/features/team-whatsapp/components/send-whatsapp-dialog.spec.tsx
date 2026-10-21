@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HTTPError } from 'ky';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -19,7 +19,10 @@ vi.mock('sonner', () => ({ toast: { success: toastSuccess, error: vi.fn() } }));
 import { SendWhatsappDialog } from './send-whatsapp-dialog';
 import type { SendTarget, TeamChannel } from '../schemas';
 
-const sector: SendTarget = { type: 'sector', sectorId: 's1', label: 'Compras', recipientCount: 3 };
+const sector: SendTarget = {
+  type: 'sector', sectorId: 's1', label: 'Compras · todos os turnos', shift: null, userIds: null,
+  recipients: [{ id: 'a', name: 'Ana' }, { id: 'b', name: 'Bia' }, { id: 'c', name: 'Caio' }], leftOut: [],
+};
 const person: SendTarget = { type: 'user', userId: 'u1', label: 'Rui' };
 const channel: TeamChannel = {
   id: 'ch1', name: 'GoZap Principal', phoneE164: '+5592991234567', provider: 'GOZAP', connectionState: 'open',
@@ -48,8 +51,8 @@ async function submit(user: ReturnType<typeof userEvent.setup>, text = 'Oi equip
   await user.click(screen.getByRole('button', { name: 'Enviar' }));
 }
 
-function http409(code: string) {
-  const response = new Response(JSON.stringify({ code }), { status: 409 });
+function httpError(status: number, code: string) {
+  const response = new Response(JSON.stringify({ code }), { status });
   return new HTTPError(response, new Request('https://x'), {} as never);
 }
 
@@ -68,9 +71,9 @@ beforeEach(() => {
 });
 
 describe('SendWhatsappDialog destino e formulário', () => {
-  it('mostra o setor com a quantidade de pessoas e a pessoa pelo nome', () => {
+  it('mostra o destino do setor com o turno e a pessoa pelo nome', () => {
     setup();
-    expect(screen.getByText('Setor Compras · 3 pessoa(s)')).toBeInTheDocument();
+    expect(screen.getByText('Compras · todos os turnos')).toBeInTheDocument();
   });
 
   it('mostra só o nome quando o destino é uma pessoa', () => {
@@ -201,12 +204,43 @@ describe('SendWhatsappDialog envio', () => {
   });
 
   it('mostra no diálogo o erro 409 de canal desconectado e não fecha', async () => {
-    mutateAsync.mockRejectedValue(http409('team_whatsapp.channel_disconnected'));
+    mutateAsync.mockRejectedValue(httpError(409, 'team_whatsapp.channel_disconnected'));
     const { user, onOpenChange } = setup();
     await submit(user);
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'O canal escolhido está desconectado. Reconecte o número ou escolha outro canal.',
     );
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+});
+
+describe('SendWhatsappDialog: nomes', () => {
+  const shiftTarget = (userIds: string[] | null, leftOut: { id: string; name: string }[]): SendTarget => ({
+    type: 'sector', sectorId: 's1', label: 'Produção · 2º turno', shift: 'SECOND', userIds, leftOut,
+    recipients: [{ id: 'joao', name: 'João' }, { id: 'maria', name: 'Maria' }],
+  });
+
+  it.each([
+    ['todos do turno', shiftTarget(null, [{ id: 'pedro', name: 'Pedro' }]), { shift: 'SECOND' }, true],
+    ['selecionados', shiftTarget(['joao', 'maria'], []), { shift: 'SECOND', userIds: ['joao', 'maria'] }, false],
+  ])('%s: lista quem recebe e quem fica de fora, e manda só shift/userIds', async (_name, target, extra, hasLeftOut) => {
+    mutateAsync.mockResolvedValue({ dispatchId: 'd1', queued: 2, skipped: [] });
+    const { user } = setup(target);
+    expect(screen.getByText('Produção · 2º turno')).toBeInTheDocument();
+    expect(within(screen.getByRole('list', { name: 'Vão receber (2)' })).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['João', 'Maria']);
+    expect(screen.queryByText('Ficam de fora (sem telefone)') !== null).toBe(hasLeftOut);
+    if (hasLeftOut) {
+      expect(within(screen.getByRole('list', { name: 'Ficam de fora (sem telefone)' })).getByText('Pedro')).toBeInTheDocument();
+    }
+    await submit(user);
+    expect(mutateAsync).toHaveBeenCalledWith({ channelId: 'ch1', text: 'Oi equipe', target: { type: 'sector', sectorId: 's1', ...extra } });
+  });
+
+  it('seleção inválida (422) mostra que a lista mudou e não fecha', async () => {
+    mutateAsync.mockRejectedValue(httpError(422, 'team_whatsapp.invalid_selection'));
+    const { user, onOpenChange } = setup(shiftTarget(['joao'], []));
+    await submit(user);
+    expect(await screen.findByRole('alert')).toHaveTextContent('A lista de pessoas mudou. Atualize a página e confira de novo.');
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
 });

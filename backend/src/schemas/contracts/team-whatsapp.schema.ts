@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { workShiftSchema } from './user.schema';
 
 /**
  * Contratos de resposta do WhatsApp da equipe (`/internal/team-whatsapp/*`).
@@ -14,7 +15,12 @@ export const teamConnectionStateSchema = z.enum([
   'connecting',
   'close',
 ]);
-export const teamIssueStatusSchema = z.enum(['FAILED', 'SKIPPED']);
+export const teamRecipientStatusSchema = z.enum([
+  'QUEUED',
+  'SENT',
+  'FAILED',
+  'SKIPPED',
+]);
 
 const personSchema = z.object({
   id: z.string(),
@@ -38,7 +44,12 @@ export const teamTargetsResponseSchema = z.object({
       name: z.string(),
       code: z.string(),
       members: personSchema
-        .extend({ phoneE164: z.string().nullable(), isActive: z.boolean() })
+        .extend({
+          phoneE164: z.string().nullable(),
+          isActive: z.boolean(),
+          // null = sem turno definido.
+          shift: workShiftSchema.nullable(),
+        })
         .array(),
     })
     .array(),
@@ -74,15 +85,20 @@ export const teamDispatchListResponseSchema = z.object({
         type: teamTargetTypeSchema,
         id: z.string(),
         label: z.string(),
+        // Filtro de turno do envio; null = todos os turnos ou alvo pessoa.
+        shift: workShiftSchema.nullable(),
       }),
       // null = canal removido depois do envio (o front mostra "canal removido").
       channel: z.object({ id: z.string(), name: z.string() }).nullable(),
       counts: teamDispatchCountsSchema,
-      // Destinatários que não receberam: FAILED (errorCode) e SKIPPED (skipReason).
-      issues: z
+      // Todos os destinatários, por nome, sem telefone. reason = errorCode (FAILED)
+      // ou skipReason (SKIPPED); null nos demais. userId null = usuário apagado.
+      recipients: z
         .object({
+          userId: z.string().nullable(),
           name: z.string(),
-          status: teamIssueStatusSchema,
+          shift: workShiftSchema.nullable(),
+          status: teamRecipientStatusSchema,
           reason: z.string().nullable(),
         })
         .array(),

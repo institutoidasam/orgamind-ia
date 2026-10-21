@@ -4,6 +4,7 @@ import type {
   TeamWhatsappRecipientStatus,
   TeamWhatsappSkipReason,
   TeamWhatsappTargetType,
+  WorkShift,
 } from '@prisma/client';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { TEAM_PROVIDERS, type TeamActor } from './team-whatsapp.policy';
@@ -18,6 +19,7 @@ export const teamMemberSelect = {
   sector: { select: { isActive: true } },
   phoneE164: true,
   contact: { select: { phoneE164: true } },
+  shift: true,
 } satisfies Prisma.UserSelect;
 export type TeamMember = Prisma.UserGetPayload<{
   select: typeof teamMemberSelect;
@@ -29,6 +31,7 @@ const dispatchListSelect = {
   targetType: true,
   targetId: true,
   targetLabel: true,
+  shift: true,
   author: { select: { id: true, name: true, email: true } },
   channel: { select: { id: true, name: true } },
 } satisfies Prisma.TeamWhatsappDispatchSelect;
@@ -36,17 +39,23 @@ export type TeamDispatchRow = Prisma.TeamWhatsappDispatchGetPayload<{
   select: typeof dispatchListSelect;
 }>;
 
-export type TeamIssueRow = {
+/** Destinatário na lista de envios: nome e turno do snapshot, sem telefone. */
+export type TeamRecipientRow = {
   dispatchId: string;
+  // null quando o usuário foi apagado depois do envio (FK SetNull).
+  userId: string | null;
   userName: string;
+  shift: WorkShift | null;
   status: TeamWhatsappRecipientStatus;
   errorCode: string | null;
   skipReason: TeamWhatsappSkipReason | null;
 };
 
+/** `shift` = turno do destinatário no momento do POST (snapshot). */
 export type NewTeamRecipient = {
   userId: string;
   userName: string;
+  shift: WorkShift | null;
   status: TeamWhatsappRecipientStatus;
   skipReason: TeamWhatsappSkipReason | null;
 };
@@ -56,6 +65,8 @@ export type NewTeamDispatch = {
   targetType: TeamWhatsappTargetType;
   targetId: string;
   targetLabel: string;
+  // Filtro de turno do alvo setor; null = todos os turnos ou alvo pessoa.
+  shift: WorkShift | null;
   channelId: string;
   text: string;
   recipients: NewTeamRecipient[];
@@ -166,6 +177,7 @@ export class TeamWhatsappRepository {
             email: true,
             phoneE164: true,
             isActive: true,
+            shift: true,
           },
         },
       },
@@ -215,17 +227,18 @@ export class TeamWhatsappRepository {
     }));
   }
 
-  /** Destinatários FAILED/SKIPPED dos envios já filtrados por `listDispatches`. */
-  async listIssues(dispatchIds: readonly string[]): Promise<TeamIssueRow[]> {
+  /** Todos os destinatários dos envios já filtrados por `listDispatches`; sem telefone. */
+  async listRecipients(
+    dispatchIds: readonly string[],
+  ): Promise<TeamRecipientRow[]> {
     if (dispatchIds.length === 0) return [];
     return this.prisma.teamWhatsappRecipient.findMany({
-      where: {
-        dispatchId: { in: [...dispatchIds] },
-        status: { in: ['FAILED', 'SKIPPED'] },
-      },
+      where: { dispatchId: { in: [...dispatchIds] } },
       select: {
         dispatchId: true,
+        userId: true,
         userName: true,
+        shift: true,
         status: true,
         errorCode: true,
         skipReason: true,

@@ -1,3 +1,5 @@
+import type { DispatchRecipient } from './schemas';
+
 export const PACING_HINT =
   'Os envios saem aos poucos, no ritmo do canal; para um setor grande pode levar alguns minutos.';
 
@@ -11,6 +13,8 @@ const TEAM_ERROR_MESSAGES: Record<string, string> = {
     'O canal escolhido está desconectado. Reconecte o número ou escolha outro canal.',
   'team_whatsapp.channel_invalid': 'Canal inválido: escolha um canal GoZap ou Evolution ativo.',
   'team_whatsapp.no_recipients': 'Ninguém neste destino tem telefone válido para receber.',
+  'team_whatsapp.invalid_selection':
+    'A lista de pessoas mudou. Atualize a página e confira de novo.',
 };
 
 export const SKIP_REASON_LABEL = {
@@ -57,8 +61,11 @@ export function failureReasonLabel(code: string | null): string {
   return `Falha no envio (código ${code})`;
 }
 
-/** Motivo de um destinatário com problema: pulo usa SKIP_REASON_LABEL; falha, failureReasonLabel. */
-export function issueLabel(issue: { status: 'FAILED' | 'SKIPPED'; reason: string | null }): string {
-  if (issue.status === 'FAILED') return failureReasonLabel(issue.reason);
-  return (issue.reason && (SKIP_REASON_LABEL as Record<string, string>)[issue.reason]) || 'pulado';
+/** Situação de um destinatário: falha usa failureReasonLabel; pulo, SKIP_REASON_LABEL. */
+export function recipientStatusLabel(r: Pick<DispatchRecipient, 'status' | 'reason'>): string {
+  if (r.status === 'QUEUED') return 'Na fila';
+  if (r.status === 'SENT') return 'Enviado';
+  if (r.status === 'FAILED') return `Falhou: ${failureReasonLabel(r.reason)}`;
+  const skip = r.reason && (SKIP_REASON_LABEL as Record<string, string>)[r.reason];
+  return skip ? `Pulado: ${skip}` : 'Pulado';
 }

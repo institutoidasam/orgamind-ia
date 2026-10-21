@@ -10,7 +10,7 @@ import {
   NotFoundError,
 } from '../../shared/errors/domain.error';
 import type { UserListResult, UserSummary } from './users.repository';
-import { Prisma, type Role } from '@prisma/client';
+import { Prisma, type Role, type WorkShift } from '@prisma/client';
 
 export type UserListResponse = UserListResult & {
   page: number;
@@ -23,6 +23,8 @@ type UserPatch = {
   isActive?: boolean;
   /** Sem null: quem já tem telefone não pode apagá-lo; ausente = mantém. */
   phone?: string;
+  /** Ausente = mantém; null = limpa (sem turno). Não é mudança de identidade. */
+  shift?: WorkShift | null;
 };
 type CreateUserInput = {
   email: string;
@@ -30,6 +32,7 @@ type CreateUserInput = {
   role: 'ADMIN' | 'OPERATOR' | 'SUPERVISOR' | 'VIEWER';
   sectorId?: string;
   phone: string;
+  shift?: WorkShift | null;
 };
 type PhoneLink = { phoneE164: string; contactId: string };
 
@@ -58,6 +61,7 @@ function toUserSummary(u: UserSummary): UserSummary {
     mustChangePassword: u.mustChangePassword,
     lastLoginAt: u.lastLoginAt,
     phoneE164: u.phoneE164,
+    shift: u.shift,
     createdAt: u.createdAt,
     updatedAt: u.updatedAt,
     createdById: u.createdById,
@@ -155,6 +159,7 @@ export class UsersService {
         mustChangePassword: true,
         phoneE164: phone.phoneE164,
         contact: { connect: { id: phone.contactId } },
+        shift: input.shift ?? null,
         createdBy: { connect: { id: createdById } },
       })
       .catch(rethrowPhoneConflict);
@@ -266,6 +271,7 @@ export class UsersService {
           }
         : {}),
       ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
+      ...(input.shift !== undefined ? { shift: input.shift } : {}),
       ...(changesIdentity ? { sessionVersion: { increment: 1 } } : {}),
     };
   }

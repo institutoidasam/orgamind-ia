@@ -1,7 +1,6 @@
 import { useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { HTTPError } from 'ky';
 import { toast } from 'sonner';
 import {
   Dialog,
@@ -11,6 +10,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { readApiErrorBody, type ApiErrorBody } from '@/lib/api-error';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -61,22 +61,11 @@ function buildUpdateInput(data: FormValues) {
   };
 }
 
-type ApiErrorBody = { code?: string; detail?: string } | null;
-
-/** Read the JSON error body off a ky HTTPError, or `null` if absent/unparseable. */
-async function readErrorBody(err: unknown): Promise<ApiErrorBody> {
-  if (!(err instanceof HTTPError)) return null;
-  return (await err.response
-    .clone()
-    .json()
-    .catch(() => null)) as ApiErrorBody;
-}
-
 /**
  * Map a parsed API error body to a phone field-error message, or `null` when
  * the error is not a known phone-related code (caller falls back to a toast).
  */
-function phoneFieldErrorMessage(body: ApiErrorBody): string | null {
+function phoneFieldErrorMessage(body: ApiErrorBody | undefined): string | null {
   if (body?.code === 'contact.phone_conflict') {
     return 'Já existe um contato com esse telefone';
   }
@@ -148,7 +137,7 @@ export function ContactFormDialog({ open, onOpenChange, contact }: Props) {
       }
       onOpenChange(false);
     } catch (err) {
-      const phoneError = phoneFieldErrorMessage(await readErrorBody(err));
+      const phoneError = phoneFieldErrorMessage(await readApiErrorBody(err));
       if (phoneError) {
         form.setError('phone', { message: phoneError });
         return;

@@ -1,7 +1,7 @@
 // frontend/src/lib/api-error.spec.ts
 import { describe, it, expect } from 'vitest';
 import { HTTPError } from 'ky';
-import { extractApiError } from './api-error';
+import { extractApiError, readErrorBody } from './api-error';
 
 function makeKyError(status: number, body: unknown): HTTPError {
   const response = new Response(typeof body === 'string' ? body : JSON.stringify(body), {
@@ -74,5 +74,42 @@ describe('extractApiError', () => {
   it('handles unknown thrown values', async () => {
     const out = await extractApiError('string thrown');
     expect(out).toEqual({ title: 'Erro', message: 'Falha desconhecida' });
+  });
+});
+
+/** HTTPError como o ky 2 entrega: corpo do Response já consumido, corpo parseado em `data`. */
+async function ky2Error(status: number, data: unknown): Promise<HTTPError> {
+  const response = new Response(JSON.stringify(data), { status });
+  await response.text();
+  const err = new HTTPError(response, new Request('http://localhost/x'), {} as never);
+  err.data = data as HTTPError['data'];
+  return err;
+}
+
+describe('readErrorBody / extractApiError com o corpo em error.data (ky 2)', () => {
+  const problem = { code: 'shifts.name_taken', title: 'Shift name taken', status: 409 };
+
+  it('extractApiError lê code e title de error.data quando o corpo já foi consumido', async () => {
+    const out = await extractApiError(await ky2Error(409, problem));
+    expect(out.code).toBe('shifts.name_taken');
+    expect(out.title).toBe('Shift name taken');
+    expect(out.status).toBe(409);
+  });
+
+  it('readErrorBody devolve error.data e, sem data, cai no corpo intacto', async () => {
+    await expect(readErrorBody(await ky2Error(409, problem))).resolves.toEqual(problem);
+    await expect(readErrorBody(makeKyError(409, problem))).resolves.toEqual(problem);
+  });
+
+  it('readErrorBody devolve undefined sem data e com o corpo ilegível ou consumido', async () => {
+    await expect(readErrorBody(makeKyError(500, 'Bad Gateway'))).resolves.toBeUndefined();
+    const consumed = await ky2Error(500, problem);
+    consumed.data = undefined;
+    await expect(readErrorBody(consumed)).resolves.toBeUndefined();
+  });
+
+  it('extractApiError trata data em texto (resposta não JSON) como corpo genérico', async () => {
+    const out = await extractApiError(await ky2Error(502, 'Bad Gateway'));
+    expect(out).toEqual({ title: 'Erro', message: 'Falha HTTP 502', status: 502 });
   });
 });

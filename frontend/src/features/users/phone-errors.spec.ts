@@ -7,6 +7,14 @@ function httpError(status: number, body: unknown): HTTPError {
   return new HTTPError(new Response(raw, { status }), new Request('https://x'), {} as never);
 }
 
+/** Como o ky 2 entrega: o corpo do Response já foi lido e o JSON está em `data`. */
+async function bodyConsumedError(status: number, body: unknown): Promise<HTTPError> {
+  const err = httpError(status, body);
+  await err.response.text();
+  err.data = body as HTTPError['data'];
+  return err;
+}
+
 describe('userPhoneFieldError', () => {
   it('maps user.phone_taken to the field message', async () => {
     await expect(userPhoneFieldError(httpError(409, { code: 'user.phone_taken' }))).resolves.toBe(
@@ -34,5 +42,12 @@ describe('reportUserPhoneError', () => {
     expect(setError).toHaveBeenCalledWith('phone', { message: 'Este telefone já está em uso por outro usuário.' });
     await expect(reportUserPhoneError({ setError }, new Error('boom'))).resolves.toBe(false);
     expect(setError).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('userPhoneFieldError com o corpo em error.data (ky 2)', () => {
+  it('maps user.phone_taken even when the response body was already consumed', async () => {
+    const err = await bodyConsumedError(409, { code: 'user.phone_taken', status: 409 });
+    await expect(userPhoneFieldError(err)).resolves.toBe('Este telefone já está em uso por outro usuário.');
   });
 });

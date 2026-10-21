@@ -22,9 +22,21 @@ describe("editableUserPayload", () => {
 
   it("includes phone only when it changed and is not empty", () => {
     const data = { name: "Ana", phone: "92 98888-7777" };
-    expect(editableUserPayload(data, false, true)).toEqual(data);
-    expect(editableUserPayload(data, false, false)).toEqual({ name: "Ana" });
-    expect(editableUserPayload({ name: "Ana", phone: "" }, false, true)).toEqual({ name: "Ana" });
-    expect(editableUserPayload(data, true, true)).toEqual(data);
+    expect(editableUserPayload(data, false, { phone: true })).toEqual(data);
+    expect(editableUserPayload(data, false)).toEqual({ name: "Ana" });
+    expect(editableUserPayload({ name: "Ana", phone: "" }, false, { phone: true })).toEqual({ name: "Ana" });
+    expect(editableUserPayload(data, true, { phone: true })).toEqual(data);
+  });
+
+  it("includes shiftId only when it changed; null clears it", () => {
+    expect(editableUserPayload({ name: "Ana", shiftId: "sh1" }, false)).toEqual({ name: "Ana" });
+    expect(editableUserPayload({ name: "Ana", shiftId: "sh1" }, false, { shiftId: true })).toEqual({ name: "Ana", shiftId: "sh1" });
+    expect(editableUserPayload({ name: "Ana", shiftId: null }, false, { shiftId: true })).toEqual({ name: "Ana", shiftId: null });
+  });
+
+  it("includes jobTitle only when it changed; empty becomes null", () => {
+    expect(editableUserPayload({ name: "Ana", jobTitle: "Operador" }, false)).toEqual({ name: "Ana" });
+    expect(editableUserPayload({ name: "Ana", jobTitle: "Operador" }, false, { jobTitle: true })).toEqual({ name: "Ana", jobTitle: "Operador" });
+    expect(editableUserPayload({ name: "Ana", jobTitle: "" }, false, { jobTitle: true })).toEqual({ name: "Ana", jobTitle: null });
   });
 });

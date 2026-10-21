@@ -3,13 +3,14 @@ import userEvent from '@testing-library/user-event';
 import type { ComponentType } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { authState, deleteMutate, getState, resetMutate, toastError, toastSuccess, useUsers } = vi.hoisted(() => ({
+const { authState, deleteMutate, getState, resetMutate, toastError, toastSuccess, useShifts, useUsers } = vi.hoisted(() => ({
   authState: { user: { id: 'admin-1', role: 'ADMIN' } },
   deleteMutate: vi.fn(),
   getState: vi.fn(),
   resetMutate: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
+  useShifts: vi.fn(() => ({ data: [] })),
   useUsers: vi.fn(),
 }));
 
@@ -30,6 +31,8 @@ vi.mock('@/features/users/api', () => ({
   useDeleteUser: () => ({ mutateAsync: deleteMutate, isPending: false }),
   useResetUserPassword: () => ({ mutateAsync: resetMutate, isPending: false }),
 }));
+
+vi.mock('@/features/shifts/api', () => ({ useShifts: () => useShifts() }));
 
 vi.mock('@/features/users/components/invite-user-dialog', () => ({
   InviteUserDialog: ({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) => open && <div role="dialog">Convite aberto<button onClick={() => onOpenChange(false)}>Fechar convite</button></div>,
@@ -161,21 +164,46 @@ describe('UsersPage coluna Telefone', () => {
     render(<UsersPage />);
     expect(screen.getByRole('columnheader', { name: 'Telefone' })).toBeInTheDocument();
     expect(within(screen.getByRole('row', { name: /Ada/ })).getByText('(92) 99123-4567')).toBeInTheDocument();
-    expect(within(screen.getByRole('row', { name: /Bia/ })).getByText('—')).toBeInTheDocument();
+    expect(within(screen.getByRole('row', { name: /Bia/ })).getAllByRole('cell')[2]).toHaveTextContent('—');
   });
 });
 
-describe('UsersPage coluna Turno', () => {
-  it('mostra o turno ou "Sem turno" quando não há', () => {
+describe('UsersPage colunas Turno e Função', () => {
+  const shiftList = [
+    { id: 'sh1', name: 'Manhã', startTime: '06:00', endTime: '14:00', isActive: true, sortOrder: 0, crossesMidnight: false, inUse: [] },
+    { id: 'sh2', name: 'Madrugada', startTime: '22:00', endTime: '06:00', isActive: false, sortOrder: 1, crossesMidnight: true, inUse: [] },
+  ];
+  const renderPage = () => {
     getState.mockReturnValue(authState);
+    useShifts.mockReturnValue({ data: shiftList });
     useUsers.mockReturnValue({
-      data: { data: [{ ...users[0], shift: 'SECOND' as const }, { ...users[1], shift: null }], total: 2 }, isLoading: false, isError: false,
-      error: null, refetch: vi.fn(),
+      data: {
+        data: [
+          { ...users[0], shiftId: 'sh1', jobTitle: 'Operador de empilhadeira' },
+          { ...users[1], shiftId: 'sh2', jobTitle: null },
+          { ...users[2], shiftId: null, jobTitle: null },
+        ],
+        total: 3,
+      },
+      isLoading: false, isError: false, error: null, refetch: vi.fn(),
     });
     render(<UsersPage />);
+  };
+  const row = (name: RegExp) => within(screen.getByRole('row', { name }));
+
+  it('Turno mostra o nome vindo de useShifts, inclusive de turno inativo, e "Sem turno"', () => {
+    renderPage();
     expect(screen.getByRole('columnheader', { name: 'Turno' })).toBeInTheDocument();
-    expect(within(screen.getByRole('row', { name: /Ada/ })).getByText('2º turno')).toBeInTheDocument();
-    expect(within(screen.getByRole('row', { name: /Bia/ })).getByText('Sem turno')).toBeInTheDocument();
+    expect(row(/Ada/).getByText('Manhã')).toBeInTheDocument();
+    expect(row(/Bia/).getByText('Madrugada')).toBeInTheDocument();
+    expect(row(/Caio/).getByText('Sem turno')).toBeInTheDocument();
+  });
+
+  it('Função mostra o texto ou traço', () => {
+    renderPage();
+    expect(screen.getByRole('columnheader', { name: 'Função' })).toBeInTheDocument();
+    expect(row(/Ada/).getByText('Operador de empilhadeira')).toBeInTheDocument();
+    expect(row(/Bia/).getAllByRole('cell')[5]).toHaveTextContent('—');
   });
 });
 

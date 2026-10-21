@@ -9,9 +9,11 @@ const KNOWN_ROUTES = [
   '/caixa-de-entrada',
   '/nova-comunicacao',
   '/whatsapp-equipe',
+  '/escala',
   '/demandas',
   '/comunicados',
   '/setores',
+  '/turnos',
   '/connect',
   '/users',
 ];
@@ -35,13 +37,13 @@ describe('NAV manifest', () => {
 
   it('organiza exatamente os oito módulos internos nos três grupos do painel', () => {
     expect(navSection('ops', 'ADMIN').map((item) => item.label)).toEqual([
-      'Visão geral', 'Caixa de entrada', 'Nova comunicação', 'WhatsApp da equipe',
+      'Visão geral', 'Caixa de entrada', 'Nova comunicação', 'WhatsApp da equipe', 'Escala',
     ]);
     expect(navSection('sys', 'ADMIN').map((item) => item.label)).toEqual([
       'Demandas', 'Comunicados',
     ]);
     expect(navSection('admin', 'ADMIN').map((item) => item.label)).toEqual([
-      'Setores', 'Usuários', 'Números e canais',
+      'Setores', 'Turnos', 'Usuários', 'Números e canais',
     ]);
   });
 
@@ -147,5 +149,26 @@ describe('NAV WhatsApp da equipe', () => {
     expect(canAccessPath('/whatsapp-equipe', 'OPERATOR')).toBe(true);
     expect(canAccessPath('/whatsapp-equipe', 'VIEWER')).toBe(false);
     expect(navLabelFor('/whatsapp-equipe')).toBe('WhatsApp da equipe');
+  });
+});
+
+describe('NAV Turnos', () => {
+  it('Turnos só para ADMIN, na seção admin logo após Setores', () => {
+    const admin = navSection('admin', 'ADMIN').map((item) => item.label);
+    expect(admin.indexOf('Turnos')).toBe(admin.indexOf('Setores') + 1);
+    expect(NAV.find((n) => n.to === '/turnos')?.roles).toEqual(['ADMIN']);
+    expect(navSection('admin', 'SUPERVISOR')).toEqual([]);
+    expect(canAccessPath('/turnos', 'OPERATOR')).toBe(false);
+    expect(navLabelFor('/turnos')).toBe('Turnos');
+  });
+});
+
+describe('NAV Escala', () => {
+  it('Escala na seção ops logo após WhatsApp da equipe, para quem escreve no painel', () => {
+    const ops = navSection('ops', 'ADMIN').map((item) => item.label);
+    expect(ops.indexOf('Escala')).toBe(ops.indexOf('WhatsApp da equipe') + 1);
+    expect(NAV.find((n) => n.to === '/escala')?.roles).toEqual(['ADMIN', 'SUPERVISOR', 'OPERATOR']);
+    expect(navSection('ops', 'VIEWER').map((item) => item.label)).not.toContain('Escala');
+    expect(navLabelFor('/escala')).toBe('Escala');
   });
 });

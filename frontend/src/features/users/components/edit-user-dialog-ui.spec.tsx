@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({ mutateAsync: vi.fn(), isPending: false }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 vi.mock("../api", () => ({ useUpdateUser: () => state }));
 vi.mock("@/features/internal-admin/api", () => ({ useSectors: () => ({ data: { items: [{ id: "s1", name: "Engenharia" }] } }) }));
+vi.mock("@/features/shifts/api", () => ({ useShifts: () => ({ data: [] }) }));
 vi.mock("sonner", () => ({ toast }));
 
 const user = {

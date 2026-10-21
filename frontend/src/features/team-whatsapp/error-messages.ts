@@ -1,3 +1,4 @@
+import { readApiErrorBody } from '@/lib/api-error';
 import type { DispatchRecipient } from './schemas';
 
 export const PACING_HINT =
@@ -6,6 +7,7 @@ export const PACING_HINT =
 export const TARGETS_ERROR_MESSAGE = 'Não foi possível carregar os canais.';
 
 const FALLBACK_MESSAGE = 'Não foi possível enviar a mensagem.';
+const CANCEL_FALLBACK_MESSAGE = 'Não foi possível cancelar o envio. Tente de novo.';
 
 const TEAM_ERROR_MESSAGES: Record<string, string> = {
   'team_whatsapp.forbidden': 'Você não tem permissão para enviar a este destino.',
@@ -15,16 +17,34 @@ const TEAM_ERROR_MESSAGES: Record<string, string> = {
   'team_whatsapp.no_recipients': 'Ninguém neste destino tem telefone válido para receber.',
   'team_whatsapp.invalid_selection':
     'A lista de pessoas mudou. Atualize a página e confira de novo.',
+  'team_whatsapp.invalid_shift': 'Este turno não está mais disponível. Atualize a página.',
+  'team_whatsapp.schedule_in_past': 'O início deste turno já passou. Escolha Enviar agora ou outra data.',
+  'team_whatsapp.not_cancellable': 'Este envio já saiu ou foi cancelado.',
+  'team_whatsapp.dispatch_not_found': 'Envio não encontrado. Atualize a página.',
 };
 
 export const SKIP_REASON_LABEL = {
   NO_PHONE: 'sem telefone',
   SUPPRESSED: 'pediu para não receber (SAIR)',
+  INACTIVE: 'Usuário inativo',
 } as const;
+
+/** Motivo de a pessoa estar fora da escala do dia (grupo "De folga"). */
+export const OFF_REASON_LABEL = { DAY_OFF: 'Folga', VACATION: 'Férias' } as const;
 
 /** Mensagem PT-BR para o código de erro da API do WhatsApp da equipe. */
 export function teamErrorMessage(code?: string): string {
   return (code && TEAM_ERROR_MESSAGES[code]) || FALLBACK_MESSAGE;
+}
+
+/** Como teamErrorMessage, mas o erro não mapeado fala do cancelamento, não do envio. */
+export function cancelErrorMessage(code?: string): string {
+  return (code && TEAM_ERROR_MESSAGES[code]) || CANCEL_FALLBACK_MESSAGE;
+}
+
+/** `code` do corpo de erro da API (ex.: 'team_whatsapp.not_cancellable'), se houver. */
+export async function apiErrorCode(err: unknown): Promise<string | undefined> {
+  return (await readApiErrorBody(err))?.code;
 }
 
 const DISCONNECTED_CODES = new Set([
@@ -47,6 +67,7 @@ const UNAVAILABLE_CODES = new Set([
 export function failureReasonLabel(code: string | null): string {
   if (code === null) return 'Falha no envio';
   if (DISCONNECTED_CODES.has(code)) return 'Canal desconectado — reconecte em Números e canais';
+  if (code === 'team_whatsapp.channel_unavailable') return 'Canal indisponível na hora do envio';
   if (code === 'team_whatsapp.channel_invalid') {
     return 'Canal removido ou inválido — escolha outro canal';
   }
@@ -65,6 +86,8 @@ export function failureReasonLabel(code: string | null): string {
 export function recipientStatusLabel(r: Pick<DispatchRecipient, 'status' | 'reason'>): string {
   if (r.status === 'QUEUED') return 'Na fila';
   if (r.status === 'SENT') return 'Enviado';
+  if (r.status === 'SCHEDULED') return 'Agendado';
+  if (r.status === 'CANCELLED') return 'Cancelado';
   if (r.status === 'FAILED') return `Falhou: ${failureReasonLabel(r.reason)}`;
   const skip = r.reason && (SKIP_REASON_LABEL as Record<string, string>)[r.reason];
   return skip ? `Pulado: ${skip}` : 'Pulado';

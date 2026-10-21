@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { workShiftSchema } from "@/lib/work-shift";
 
 const phoneDigitsOk = (v: string) => {
   const digits = v.replace(/\D/g, "");
@@ -16,22 +17,24 @@ const optionalPhone = z
   .optional()
   .refine((v) => !v || phoneDigitsOk(v), PHONE_DIGITS_MESSAGE);
 
+const sectorRefSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  code: z.string(),
+  isActive: z.boolean().default(true),
+});
+
 export const userSummarySchema = z.object({
   id: z.string(),
   email: z.string().email(),
   name: z.string().nullable(),
   role: z.enum(["ADMIN", "SUPERVISOR", "OPERATOR", "VIEWER"]),
   sectorId: z.string().nullable().optional().default(null),
-  sector: z
-    .object({
-      id: z.string(),
-      name: z.string(),
-      code: z.string(),
-      isActive: z.boolean().default(true),
-    })
+  sector: sectorRefSchema
     .nullable()
     .optional()
     .default(null),
+  shift: workShiftSchema.nullable().optional().default(null),
   isActive: z.boolean().optional().default(true),
   lastLoginAt: z.string().nullable(),
   phoneE164: z.string().nullable(),
@@ -55,6 +58,7 @@ export const inviteUserSchema = z
       .enum(["ADMIN", "SUPERVISOR", "OPERATOR", "VIEWER"])
       .default("OPERATOR"),
     sectorId: z.string().nullable().optional(),
+    shift: workShiftSchema.nullable().optional(),
   })
   .superRefine((value, ctx) => {
     if (value.role !== "ADMIN" && !value.sectorId) {
@@ -70,6 +74,7 @@ export const editUserSchema = z.object({
   name: z.string().max(120).optional(),
   role: z.enum(["ADMIN", "SUPERVISOR", "OPERATOR", "VIEWER"]).optional(),
   sectorId: z.string().nullable().optional(),
+  shift: workShiftSchema.nullable().optional(),
   isActive: z.boolean().optional(),
   phone: z.string().optional(),
 });

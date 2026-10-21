@@ -8,14 +8,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSectors } from "@/features/internal-admin/api";
-import { extractApiError } from "@/lib/api-error";
 import { formatPhoneBR } from "@/lib/format-phone";
 import { useUpdateUser } from "../api";
 import { editableUserPayload } from "../edit-user-payload";
-import { reportUserPhoneError } from "../phone-errors";
+import { reportUserSubmitError } from "../submit-error";
 import { editUserSchemaFor, type EditUserInput, type UserSummary } from "../schemas";
 import { PhoneField } from "./phone-field";
 import { RoleSelect, SectorSelect } from "./role-sector-selects";
+import { ShiftSelect } from "./shift-select";
 
 type Props = { user: UserSummary; open: boolean; onOpenChange: (open: boolean) => void; isSelf: boolean };
 type Form = UseFormReturn<EditUserInput>;
@@ -31,19 +31,17 @@ function useEditUserForm(user: UserSummary, isSelf: boolean, onOpenChange: Props
   const schema = useMemo(() => editUserSchemaFor(Boolean(user.phoneE164)), [user.phoneE164]);
   const form = useForm<EditUserInput>({ resolver: zodResolver(schema) as never });
   const initialPhone = user.phoneE164 ? formatPhoneBR(user.phoneE164) : "";
-  useEffect(() => form.reset({ name: user.name ?? "", phone: initialPhone, role: user.role, sectorId: user.sectorId, isActive: user.isActive }), [user, initialPhone, form]);
+  useEffect(() => form.reset({ name: user.name ?? "", phone: initialPhone, role: user.role, sectorId: user.sectorId, shift: user.shift, isActive: user.isActive }), [user, initialPhone, form]);
   const submit = async (data: EditUserInput) => {
     try {
-      await update.mutateAsync({ id: user.id, data: editableUserPayload(data, isSelf, (data.phone ?? "") !== initialPhone) });
+      await update.mutateAsync({ id: user.id, data: editableUserPayload(data, isSelf, (data.phone ?? "") !== initialPhone, (data.shift ?? null) !== (user.shift ?? null)) });
       toast.success("Usuário atualizado.");
       onOpenChange(false);
     } catch (error) {
-      if (await reportUserPhoneError(form, error)) return;
-      const { title, message } = await extractApiError(error);
-      toast.error(title, { description: message });
+      await reportUserSubmitError(form, error);
     }
   };
-  return { form, isActive: useWatch({ control: form.control, name: "isActive" }), pending: update.isPending, role: useWatch({ control: form.control, name: "role" }), sectorId: useWatch({ control: form.control, name: "sectorId" }), sectors: sectors.data?.items ?? [], submit };
+  return { form, isActive: useWatch({ control: form.control, name: "isActive" }), pending: update.isPending, role: useWatch({ control: form.control, name: "role" }), sectorId: useWatch({ control: form.control, name: "sectorId" }), shift: useWatch({ control: form.control, name: "shift" }), sectors: sectors.data?.items ?? [], submit };
 }
 
 function EditUserForm({ state, user, isSelf, onCancel }: { state: State; user: UserSummary; isSelf: boolean; onCancel: () => void }) {
@@ -56,7 +54,7 @@ function UserIdentity({ form, user }: { form: Form; user: UserSummary }) {
 
 function RoleAndSectorFields({ state, user, isSelf }: { state: State; user: UserSummary; isSelf: boolean }) {
   const { form } = state;
-  return <><div className="space-y-1"><RoleSelect value={state.role ?? user.role} onChange={(value) => form.setValue("role", value)} disabled={isSelf} />{isSelf && <p className="text-xs" style={{ color: "var(--foreground-muted)" }}>Você não pode alterar seu próprio perfil.</p>}</div><div className="space-y-1"><SectorSelect value={state.sectorId ?? null} onChange={(value) => form.setValue("sectorId", value)} sectors={state.sectors} disabled={isSelf} /></div></>;
+  return <><div className="space-y-1"><RoleSelect value={state.role ?? user.role} onChange={(value) => form.setValue("role", value)} disabled={isSelf} />{isSelf && <p className="text-xs" style={{ color: "var(--foreground-muted)" }}>Você não pode alterar seu próprio perfil.</p>}</div><div className="space-y-1"><SectorSelect value={state.sectorId ?? null} onChange={(value) => form.setValue("sectorId", value)} sectors={state.sectors} disabled={isSelf} /></div><ShiftSelect value={state.shift ?? null} onChange={(value) => form.setValue("shift", value)} /></>;
 }
 
 function AccessField({ form, isActive, disabled }: { form: Form; isActive: boolean | undefined; disabled: boolean }) {

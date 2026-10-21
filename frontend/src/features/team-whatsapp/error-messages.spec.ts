@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  failureReasonLabel, issueLabel, PACING_HINT, SKIP_REASON_LABEL, teamErrorMessage,
+  failureReasonLabel, PACING_HINT, recipientStatusLabel, SKIP_REASON_LABEL, teamErrorMessage,
 } from './error-messages';
 
 describe('teamErrorMessage', () => {
@@ -9,6 +9,7 @@ describe('teamErrorMessage', () => {
     ['team_whatsapp.channel_disconnected', 'O canal escolhido está desconectado. Reconecte o número ou escolha outro canal.'],
     ['team_whatsapp.channel_invalid', 'Canal inválido: escolha um canal GoZap ou Evolution ativo.'],
     ['team_whatsapp.no_recipients', 'Ninguém neste destino tem telefone válido para receber.'],
+    ['team_whatsapp.invalid_selection', 'A lista de pessoas mudou. Atualize a página e confira de novo.'],
     [undefined, 'Não foi possível enviar a mensagem.'],
     ['outro.codigo', 'Não foi possível enviar a mensagem.'],
   ])('%s', (code, msg) => expect(teamErrorMessage(code)).toBe(msg));
@@ -21,7 +22,7 @@ describe('rótulos de envio', () => {
   });
 });
 
-describe('failureReasonLabel e issueLabel', () => {
+describe('failureReasonLabel', () => {
   const DISCONNECTED = 'Canal desconectado — reconecte em Números e canais';
   const UNCONFIRMED = 'Sem confirmação do WhatsApp — confira no celular antes de reenviar';
   const UNAVAILABLE = 'Serviço de WhatsApp indisponível — avise o administrador';
@@ -42,10 +43,14 @@ describe('failureReasonLabel e issueLabel', () => {
     [null, 'Falha no envio'],
     ['x.y', 'Falha no envio (código x.y)'],
   ])('%s', (code, msg) => expect(failureReasonLabel(code)).toBe(msg));
+});
 
-  it('issueLabel usa o rótulo de pulo para SKIPPED e o de falha para FAILED', () => {
-    expect(issueLabel({ name: 'Caio', status: 'SKIPPED', reason: 'SUPPRESSED' })).toBe('pediu para não receber (SAIR)');
-    expect(issueLabel({ name: 'Caio', status: 'SKIPPED', reason: null })).toBe('pulado');
-    expect(issueLabel({ name: 'Bia', status: 'FAILED', reason: null })).toBe('Falha no envio');
-  });
+describe('recipientStatusLabel', () => {
+  it.each([
+    [{ status: 'QUEUED', reason: null }, 'Na fila'],
+    [{ status: 'SENT', reason: null }, 'Enviado'],
+    [{ status: 'FAILED', reason: 'evolution.session_closed' }, 'Falhou: Canal desconectado — reconecte em Números e canais'],
+    [{ status: 'SKIPPED', reason: 'NO_PHONE' }, 'Pulado: sem telefone'],
+    [{ status: 'SKIPPED', reason: null }, 'Pulado'],
+  ] as const)('%j', (r, label) => expect(recipientStatusLabel(r)).toBe(label));
 });

@@ -14,16 +14,43 @@ import { formatPhoneBR } from '@/lib/format-phone';
 import { useCreateTeamDispatch, useTeamTargets } from '../api';
 import { channelAvailability } from '../channel-availability';
 import { PACING_HINT, SKIP_REASON_LABEL, TARGETS_ERROR_MESSAGE, teamErrorMessage } from '../error-messages';
-import type { DispatchResult, SendTarget, TeamChannel } from '../schemas';
+import type { CreateDispatchInput, DispatchResult, RecipientPreview, SendTarget, TeamChannel } from '../schemas';
 
 const MAX_TEXT = 2000;
 
 type Props = { open: boolean; onOpenChange: (open: boolean) => void; target: SendTarget };
 
-function targetLabel(target: SendTarget): string {
-  return target.type === 'sector'
-    ? `Setor ${target.label} · ${target.recipientCount} pessoa(s)`
-    : target.label;
+type SectorTarget = Extract<SendTarget, { type: 'sector' }>;
+
+/** Corpo do POST: "todos os turnos" não manda `shift`; "todos do turno" não manda `userIds`. */
+function requestTarget(target: SendTarget): CreateDispatchInput['target'] {
+  if (target.type === 'user') return { type: 'user', userId: target.userId };
+  return {
+    type: 'sector',
+    sectorId: target.sectorId,
+    ...(target.shift ? { shift: target.shift } : {}),
+    ...(target.userIds ? { userIds: target.userIds } : {}),
+  };
+}
+
+function PeopleList({ title, people }: { title: string; people: RecipientPreview[] }) {
+  return (
+    <div className="space-y-1">
+      <p className="text-sm font-medium">{title}</p>
+      <ul aria-label={title} className="max-h-48 overflow-y-auto rounded-md border px-3 py-1 text-sm">
+        {people.map((p) => <li key={p.id} className="py-0.5">{p.name}</li>)}
+      </ul>
+    </div>
+  );
+}
+
+function SectorPeople({ target }: { target: SectorTarget }) {
+  return (
+    <div className="space-y-3">
+      <PeopleList title={`Vão receber (${target.recipients.length})`} people={target.recipients} />
+      {target.leftOut.length > 0 && <PeopleList title="Ficam de fora (sem telefone)" people={target.leftOut} />}
+    </div>
+  );
 }
 
 async function errorCode(err: unknown): Promise<string | undefined> {
@@ -86,10 +113,7 @@ function useSendForm({ target, onOpenChange }: Pick<Props, 'target' | 'onOpenCha
   async function submit() {
     setError(null);
     try {
-      const body = target.type === 'sector'
-        ? ({ type: 'sector', sectorId: target.sectorId } as const)
-        : ({ type: 'user', userId: target.userId } as const);
-      notifyQueued(await send.mutateAsync({ channelId, text, target: body }));
+      notifyQueued(await send.mutateAsync({ channelId, text, target: requestTarget(target) }));
       onOpenChange(false);
     } catch (err) {
       setError(teamErrorMessage(await errorCode(err)));
@@ -138,9 +162,10 @@ export function SendWhatsappDialog({ open, onOpenChange, target }: Props) {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Enviar WhatsApp</DialogTitle>
-          <DialogDescription>{targetLabel(target)}</DialogDescription>
+          <DialogDescription>{target.label}</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
+          {target.type === 'sector' && <SectorPeople target={target} />}
           <div className="space-y-2">
             <Label>Canal</Label>
             <ChannelSelect channels={form.channels} hasUsable={form.hasUsable} status={form.channelsStatus} value={form.channelId} onChange={form.setPicked} />

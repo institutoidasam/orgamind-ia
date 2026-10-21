@@ -177,10 +177,15 @@ describe('entregas registradas (uma entrada por fase visível)', () => {
   });
 });
 
-describe('novidade 2026.10.19', () => {
-  it('é a primeira entrada e cobre /whatsapp-equipe e /users', () => {
-    expect(RELEASE_NOTES[0].version).toBe('2026.10.19');
+describe('novidades de WhatsApp da equipe e Usuários', () => {
+  it('2026.10.21 é a primeira entrada e cobre /users e /whatsapp-equipe', () => {
+    expect(RELEASE_NOTES[0].version).toBe('2026.10.21');
     const where = RELEASE_NOTES[0].items.map((i) => i.where);
+    expect(where).toEqual(['/users', '/whatsapp-equipe', '/whatsapp-equipe']);
+  });
+
+  it('2026.10.19 segue registrada', () => {
+    const where = RELEASE_NOTES.find((n) => n.version === '2026.10.19')?.items.map((i) => i.where);
     expect(where).toEqual(['/whatsapp-equipe', '/whatsapp-equipe', '/users']);
   });
 });

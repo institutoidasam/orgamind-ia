@@ -51,8 +51,13 @@ model User {
   // valid while sectors are introduced incrementally.
   sectorId              String?
   sector                Sector?        @relation("SectorMembers", fields: [sectorId], references: [id], onDelete: SetNull)
-  // Turno fixo do usuário; null = sem turno (todos os usuários anteriores ao campo).
-  shift                 WorkShift?
+  // Turno do cadastro; null = sem turno. Restrict: turno com usuário não se apaga
+  // (desativa-se). A relação se chama `workShift` (nome da época em que a coluna
+  // enum `shift` coexistia; mantido para os `select`/`include` não mudarem).
+  shiftId               String?
+  workShift             Shift?         @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+  // Função exibida na escala (texto livre, aparado); null = sem função.
+  jobTitle              String?        @db.VarChar(80)
   isActive              Boolean        @default(true)
   // Incremented whenever an identity-affecting mutation invalidates a bearer.
   // Tokens issued before this column existed are treated as version zero.
@@ -83,6 +88,10 @@ model User {
   internalReads         InternalRead[]
   teamWhatsappDispatches TeamWhatsappDispatch[] @relation("TeamWhatsappDispatchAuthor")
   teamWhatsappRecipients TeamWhatsappRecipient[] @relation("TeamWhatsappRecipientUser")
+  staffSchedule         StaffSchedule?
+  staffExceptions       StaffScheduleException[]
+
+  @@index([shiftId])
 }
 
 enum Role {
@@ -141,6 +150,7 @@ model Sector {
   destinationCommunications InternalCommunication[] @relation("InternalCommunicationDestination")
   recipientLinks      InternalRecipient[]
   numbers             SectorNumber[]
+  staffExceptions     StaffScheduleException[]
 
   @@index([isActive, name])
   @@index([managerId])
@@ -1558,10 +1568,23 @@ model ZernioAnalyticsSnapshot {
 // QUEUED vira um job da fila `team-whatsapp.send` (jobId = recipientId).
 // O telefone NÃO é copiado para o destinatário: o processor relê do usuário.
 
-// Turno fixo do usuário. null = sem turno (todos os usuários anteriores ao campo).
-enum WorkShift {
-  FIRST
-  SECOND
+// Turno de trabalho cadastrado pelo ADMIN. Horários 'HH:mm'; endTime <= startTime
+// = atravessa a meia-noite (o turno pertence à data em que começa). Os dois turnos
+// legados vêm da migração com ids fixos `shift_first`/`shift_second`.
+model Shift {
+  id             String                  @id @default(cuid())
+  name           String                  @unique
+  startTime      String
+  endTime        String
+  isActive       Boolean                 @default(true)
+  sortOrder      Int
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+  users          User[]
+  teamDispatches TeamWhatsappDispatch[]
+  teamRecipients TeamWhatsappRecipient[]
+  scheduleDays    StaffScheduleDay[]
+  staffExceptions StaffScheduleException[]
 }
 
 enum TeamWhatsappTargetType {
@@ -1569,16 +1592,31 @@ enum TeamWhatsappTargetType {
   SECTOR
 }
 
+// Envio imediato nasce DISPATCHED. Agendado (T8) nasce SCHEDULED e sai daí uma
+// única vez: para DISPATCHED no disparo (T9) ou CANCELLED no cancelamento, ambos
+// por updateMany condicional em state = SCHEDULED.
+enum TeamWhatsappDispatchState {
+  DISPATCHED
+  SCHEDULED
+  CANCELLED
+}
+
+// SCHEDULED = aguardando o disparo do envio agendado; CANCELLED = o envio foi
+// cancelado antes de disparar.
 enum TeamWhatsappRecipientStatus {
   QUEUED
   SENT
   FAILED
   SKIPPED
+  SCHEDULED
+  CANCELLED
 }
 
+// INACTIVE = usuário inativo ou apagado na hora do disparo agendado (T9).
 enum TeamWhatsappSkipReason {
   NO_PHONE
   SUPPRESSED
+  INACTIVE
 }
 
 model TeamWhatsappDispatch {
@@ -1588,17 +1626,36 @@ model TeamWhatsappDispatch {
   targetType  TeamWhatsappTargetType
   targetId    String
   targetLabel String
-  // Filtro de turno usado; null = todos os turnos ou alvo pessoa.
-  shift       WorkShift?
+  // Turno do filtro + snapshot (nome e horários na hora do envio); null = todos
+  // os turnos ou alvo pessoa. SetNull: o histórico sobrevive ao turno.
+  shiftId        String?
+  workShift      Shift?                  @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+  shiftName      String?
+  shiftStartTime String?
+  shiftEndTime   String?
+  // Foto da escala do envio (C10): data civil da escala, se incluiu quem está
+  // de folga e `{ working, off }` com nome, função e turno do dia, sem telefone.
+  // Envio anterior à foto: rosterDate/roster null, includeOff false.
+  rosterDate     DateTime?               @db.Date
+  includeOff     Boolean                 @default(false)
+  roster         Json?
   // SetNull: remover o canal não apaga nem bloqueia o histórico (o front mostra "canal removido").
   channelId   String?
   channel     Channel?                @relation(fields: [channelId], references: [id], onDelete: SetNull)
   text        String
   createdAt   DateTime                @default(now())
   recipients  TeamWhatsappRecipient[]
+  // Agendamento (C10): scheduledFor = início do turno na data (Manaus); firedAt =
+  // hora real do disparo; cancelledAt/cancelledById = quem cancelou e quando.
+  state         TeamWhatsappDispatchState @default(DISPATCHED)
+  scheduledFor  DateTime?
+  firedAt       DateTime?
+  cancelledAt   DateTime?
+  cancelledById String?
 
   @@index([createdAt])
   @@index([authorId, createdAt])
+  @@index([state, scheduledFor])
 }
 
 model TeamWhatsappRecipient {
@@ -1608,8 +1665,10 @@ model TeamWhatsappRecipient {
   userId     String?
   user       User?                       @relation("TeamWhatsappRecipientUser", fields: [userId], references: [id], onDelete: SetNull)
   userName   String
-  // Turno do destinatário no momento do envio (quem estava escalado).
-  shift      WorkShift?
+  // Turno da pessoa no envio + nome (snapshot); null = sem turno.
+  shiftId    String?
+  workShift  Shift?                      @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+  shiftName  String?
   status     TeamWhatsappRecipientStatus @default(QUEUED)
   skipReason TeamWhatsappSkipReason?
   // Gravado ANTES do envio (fase 1 do processor); a retentativa reaproveita a mesma Message.
@@ -1619,4 +1678,69 @@ model TeamWhatsappRecipient {
   updatedAt  DateTime                    @updatedAt
 
   @@index([dispatchId, status])
+}
+
+enum StaffScheduleTemplate {
+  WEEKLY
+  WEEKLY_ROTATION
+  TWELVE_36
+  CUSTOM
+}
+
+enum StaffExceptionKind {
+  DAY_OFF
+  VACATION
+  SHIFT_SWAP
+  OTHER_SECTOR
+}
+
+// Escala da pessoa: ciclo de `cycleLength` dias a partir de `startDate` (data
+// civil de Manaus). A data D cai no dia (D − startDate) mod cycleLength; antes do
+// início vale o turno do cadastro. `template` só lembra o modelo de origem.
+model StaffSchedule {
+  id          String                @id @default(cuid())
+  userId      String                @unique
+  user        User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  template    StaffScheduleTemplate
+  startDate   DateTime              @db.Date
+  cycleLength Int
+  updatedById String?
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+  days        StaffScheduleDay[]
+}
+
+// Um dia do ciclo; shiftId null = folga. Restrict: turno em uso não se apaga.
+model StaffScheduleDay {
+  scheduleId String
+  schedule   StaffSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  dayIndex   Int
+  shiftId    String?
+  shift      Shift?        @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+
+  @@id([scheduleId, dayIndex])
+  @@index([shiftId])
+}
+
+// Exceção por data (período inclusivo startDate..endDate, datas civis); vence o
+// ciclo. SHIFT_SWAP usa shiftId; OTHER_SECTOR usa sectorId + shiftId.
+model StaffScheduleException {
+  id          String             @id @default(cuid())
+  userId      String
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind        StaffExceptionKind
+  startDate   DateTime           @db.Date
+  endDate     DateTime           @db.Date
+  shiftId     String?
+  shift       Shift?             @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+  sectorId    String?
+  sector      Sector?            @relation(fields: [sectorId], references: [id], onDelete: Restrict)
+  note        String?            @db.VarChar(200)
+  createdById String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  @@index([userId, startDate])
+  @@index([sectorId, startDate])
+  @@index([shiftId, endDate])
 }

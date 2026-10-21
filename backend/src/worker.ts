@@ -2,6 +2,7 @@
 // patch http/express/pg/etc. at require time.
 import './sentry.instrument';
 import * as Sentry from '@sentry/nestjs';
+import type { INestApplicationContext } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import { Logger } from 'nestjs-pino';
@@ -143,6 +144,32 @@ export async function scheduleContactSyncCron(
   return 'scheduled';
 }
 
+/**
+ * Repeatable `tick` every minute on `queue`, with a deterministic jobId (one
+ * definition across restarts). A failure is logged and does not stop the boot.
+ */
+async function scheduleMinuteTick(
+  app: INestApplicationContext,
+  logger: Logger,
+  tick: { queue: string; jobId: string; label: string },
+): Promise<void> {
+  try {
+    const queue = app.get<Queue>(getQueueToken(tick.queue));
+    await queue.add(
+      'tick',
+      {},
+      {
+        repeat: { pattern: '* * * * *' },
+        jobId: tick.jobId,
+        ...REPEATABLE_JOB_CLEANUP_OPTS,
+      },
+    );
+    logger.log(`Scheduled ${tick.label} tick (every minute)`, 'Bootstrap');
+  } catch (err: unknown) {
+    logger.error({ err }, `Failed to schedule ${tick.label} tick`);
+  }
+}
+
 async function bootstrap() {
   const app = await NestFactory.createApplicationContext(WorkerModule, {
     bufferLogs: true,
@@ -176,24 +203,19 @@ async function bootstrap() {
     logger.error({ err }, 'Failed to schedule token expiry check');
   }
 
-  // Schedule the campaign scheduler tick. Runs every minute.
-  try {
-    const schedulerQueue = app.get<Queue>(
-      getQueueToken(QUEUE_NAMES.CAMPAIGN_SCHEDULER),
-    );
-    await schedulerQueue.add(
-      'tick',
-      {},
-      {
-        repeat: { pattern: '* * * * *' },
-        jobId: 'campaign-scheduler-tick',
-        ...REPEATABLE_JOB_CLEANUP_OPTS,
-      },
-    );
-    logger.log('Scheduled campaign scheduler tick (every minute)', 'Bootstrap');
-  } catch (err) {
-    logger.error({ err }, 'Failed to schedule campaign scheduler tick');
-  }
+  // Scheduler ticks that run every minute: campaigns, and the team WhatsApp
+  // scheduled send (envio agendado para o início do turno; the claim in the
+  // repository makes each fire idempotent).
+  await scheduleMinuteTick(app, logger, {
+    queue: QUEUE_NAMES.CAMPAIGN_SCHEDULER,
+    jobId: 'campaign-scheduler-tick',
+    label: 'campaign scheduler',
+  });
+  await scheduleMinuteTick(app, logger, {
+    queue: QUEUE_NAMES.TEAM_WHATSAPP_SCHEDULER,
+    jobId: 'team-whatsapp-scheduler-tick',
+    label: 'team WhatsApp scheduler',
+  });
 
   // Schedule the daily cleanup of old connection events (7-day retention).
   try {

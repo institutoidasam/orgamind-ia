@@ -35,6 +35,15 @@ export function channelDisconnected(): ConflictError {
   );
 }
 
+/** `shiftId` do alvo setor inexistente ou inativo: nada é criado. */
+export function invalidShift(): DomainError {
+  return new DomainError({
+    code: 'team_whatsapp.invalid_shift',
+    message: 'Turno inválido',
+    status: 422,
+  });
+}
+
 /** Algum `userIds` fora do setor/turno atual, inativo ou inexistente: nada é criado. */
 export function invalidSelection(): DomainError {
   return new DomainError({
@@ -42,4 +51,29 @@ export function invalidSelection(): DomainError {
     message: 'Seleção de destinatários inválida',
     status: 422,
   });
+}
+
+/** "No início do turno" com o início (data + turno, em Manaus) agora ou no passado. */
+export function scheduleInPast(): DomainError {
+  return new DomainError({
+    code: 'team_whatsapp.schedule_in_past',
+    message: 'O início deste turno já passou',
+    status: 422,
+  });
+}
+
+export function dispatchNotFound(): DomainError {
+  return new DomainError({
+    code: 'team_whatsapp.dispatch_not_found',
+    message: 'Envio não encontrado',
+    status: 404,
+  });
+}
+
+/** Cancelar envio que não está mais agendado (já disparado ou cancelado). */
+export function notCancellable(): ConflictError {
+  return new ConflictError(
+    'Envio não está mais agendado',
+    'team_whatsapp.not_cancellable',
+  );
 }

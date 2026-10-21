@@ -71,6 +71,8 @@ export const QUEUE_NAMES = {
   BOT_REPLY: 'bot.reply',
   // Recado da equipe (ADMIN/gestor → usuários): um job por destinatário, jobId = recipientId.
   TEAM_WHATSAPP_SEND: 'team-whatsapp.send',
+  // Tick de minuto do envio agendado da equipe (T9): dispara os SCHEDULED vencidos.
+  TEAM_WHATSAPP_SCHEDULER: 'team-whatsapp.scheduler',
 } as const;
 
 /** ZB — um lote de mensagens do orgamind para virar UM broadcast no Zernio. */

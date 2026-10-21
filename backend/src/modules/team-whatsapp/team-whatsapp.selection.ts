@@ -1,37 +1,56 @@
-import type { WorkShift } from '@prisma/client';
-
-export const SHIFT_LABEL: Record<WorkShift, string> = {
-  FIRST: '1º turno',
-  SECOND: '2º turno',
-};
+import type { ShiftRef } from '../../schemas/contracts/shift.schema';
+import {
+  addDays,
+  formatDayMonth,
+  timeIn,
+  todayIn,
+  type CivilDate,
+} from '../staff-schedule/civil-date';
 
 /**
- * Filtro do alvo setor sobre os membros ATIVOS atuais. `null` = seleção inválida
- * (algum id fora do setor/turno, inativo ou inexistente). Ids repetidos contam uma vez.
+ * Turno que começou na véspera e ainda está em andamento agora (Manaus): o
+ * primeiro (na ordem recebida, sortOrder) que atravessa a meia-noite
+ * (`endTime <= startTime`) e cujo fim ainda não chegou. A tela oferece o atalho
+ * "Ver esse turno" para a data de ontem; a data padrão continua sendo hoje.
  */
-export function selectMembers<
-  M extends { id: string; shift: WorkShift | null },
->(
-  members: readonly M[],
-  shift: WorkShift | undefined,
+export function overnightInProgress(
+  shifts: readonly ShiftRef[],
+  now: Date,
+): { date: CivilDate; shift: ShiftRef } | null {
+  const clock = timeIn(now);
+  // 'HH:mm' compara como string na ordem do relógio.
+  const shift = shifts.find(
+    (s) => s.endTime <= s.startTime && clock < s.endTime,
+  );
+  return shift ? { date: addDays(todayIn(now), -1), shift } : null;
+}
+
+/**
+ * Filtro da seleção manual sobre a lista elegível da escala da data. `null` =
+ * seleção inválida (algum id fora da lista). Ids repetidos contam uma vez.
+ */
+export function selectMembers<M extends { id: string }>(
+  eligible: readonly M[],
   userIds: readonly string[] | undefined,
 ): M[] | null {
-  const inShift = shift
-    ? members.filter((m) => m.shift === shift)
-    : [...members];
-  if (!userIds) return inShift;
+  if (!userIds) return [...eligible];
   const wanted = new Set(userIds);
-  const picked = inShift.filter((m) => wanted.has(m.id));
+  const picked = eligible.filter((m) => wanted.has(m.id));
   return picked.length === wanted.size ? picked : null;
 }
 
-/** "Produção · 2º turno", "Produção · todos os turnos", "… · seleção de 2". */
+/** GC12: "Produção · Noite · 21/10 · seleção de 2", "Produção · todos os turnos · 21/10". */
 export function sectorTargetLabel(
   sectorName: string,
-  shift: WorkShift | null,
+  shiftName: string | null,
+  date: CivilDate,
   selectedCount: number | null,
 ): string {
-  const parts = [sectorName, shift ? SHIFT_LABEL[shift] : 'todos os turnos'];
+  const parts = [
+    sectorName,
+    shiftName ?? 'todos os turnos',
+    formatDayMonth(date),
+  ];
   if (selectedCount !== null) parts.push(`seleção de ${selectedCount}`);
   return parts.join(' · ');
 }

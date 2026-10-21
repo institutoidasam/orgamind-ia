@@ -4,6 +4,7 @@ import { TeamWhatsappService } from './team-whatsapp.service';
 import type {
   TeamChannel,
   TeamMember,
+  TeamMemberWithSchedule,
   TeamSector,
   TeamWhatsappRepository,
 } from './team-whatsapp.repository';
@@ -28,6 +29,38 @@ export const MANAGER: TeamActor = {
   managedSectorIds: ['s1'],
 };
 
+/** Turnos migrados pela T1 (ids fixos). */
+export const SHIFT_FIRST = {
+  id: 'shift_first',
+  name: '1º turno',
+  startTime: '06:00',
+  endTime: '14:00',
+};
+export const SHIFT_SECOND = {
+  id: 'shift_second',
+  name: '2º turno',
+  startTime: '14:00',
+  endTime: '22:00',
+};
+
+/** Colunas de snapshot do envio sem filtro de turno (todos os turnos ou alvo pessoa). */
+export const NO_SNAPSHOT = {
+  shiftId: null,
+  shiftName: null,
+  shiftStartTime: null,
+  shiftEndTime: null,
+};
+/** Turno gravado no destinatário sem turno no cadastro. */
+export const NO_SHIFT = { shiftId: null, shiftName: null };
+
+/** Campos de turno do cadastro de um membro; `null` = sem turno. */
+export const onShift = (
+  shift: { id: string; name: string } | null,
+): Pick<TeamMember, 'shiftId' | 'workShift'> => ({
+  shiftId: shift?.id ?? null,
+  workShift: shift ? { name: shift.name } : null,
+});
+
 export const member = (over: Partial<TeamMember> = {}): TeamMember => ({
   id: 'u1',
   name: 'Ana',
@@ -37,7 +70,19 @@ export const member = (over: Partial<TeamMember> = {}): TeamMember => ({
   sector: { isActive: true },
   phoneE164: PHONE,
   contact: null,
-  shift: null,
+  shiftId: null,
+  workShift: null,
+  ...over,
+});
+
+/** Pessoa do envio por data: membro + função + escala (padrão: sem ciclo nem exceção). */
+export const dayPerson = (
+  over: Partial<TeamMemberWithSchedule> = {},
+): TeamMemberWithSchedule => ({
+  ...member(),
+  jobTitle: null,
+  cycle: null,
+  exceptions: [],
   ...over,
 });
 
@@ -45,7 +90,6 @@ export const sector = (over: Partial<TeamSector> = {}): TeamSector => ({
   id: 's1',
   name: 'Financeiro',
   isActive: true,
-  members: [member()],
   ...over,
 });
 
@@ -76,6 +120,7 @@ export function createHarness(): Harness {
     Promise.resolve(p === SUPPRESSED),
   );
   repo.findChannel.mockResolvedValue(channel());
+  repo.listActiveShifts.mockResolvedValue([SHIFT_FIRST, SHIFT_SECOND]);
   repo.countByStatus.mockResolvedValue([]);
   repo.listRecipients.mockResolvedValue([]);
   repo.createDispatch.mockImplementation((data) =>
@@ -89,4 +134,14 @@ export function createHarness(): Harness {
   );
   const service = new TeamWhatsappService(repo, consent, audit, queue);
   return { repo, consent, audit, queue, service };
+}
+
+/** Alvo setor: o setor (`findSector`) e as pessoas do dia, sem escala (`loadDayPeople`). */
+export function givenSector(
+  h: Harness,
+  members: readonly TeamMember[],
+  over: Partial<TeamSector> = {},
+): void {
+  h.repo.findSector.mockResolvedValue(sector(over));
+  h.repo.loadDayPeople.mockResolvedValue(members.map((m) => dayPerson(m)));
 }

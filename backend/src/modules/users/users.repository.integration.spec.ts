@@ -105,26 +105,56 @@ describe('UsersRepository phone + contact link (real Postgres)', () => {
 });
 
 describe('UsersRepository turno (real Postgres)', () => {
-  it('shift grava, lê e limpa', async () => {
+  it('shiftId grava, lê e limpa', async () => {
     const [withShift, withoutShift] = await Promise.all([
       prisma.user.create({
-        data: { email: 'shift-2@test.local', password: 'x', shift: 'SECOND' },
+        data: {
+          email: 'shift-1@test.local',
+          password: 'x',
+          shiftId: 'shift_first',
+        },
       }),
       prisma.user.create({
         data: { email: 'shift-none@test.local', password: 'x' },
       }),
     ]);
     await expect(repo.findById(withShift.id)).resolves.toMatchObject({
-      shift: 'SECOND',
+      shiftId: 'shift_first',
     });
     await expect(repo.findById(withoutShift.id)).resolves.toMatchObject({
-      shift: null,
+      shiftId: null,
+    });
+    await expect(repo.findShiftForAssignment('shift_first')).resolves.toEqual({
+      id: 'shift_first',
+      isActive: true,
+    });
+    await expect(repo.findShiftForAssignment('shift_nope')).resolves.toBeNull();
+
+    await repo.updateWithLastAdminGuard(withShift.id, {
+      workShift: { disconnect: true },
     });
 
-    await repo.updateWithLastAdminGuard(withShift.id, { shift: null });
-
     await expect(repo.findById(withShift.id)).resolves.toMatchObject({
-      shift: null,
+      shiftId: null,
+    });
+  }, 60_000);
+});
+
+describe('UsersRepository função (real Postgres)', () => {
+  it('jobTitle grava, lê e limpa', async () => {
+    const user = await repo.create({
+      email: 'job-title@test.local',
+      password: 'x',
+      jobTitle: 'Operador de empilhadeira',
+    });
+    await expect(repo.findById(user.id)).resolves.toMatchObject({
+      jobTitle: 'Operador de empilhadeira',
+    });
+
+    await repo.updateWithLastAdminGuard(user.id, { jobTitle: null });
+
+    await expect(repo.findById(user.id)).resolves.toMatchObject({
+      jobTitle: null,
     });
   }, 60_000);
 });

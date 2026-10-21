@@ -6,11 +6,12 @@ import { AuditService } from '../../shared/audit/audit.service';
 import { RefreshService } from '../auth/refresh.service';
 import {
   ConflictError,
+  DomainError,
   ForbiddenError,
   NotFoundError,
 } from '../../shared/errors/domain.error';
 import type { UserListResult, UserSummary } from './users.repository';
-import { Prisma, type Role, type WorkShift } from '@prisma/client';
+import { Prisma, type Role } from '@prisma/client';
 
 export type UserListResponse = UserListResult & {
   page: number;
@@ -23,8 +24,10 @@ type UserPatch = {
   isActive?: boolean;
   /** Sem null: quem já tem telefone não pode apagá-lo; ausente = mantém. */
   phone?: string;
-  /** Ausente = mantém; null = limpa (sem turno). Não é mudança de identidade. */
-  shift?: WorkShift | null;
+  /** Id de Shift. Ausente = mantém; null = limpa. Não é mudança de identidade. */
+  shiftId?: string | null;
+  /** Função. Ausente = mantém; null ou vazio = limpa. Não é mudança de identidade. */
+  jobTitle?: string | null;
 };
 type CreateUserInput = {
   email: string;
@@ -32,7 +35,10 @@ type CreateUserInput = {
   role: 'ADMIN' | 'OPERATOR' | 'SUPERVISOR' | 'VIEWER';
   sectorId?: string;
   phone: string;
-  shift?: WorkShift | null;
+  /** Id de Shift; ausente ou null = sem turno. */
+  shiftId?: string | null;
+  /** Função; ausente, null ou vazio = sem função. */
+  jobTitle?: string | null;
 };
 type PhoneLink = { phoneE164: string; contactId: string };
 
@@ -43,6 +49,24 @@ function rethrowPhoneConflict(error: unknown): never {
     throw new ConflictError('Phone already taken', 'user.phone_taken');
   }
   throw error;
+}
+
+function invalidShift(): DomainError {
+  return new DomainError({
+    code: 'users.invalid_shift',
+    message: 'Turno inválido',
+    status: 422,
+  });
+}
+
+// Função aparada; vazio (ou só espaços) grava null.
+function normalizeJobTitle(value: string | null | undefined): string | null {
+  return value?.trim() || null;
+}
+
+// Relação opcional no PATCH: id = liga; null (ou vazio) = desliga.
+function relationPatch(id: string | null) {
+  return id ? { connect: { id } } : { disconnect: true };
 }
 
 // Defense-in-depth: strip any unexpected fields that the repo might leak (e.g.
@@ -61,7 +85,8 @@ function toUserSummary(u: UserSummary): UserSummary {
     mustChangePassword: u.mustChangePassword,
     lastLoginAt: u.lastLoginAt,
     phoneE164: u.phoneE164,
-    shift: u.shift,
+    shiftId: u.shiftId,
+    jobTitle: u.jobTitle,
     createdAt: u.createdAt,
     updatedAt: u.updatedAt,
     createdById: u.createdById,
@@ -90,6 +115,7 @@ export class UsersService {
     const phoneE164 = this.phones.normalize(input.phone);
     const existing = await this.repo.findByEmail(input.email);
     await this.assertCreatable(input, existing);
+    await this.assertAssignableShift(input.shiftId);
     await this.phones.assertAvailable(phoneE164);
     const temporaryPassword = UsersRepository.generateTempPassword();
     const passwordHash = await argon2.hash(temporaryPassword, {
@@ -159,7 +185,10 @@ export class UsersService {
         mustChangePassword: true,
         phoneE164: phone.phoneE164,
         contact: { connect: { id: phone.contactId } },
-        shift: input.shift ?? null,
+        jobTitle: normalizeJobTitle(input.jobTitle),
+        ...(input.shiftId
+          ? { workShift: { connect: { id: input.shiftId } } }
+          : {}),
         createdBy: { connect: { id: createdById } },
       })
       .catch(rethrowPhoneConflict);
@@ -175,6 +204,7 @@ export class UsersService {
 
     this.assertSelfChangeAllowed(id, actorId, input);
     await this.assertValidAssignment(user, input);
+    await this.assertAssignableShift(input.shiftId);
     const changesIdentity = this.changesIdentity(input);
     const data = {
       ...this.toUpdateData(input, changesIdentity),
@@ -248,6 +278,15 @@ export class UsersService {
       );
   }
 
+  /** Turno informado (string) precisa existir e estar ativo; ausente/null passa. */
+  private async assertAssignableShift(
+    shiftId: string | null | undefined,
+  ): Promise<void> {
+    if (!shiftId) return;
+    const shift = await this.repo.findShiftForAssignment(shiftId);
+    if (!shift?.isActive) throw invalidShift();
+  }
+
   private changesIdentity(input: UserPatch): boolean {
     return (
       input.role !== undefined ||
@@ -264,14 +303,15 @@ export class UsersService {
       ...(input.name !== undefined ? { name: input.name } : {}),
       ...(input.role !== undefined ? { role: input.role } : {}),
       ...(input.sectorId !== undefined
-        ? {
-            sector: input.sectorId
-              ? { connect: { id: input.sectorId } }
-              : { disconnect: true },
-          }
+        ? { sector: relationPatch(input.sectorId) }
         : {}),
       ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
-      ...(input.shift !== undefined ? { shift: input.shift } : {}),
+      ...(input.shiftId !== undefined
+        ? { workShift: relationPatch(input.shiftId) }
+        : {}),
+      ...(input.jobTitle !== undefined
+        ? { jobTitle: normalizeJobTitle(input.jobTitle) }
+        : {}),
       ...(changesIdentity ? { sessionVersion: { increment: 1 } } : {}),
     };
   }

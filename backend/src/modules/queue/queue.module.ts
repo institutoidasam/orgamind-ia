@@ -167,6 +167,16 @@ import type { Env } from '../../shared/config/env.schema';
         removeOnFail: { age: 86400 },
       },
     }),
+    // Tick do envio agendado da equipe: as mesmas opções do scheduler de
+    // campanhas (um tick perdido é refeito no minuto seguinte, sem retentativa).
+    BullModule.registerQueue({
+      name: QUEUE_NAMES.TEAM_WHATSAPP_SCHEDULER,
+      defaultJobOptions: {
+        attempts: 1,
+        removeOnComplete: { age: 3600, count: 60 },
+        removeOnFail: { age: 86400 },
+      },
+    }),
     // ★ ZB — o DISPARO do broadcast do Zernio.
     //
     // `attempts: 2`, e o número é uma decisão sobre DINHEIRO E BAN, não sobre

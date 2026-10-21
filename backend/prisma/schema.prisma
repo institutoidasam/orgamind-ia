@@ -51,6 +51,8 @@ model User {
   // valid while sectors are introduced incrementally.
   sectorId              String?
   sector                Sector?        @relation("SectorMembers", fields: [sectorId], references: [id], onDelete: SetNull)
+  // Turno fixo do usuário; null = sem turno (todos os usuários anteriores ao campo).
+  shift                 WorkShift?
   isActive              Boolean        @default(true)
   // Incremented whenever an identity-affecting mutation invalidates a bearer.
   // Tokens issued before this column existed are treated as version zero.
@@ -1556,6 +1558,12 @@ model ZernioAnalyticsSnapshot {
 // QUEUED vira um job da fila `team-whatsapp.send` (jobId = recipientId).
 // O telefone NÃO é copiado para o destinatário: o processor relê do usuário.
 
+// Turno fixo do usuário. null = sem turno (todos os usuários anteriores ao campo).
+enum WorkShift {
+  FIRST
+  SECOND
+}
+
 enum TeamWhatsappTargetType {
   USER
   SECTOR
@@ -1580,6 +1588,8 @@ model TeamWhatsappDispatch {
   targetType  TeamWhatsappTargetType
   targetId    String
   targetLabel String
+  // Filtro de turno usado; null = todos os turnos ou alvo pessoa.
+  shift       WorkShift?
   // SetNull: remover o canal não apaga nem bloqueia o histórico (o front mostra "canal removido").
   channelId   String?
   channel     Channel?                @relation(fields: [channelId], references: [id], onDelete: SetNull)
@@ -1598,6 +1608,8 @@ model TeamWhatsappRecipient {
   userId     String?
   user       User?                       @relation("TeamWhatsappRecipientUser", fields: [userId], references: [id], onDelete: SetNull)
   userName   String
+  // Turno do destinatário no momento do envio (quem estava escalado).
+  shift      WorkShift?
   status     TeamWhatsappRecipientStatus @default(QUEUED)
   skipReason TeamWhatsappSkipReason?
   // Gravado ANTES do envio (fase 1 do processor); a retentativa reaproveita a mesma Message.

@@ -103,3 +103,28 @@ describe('UsersRepository phone + contact link (real Postgres)', () => {
     ).resolves.toMatchObject({ contactId: null, phoneE164: '+5592991234567' });
   }, 60_000);
 });
+
+describe('UsersRepository turno (real Postgres)', () => {
+  it('shift grava, lê e limpa', async () => {
+    const [withShift, withoutShift] = await Promise.all([
+      prisma.user.create({
+        data: { email: 'shift-2@test.local', password: 'x', shift: 'SECOND' },
+      }),
+      prisma.user.create({
+        data: { email: 'shift-none@test.local', password: 'x' },
+      }),
+    ]);
+    await expect(repo.findById(withShift.id)).resolves.toMatchObject({
+      shift: 'SECOND',
+    });
+    await expect(repo.findById(withoutShift.id)).resolves.toMatchObject({
+      shift: null,
+    });
+
+    await repo.updateWithLastAdminGuard(withShift.id, { shift: null });
+
+    await expect(repo.findById(withShift.id)).resolves.toMatchObject({
+      shift: null,
+    });
+  }, 60_000);
+});

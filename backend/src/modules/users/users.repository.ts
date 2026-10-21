@@ -18,6 +18,7 @@ const USER_SUMMARY_SELECT = {
   lastLoginAt: true,
   // Telefone sim; `contactId` NÃO entra no summary nem no contrato público.
   phoneE164: true,
+  shift: true,
   createdAt: true,
   updatedAt: true,
   createdById: true,

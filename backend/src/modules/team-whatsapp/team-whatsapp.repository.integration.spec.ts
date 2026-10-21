@@ -1,11 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, type WorkShift } from '@prisma/client';
 import {
   PostgreSqlContainer,
   type StartedPostgreSqlContainer,
 } from '@testcontainers/postgresql';
-import { TeamWhatsappRepository } from './team-whatsapp.repository';
+import {
+  TeamWhatsappRepository,
+  type NewTeamRecipient,
+} from './team-whatsapp.repository';
 
 // Um container + `migrate deploy` para o arquivo inteiro (inclui a migração
 // 20261016100000_team_whatsapp: FKs SetNull/Cascade de verdade).
@@ -94,18 +97,21 @@ async function criarEnvioComDoisDestinatarios() {
     targetType: 'USER',
     targetId: author.id,
     targetLabel: 'Autor',
+    shift: null,
     channelId: channel.id,
     text: 'oi',
     recipients: [
       {
         userId: author.id,
         userName: 'Autor',
+        shift: null,
         status: 'QUEUED',
         skipReason: null,
       },
       {
         userId: author.id,
         userName: 'Autor',
+        shift: null,
         status: 'SKIPPED',
         skipReason: 'NO_PHONE',
       },
@@ -126,27 +132,6 @@ describe('TeamWhatsappRepository — envio e histórico (Postgres real)', () => 
       { dispatchId: created.id, status: 'FAILED', count: 1 },
       { dispatchId: created.id, status: 'SKIPPED', count: 1 },
     ]);
-    await expect(repo.listIssues([])).resolves.toEqual([]);
-    const issues = await repo.listIssues([created.id]);
-    expect(issues).toHaveLength(2);
-    expect(issues).toEqual(
-      expect.arrayContaining([
-        {
-          dispatchId: created.id,
-          userName: 'Autor',
-          status: 'FAILED',
-          errorCode: 'team_whatsapp.queue_unavailable',
-          skipReason: null,
-        },
-        {
-          dispatchId: created.id,
-          userName: 'Autor',
-          status: 'SKIPPED',
-          errorCode: null,
-          skipReason: 'NO_PHONE',
-        },
-      ]),
-    );
     await prisma.channel.delete({ where: { id: channel.id } });
     const [row] = await repo.listDispatches(author.id);
     expect(row).toMatchObject({
@@ -155,6 +140,78 @@ describe('TeamWhatsappRepository — envio e histórico (Postgres real)', () => 
       author: { id: author.id },
     });
     await expect(repo.listDispatches('someone-else')).resolves.toEqual([]);
+  }, 60_000);
+});
+
+// Setor com João (2º turno) e Zé (sem turno).
+async function criarSetorComTurnos() {
+  const prod = await prisma.sector.create({
+    data: { name: 'Produção', code: 'PRD' },
+  });
+  const user = (email: string, name: string, shift: WorkShift | null) =>
+    prisma.user.create({
+      data: { email, password: 'x', name, sectorId: prod.id, shift },
+    });
+  const joao = await user('joao@test.local', 'João', 'SECOND');
+  const ze = await user('ze@test.local', 'Zé', null);
+  const channel = await prisma.channel.create({
+    data: { name: 'Canal turno', provider: 'GOZAP' },
+  });
+  return { prod, joao, ze, channel };
+}
+
+const snapshotOf = (joaoId: string, zeId: string): NewTeamRecipient[] => [
+  {
+    userId: joaoId,
+    userName: 'João',
+    shift: 'SECOND',
+    status: 'QUEUED',
+    skipReason: null,
+  },
+  {
+    userId: zeId,
+    userName: 'Zé',
+    shift: null,
+    status: 'SKIPPED',
+    skipReason: 'NO_PHONE',
+  },
+];
+
+describe('TeamWhatsappRepository — turno (Postgres real)', () => {
+  it('grava e lê o turno do envio e dos destinatários', async () => {
+    const { prod, joao, ze, channel } = await criarSetorComTurnos();
+    const found = await repo.findSectorWithActiveMembers(prod.id);
+    expect(found?.members.map((m) => [m.id, m.shift])).toEqual([
+      [joao.id, 'SECOND'],
+      [ze.id, null],
+    ]);
+    const [listed] = await repo.listSectors([prod.id]);
+    expect(listed.members.map((m) => m.shift)).toEqual(['SECOND', null]);
+    const recipients = snapshotOf(joao.id, ze.id);
+    const created = await repo.createDispatch({
+      authorId: joao.id,
+      targetType: 'SECTOR',
+      targetId: prod.id,
+      targetLabel: 'Produção · 2º turno',
+      shift: 'SECOND',
+      channelId: channel.id,
+      text: 'oi',
+      recipients,
+    });
+    const [row] = await repo.listDispatches(joao.id);
+    expect(row).toMatchObject({ id: created.id, shift: 'SECOND' });
+    await expect(repo.listRecipients([])).resolves.toEqual([]);
+    const rows = await repo.listRecipients([created.id]);
+    expect(rows).toHaveLength(2);
+    expect(rows).toEqual(
+      expect.arrayContaining(
+        recipients.map((r) => ({
+          ...r,
+          dispatchId: created.id,
+          errorCode: null,
+        })),
+      ),
+    );
   }, 60_000);
 });
 

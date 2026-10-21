@@ -215,20 +215,24 @@ describe('TeamWhatsappService.dispatch — setor enfileira e pula', () => {
   });
 });
 
+// Ana entra; Bia (sem nome nem telefone) e Caio (suprimido) são pulados.
+const recordedMembers = () => [
+  member({ id: 'u1', name: 'Ana' }),
+  member({
+    id: 'u2',
+    name: null,
+    email: 'bia@idasam.org',
+    phoneE164: null,
+  }),
+  member({ id: 'u3', name: 'Caio', phoneE164: SUPPRESSED }),
+];
+
 describe('TeamWhatsappService.dispatch — setor grava o envio', () => {
   beforeEach(() => {
     h.repo.findActor.mockResolvedValue(MANAGER);
-    const members = [
-      member({ id: 'u1', name: 'Ana' }),
-      member({
-        id: 'u2',
-        name: null,
-        email: 'bia@idasam.org',
-        phoneE164: null,
-      }),
-      member({ id: 'u3', name: 'Caio', phoneE164: SUPPRESSED }),
-    ];
-    h.repo.findSectorWithActiveMembers.mockResolvedValue(sector({ members }));
+    h.repo.findSectorWithActiveMembers.mockResolvedValue(
+      sector({ members: recordedMembers() }),
+    );
   });
 
   it('grava o envio com o alvo e um destinatário por pessoa, sem telefone', async () => {
@@ -238,21 +242,30 @@ describe('TeamWhatsappService.dispatch — setor grava o envio', () => {
       authorId: 'm',
       targetType: 'SECTOR',
       targetId: 's1',
-      targetLabel: 'Financeiro',
+      targetLabel: 'Financeiro · todos os turnos',
+      shift: null,
       channelId: 'c1',
       text: TEXT,
     });
     expect(data.recipients).toEqual([
-      { userId: 'u1', userName: 'Ana', status: 'QUEUED', skipReason: null },
+      {
+        userId: 'u1',
+        userName: 'Ana',
+        shift: null,
+        status: 'QUEUED',
+        skipReason: null,
+      },
       {
         userId: 'u2',
         userName: 'bia@idasam.org',
+        shift: null,
         status: 'SKIPPED',
         skipReason: 'NO_PHONE',
       },
       {
         userId: 'u3',
         userName: 'Caio',
+        shift: null,
         status: 'SKIPPED',
         skipReason: 'SUPPRESSED',
       },

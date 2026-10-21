@@ -4,6 +4,7 @@ import { Queue } from 'bullmq';
 import type {
   TeamWhatsappRecipientStatus,
   TeamWhatsappTargetType,
+  WorkShift,
 } from '@prisma/client';
 import { ConsentService } from '../consent/consent.service';
 import { AuditService } from '../../shared/audit/audit.service';
@@ -29,15 +30,17 @@ import {
 import {
   channelDisconnected,
   channelInvalid,
+  invalidSelection,
   noRecipients,
   teamForbidden,
 } from './team-whatsapp.errors';
+import { sectorTargetLabel, selectMembers } from './team-whatsapp.selection';
 import {
   TeamWhatsappRepository,
   type NewTeamRecipient,
   type TeamDispatchRow,
-  type TeamIssueRow,
   type TeamMember,
+  type TeamRecipientRow,
   type TeamStatusCount,
 } from './team-whatsapp.repository';
 
@@ -47,8 +50,15 @@ type ResolvedTarget = {
   targetType: TeamWhatsappTargetType;
   targetId: string;
   targetLabel: string;
+  // Filtro de turno do alvo setor; null = todos os turnos ou alvo pessoa.
+  shift: WorkShift | null;
   members: TeamMember[];
 };
+
+type SectorTargetInput = Extract<
+  CreateTeamDispatchInput['target'],
+  { type: 'sector' }
+>;
 
 type SkippedRecipient = CreateTeamDispatchResponse['skipped'][number];
 
@@ -57,9 +67,12 @@ const displayName = (u: { name: string | null; email: string }) =>
 
 /**
  * Recado de ADMIN/gestor para a equipe. Ordem do POST: remetente → alvo +
- * política (403) → canal (422/409) → destinatários (422) → grava → enfileira.
- * A política vem antes do canal para não revelar canais a quem não pode.
- * Texto e telefones nunca vão para log nem auditoria.
+ * política (403) → seleção de setor/turno (422 `invalid_selection`) → canal
+ * (422/409) → destinatários (422 `no_recipients`) → grava → enfileira →
+ * auditoria. A política vem antes da seleção (`userIds` não abre outro setor)
+ * e antes do canal (não revela canais a quem não pode). A seleção é refeita
+ * sobre os membros ativos atuais: inválida = nada gravado, enfileirado ou
+ * auditado. Texto e telefones nunca vão para log nem auditoria.
  */
 @Injectable()
 export class TeamWhatsappService {
@@ -87,6 +100,7 @@ export class TeamWhatsappService {
       targetType,
       targetId,
       targetLabel,
+      shift: target.shift,
       channelId: input.channelId,
       text: input.text,
       recipients,
@@ -144,10 +158,12 @@ export class TeamWhatsappService {
     );
     const ids = rows.map((r) => r.id);
     const counts = countsByDispatch(await this.repo.countByStatus(ids));
-    const issues = issuesByDispatch(await this.repo.listIssues(ids));
+    const recipients = recipientsByDispatch(
+      await this.repo.listRecipients(ids),
+    );
     return {
       items: rows.map((row) =>
-        toListItem(row, counts.get(row.id), issues.get(row.id) ?? []),
+        toListItem(row, counts.get(row.id), recipients.get(row.id) ?? []),
       ),
     };
   }
@@ -164,7 +180,7 @@ export class TeamWhatsappService {
   ): Promise<ResolvedTarget> {
     return target.type === 'user'
       ? this.resolveUser(actor, target.userId)
-      : this.resolveSector(actor, target.sectorId);
+      : this.resolveSector(actor, target);
   }
 
   private async resolveUser(
@@ -177,22 +193,30 @@ export class TeamWhatsappService {
       targetType: 'USER',
       targetId: user.id,
       targetLabel: displayName(user),
+      shift: null,
       members: [user],
     };
   }
 
+  /** Política (403) antes da seleção (422): `userIds` não abre outro setor. */
   private async resolveSector(
     actor: TeamActor,
-    sectorId: string,
+    target: SectorTargetInput,
   ): Promise<ResolvedTarget> {
-    const sector = await this.repo.findSectorWithActiveMembers(sectorId);
+    const sector = await this.repo.findSectorWithActiveMembers(target.sectorId);
     if (!sector || !canSendToSector(actor, sector)) throw teamForbidden();
+    // O repositório já filtra ativos; o filtro aqui protege contra um select mais largo.
+    const active = sector.members.filter((m) => m.isActive);
+    const members = selectMembers(active, target.shift, target.userIds);
+    if (members === null) throw invalidSelection();
+    const shift = target.shift ?? null;
+    const selected = target.userIds ? members.length : null;
     return {
       targetType: 'SECTOR',
       targetId: sector.id,
-      targetLabel: sector.name,
-      // O repositório já filtra; o filtro aqui protege contra um select mais largo.
-      members: sector.members.filter((m) => m.isActive),
+      targetLabel: sectorTargetLabel(sector.name, shift, selected),
+      shift,
+      members,
     };
   }
 
@@ -212,7 +236,7 @@ export class TeamWhatsappService {
     const recipients: NewTeamRecipient[] = [];
     for (const m of members) {
       const phone = m.contact?.phoneE164 ?? m.phoneE164;
-      const base = { userId: m.id, userName: displayName(m) };
+      const base = { userId: m.id, userName: displayName(m), shift: m.shift };
       if (!phone) {
         recipients.push({ ...base, status: 'SKIPPED', skipReason: 'NO_PHONE' });
       } else if (await this.consent.isSuppressed(phone)) {
@@ -286,7 +310,8 @@ function countsByDispatch(
   return byDispatch;
 }
 
-type TeamIssue = TeamDispatchListResponse['items'][number]['issues'][number];
+type TeamRecipientItem =
+  TeamDispatchListResponse['items'][number]['recipients'][number];
 
 /** Estado fora do enum (ex.: `qrcode`) ou ausente vira null: o front não adivinha. */
 function toConnectionState(
@@ -296,32 +321,38 @@ function toConnectionState(
   return parsed.success ? parsed.data : null;
 }
 
-/** FAILED antes de SKIPPED; dentro do grupo, nome asc. */
-function issuesByDispatch(
-  rows: readonly TeamIssueRow[],
-): Map<string, TeamIssue[]> {
-  const sorted = [...rows].sort(
-    (a, b) =>
-      Number(a.status === 'SKIPPED') - Number(b.status === 'SKIPPED') ||
-      a.userName.localeCompare(b.userName),
+/** Todos os destinatários, por nome; reason = errorCode (FAILED) ou skipReason (SKIPPED). */
+function recipientsByDispatch(
+  rows: readonly TeamRecipientRow[],
+): Map<string, TeamRecipientItem[]> {
+  const sorted = [...rows].sort((a, b) =>
+    a.userName.localeCompare(b.userName, 'pt-BR'),
   );
-  const byDispatch = new Map<string, TeamIssue[]>();
+  const byDispatch = new Map<string, TeamRecipientItem[]>();
   for (const r of sorted) {
     const list = byDispatch.get(r.dispatchId) ?? [];
     list.push({
+      userId: r.userId,
       name: r.userName,
-      status: r.status === 'FAILED' ? 'FAILED' : 'SKIPPED',
-      reason: r.status === 'FAILED' ? r.errorCode : r.skipReason,
+      shift: r.shift,
+      status: r.status,
+      reason: reasonOf(r),
     });
     byDispatch.set(r.dispatchId, list);
   }
   return byDispatch;
 }
 
+function reasonOf(r: TeamRecipientRow): string | null {
+  if (r.status === 'FAILED') return r.errorCode;
+  if (r.status === 'SKIPPED') return r.skipReason;
+  return null;
+}
+
 function toListItem(
   row: TeamDispatchRow,
   counts: TeamDispatchCounts | undefined,
-  issues: TeamIssue[],
+  recipients: TeamRecipientItem[],
 ): TeamDispatchListResponse['items'][number] {
   return {
     id: row.id,
@@ -331,9 +362,10 @@ function toListItem(
       type: row.targetType === 'USER' ? 'user' : 'sector',
       id: row.targetId,
       label: row.targetLabel,
+      shift: row.shift,
     },
     channel: row.channel,
     counts: counts ?? zeroCounts(),
-    issues,
+    recipients,
   };
 }

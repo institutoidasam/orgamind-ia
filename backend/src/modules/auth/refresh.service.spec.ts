@@ -126,6 +126,7 @@ describe('RefreshService', () => {
     updatedAt: new Date(),
     phoneE164: null,
     contactId: null,
+    shift: null,
   };
 
   beforeEach(() => {

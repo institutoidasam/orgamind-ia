@@ -1,5 +1,6 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
+import { workShiftSchema } from '../../../schemas/contracts/user.schema';
 
 export const createUserSchema = z.object({
   // Trim + lowercase BEFORE validating (then pipe into z.email()). Normalizing
@@ -21,6 +22,8 @@ export const createUserSchema = z.object({
   // WhatsApp do usuário: obrigatório no convite. Só apara aqui; a normalização
   // para E.164 (e o erro user.invalid_phone) é do UserPhoneService.
   phone: z.string().trim().min(1).max(40),
+  // Turno fixo; ausente ou null = sem turno.
+  shift: workShiftSchema.nullable().optional(),
 });
 
 export class CreateUserDto extends createZodDto(createUserSchema) {}

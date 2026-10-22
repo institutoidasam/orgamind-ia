@@ -12,6 +12,7 @@ describe('teamErrorMessage', () => {
     ['team_whatsapp.channel_invalid', 'Canal inválido: escolha um canal GoZap ou Evolution ativo.'],
     ['team_whatsapp.no_recipients', 'Ninguém neste destino tem telefone válido para receber.'],
     ['team_whatsapp.invalid_selection', 'A lista de pessoas mudou. Atualize a página e confira de novo.'],
+    ['team_whatsapp.invalid_level', 'Nível inválido. Atualize a página e tente de novo.'],
     ['team_whatsapp.invalid_shift', 'Este turno não está mais disponível. Atualize a página.'],
     ['team_whatsapp.schedule_in_past', 'O início deste turno já passou. Escolha Enviar agora ou outra data.'],
     ['team_whatsapp.not_cancellable', 'Este envio já saiu ou foi cancelado.'],

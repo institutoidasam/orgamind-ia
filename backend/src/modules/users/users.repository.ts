@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma, type User } from '@prisma/client';
+import { Prisma, type Role, type User } from '@prisma/client';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import crypto from 'crypto';
 
@@ -8,6 +8,7 @@ import crypto from 'crypto';
 const USER_SUMMARY_SELECT = {
   id: true,
   email: true,
+  hasAccess: true,
   name: true,
   role: true,
   sectorId: true,
@@ -20,6 +21,8 @@ const USER_SUMMARY_SELECT = {
   phoneE164: true,
   shiftId: true,
   jobTitle: true,
+  levelId: true,
+  level: { select: { id: true, name: true, isActive: true } },
   createdAt: true,
   updatedAt: true,
   createdById: true,
@@ -35,6 +38,18 @@ export type UserListResult = {
   total: number;
 };
 
+/** Filtro da listagem; `hasAccess` ausente = todos. */
+export type UserListFilters = { hasAccess?: boolean };
+
+/** Credencial de quem ganha acesso (D1): tudo num único update. */
+export type AccessGrantData = {
+  email: string;
+  role: Role;
+  password: string;
+  mustChangePassword: true;
+  hasAccess: true;
+};
+
 @Injectable()
 export class UsersRepository {
   constructor(private readonly prisma: PrismaService) {}
@@ -44,16 +59,23 @@ export class UsersRepository {
     return crypto.randomBytes(9).toString('base64url').slice(0, 12);
   }
 
-  findMany(page: number, pageSize: number): Promise<UserListResult> {
+  findMany(
+    page: number,
+    pageSize: number,
+    filters: UserListFilters = {},
+  ): Promise<UserListResult> {
     const skip = (page - 1) * pageSize;
+    const where: Prisma.UserWhereInput =
+      filters.hasAccess === undefined ? {} : { hasAccess: filters.hasAccess };
     return Promise.all([
       this.prisma.user.findMany({
+        where,
         skip,
         take: pageSize,
         orderBy: { createdAt: 'desc' },
         select: USER_SUMMARY_SELECT,
       }),
-      this.prisma.user.count(),
+      this.prisma.user.count({ where }),
     ]).then(([data, total]) => ({ data, total }));
   }
 
@@ -70,6 +92,28 @@ export class UsersRepository {
 
   create(data: Prisma.UserCreateInput): Promise<User> {
     return this.prisma.user.create({ data });
+  }
+
+  /** Cria e devolve já no formato público (sem `password`). */
+  createSummary(data: Prisma.UserCreateInput): Promise<UserSummary> {
+    return this.prisma.user.create({ data, select: USER_SUMMARY_SELECT });
+  }
+
+  /**
+   * Dá acesso a quem não tem: um único UPDATE condicionado a `hasAccess =
+   * false`. Dois pedidos concorrentes para a mesma pessoa: o segundo relê a
+   * linha já com acesso e não casa (0 linhas) → null. E-mail de outro usuário
+   * estoura o @unique (P2002), tratado no serviço.
+   */
+  async grantAccess(
+    id: string,
+    data: AccessGrantData,
+  ): Promise<UserSummary | null> {
+    const { count } = await this.prisma.user.updateMany({
+      where: { id, hasAccess: false },
+      data,
+    });
+    return count === 0 ? null : this.findById(id);
   }
 
   /** Id do usuário dono de qualquer uma das grafias do número (ou null). */
@@ -174,6 +218,16 @@ export class UsersRepository {
     id: string,
   ): Promise<{ id: string; isActive: boolean } | null> {
     return this.prisma.shift.findUnique({
+      where: { id },
+      select: { id: true, isActive: true },
+    });
+  }
+
+  /** Nível para atribuir a uma pessoa; o serviço recusa inexistente ou inativo. */
+  findLevelForAssignment(
+    id: string,
+  ): Promise<{ id: string; isActive: boolean } | null> {
+    return this.prisma.staffLevel.findUnique({
       where: { id },
       select: { id: true, isActive: true },
     });

@@ -128,6 +128,7 @@ const row = (over: Partial<TeamDispatchRow> = {}): TeamDispatchRow => ({
   firedAt: null,
   author: { id: 'm', name: 'Gestor', email: 'gestor@idasam.org' },
   channel: { id: 'c1', name: 'Canal' },
+  sectors: [{ sectorId: 's1', sectorName: 'Financeiro' }],
   ...over,
 });
 
@@ -148,6 +149,8 @@ const recipient = (over: Partial<TeamRecipientRow>): TeamRecipientRow => ({
   status: 'QUEUED',
   errorCode: null,
   skipReason: null,
+  sectorName: null,
+  levelName: null,
   ...over,
 });
 
@@ -205,6 +208,7 @@ describe('TeamWhatsappService.listDispatches — itens', () => {
       createdAt: '2026-10-16T12:00:00.000Z',
       author: { id: 'm', name: 'Gestor', email: 'gestor@idasam.org' },
       target: { type: 'sector', id: 's1', label: 'Financeiro', shift: null },
+      sectors: [{ id: 's1', name: 'Financeiro' }],
       channel: { id: 'c1', name: 'Canal' },
       counts: { ...ZERO, queued: 2, sent: 3, skipped: 1 },
       recipients: [],
@@ -293,6 +297,8 @@ const listed = (r: {
   shiftName: r.shiftName,
   status: r.status,
   reason: r.reason,
+  sectorName: null,
+  levelName: null,
 });
 
 describe('TeamWhatsappService.listDispatches — destinatários', () => {
@@ -372,6 +378,8 @@ const person = (name: string, over: Record<string, unknown> = {}) => ({
   ...over,
 });
 const dayOff = { shiftName: null, reason: 'DAY_OFF' };
+// Foto anterior à T7 não tem setor nem nível da pessoa: a lista devolve null.
+const oldPhoto = (p: object) => ({ ...p, sectorName: null, levelName: null });
 
 describe('TeamWhatsappService.listDispatches — foto da escala: grupos', () => {
   beforeEach(() => h.repo.findActor.mockResolvedValue(ADMIN));
@@ -396,8 +404,10 @@ describe('TeamWhatsappService.listDispatches — foto da escala: grupos', () => 
     const out = teamDispatchListResponseSchema.parse(
       await h.service.listDispatches('a'),
     );
-    expect(out.items[0].unselected).toEqual([working[1], working[2]]);
-    expect(out.items[0].off).toEqual([off[1]]);
+    expect(out.items[0].unselected).toEqual(
+      [working[1], working[2]].map(oldPhoto),
+    );
+    expect(out.items[0].off).toEqual([off[1]].map(oldPhoto));
   });
 
   it.each([
@@ -444,5 +454,35 @@ describe('TeamWhatsappService.listDispatches — foto da escala: data e telefone
     expect(res.items[0].off.map((p) => p.name)).toEqual(['Eva']);
     expect(JSON.stringify(res)).not.toContain('+55');
     expect(JSON.stringify(res)).not.toMatch(/"\w*phone\w*":/i);
+  });
+});
+
+// C6: setores do envio e snapshot de setor/nível do destinatário.
+describe('TeamWhatsappService.listDispatches — setores do envio', () => {
+  beforeEach(() => h.repo.findActor.mockResolvedValue(ADMIN));
+
+  it('item traz sectors [{ id, name }] e recipients com sectorName; foto antiga → sectorName/levelName null', async () => {
+    const roster = { working: [person('Caio')], off: [person('Eva', dayOff)] };
+    h.repo.listDispatches.mockResolvedValue([
+      row({ roster }),
+      row({ id: 'd2', targetType: 'USER', targetId: 'u9', sectors: [] }),
+    ]);
+    h.repo.listRecipients.mockResolvedValue([
+      recipient({ userName: 'Ana', sectorName: 'Financeiro' }),
+    ]);
+    const out = teamDispatchListResponseSchema.parse(
+      await h.service.listDispatches('a'),
+    );
+    expect(out.items[0].sectors).toEqual([{ id: 's1', name: 'Financeiro' }]);
+    expect(out.items[0].recipients).toEqual([
+      expect.objectContaining({
+        name: 'Ana',
+        sectorName: 'Financeiro',
+        levelName: null,
+      }),
+    ]);
+    expect(out.items[0].unselected).toEqual([oldPhoto(person('Caio'))]);
+    expect(out.items[0].off).toEqual([oldPhoto(person('Eva', dayOff))]);
+    expect(out.items[1].sectors).toEqual([]);
   });
 });

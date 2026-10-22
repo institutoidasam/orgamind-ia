@@ -13,18 +13,21 @@ const admin: TeamActor = {
   id: 'a',
   role: 'ADMIN',
   isActive: true,
+  hasAccess: true,
   managedSectorIds: [],
 };
 const manager: TeamActor = {
   id: 'm',
   role: 'OPERATOR',
   isActive: true,
+  hasAccess: true,
   managedSectorIds: ['s1'],
 };
 const plain: TeamActor = {
   id: 'p',
   role: 'SUPERVISOR',
   isActive: true,
+  hasAccess: true,
   managedSectorIds: [],
 };
 // Rebaixado a VIEWER, mas ainda `managerId` do setor (o JWT antigo vale até 15 min).
@@ -75,6 +78,14 @@ describe('team-whatsapp policy — remetente', () => {
 
   it('ADMIN inativo não envia', () => {
     expect(isTeamSender({ ...admin, isActive: false })).toBe(false);
+  });
+
+  // Pessoa sem acesso (GC5) nunca é ator: nem ADMIN nem gestor de setor ativo.
+  it.each<[string, TeamActor]>([
+    ['ADMIN', { ...admin, hasAccess: false }],
+    ['gestor com setor', { ...manager, hasAccess: false }],
+  ])('isTeamSender falso sem acesso — %s', (_label, actor) => {
+    expect(isTeamSender(actor)).toBe(false);
   });
 
   it('TEAM_PROVIDERS só traz os provedores não oficiais', () => {

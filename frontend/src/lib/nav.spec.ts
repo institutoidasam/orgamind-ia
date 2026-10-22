@@ -14,6 +14,7 @@ const KNOWN_ROUTES = [
   '/comunicados',
   '/setores',
   '/turnos',
+  '/niveis',
   '/connect',
   '/users',
 ];
@@ -43,7 +44,7 @@ describe('NAV manifest', () => {
       'Demandas', 'Comunicados',
     ]);
     expect(navSection('admin', 'ADMIN').map((item) => item.label)).toEqual([
-      'Setores', 'Turnos', 'Usuários', 'Números e canais',
+      'Setores', 'Turnos', 'Níveis', 'Usuários', 'Números e canais',
     ]);
   });
 
@@ -52,7 +53,7 @@ describe('NAV manifest', () => {
     expect(navItemsForRole('OPERATOR').map((item) => item.to)).toContain('/campaigns');
     expect(navItemsForRole('SUPERVISOR').map((item) => item.to)).not.toContain('/campaigns');
     expect(navItemsForRole('VIEWER').map((item) => item.to)).not.toContain('/nova-comunicacao');
-    expect(navSection('admin', 'SUPERVISOR')).toEqual([]);
+    expect(navSection('admin', 'SUPERVISOR').map((item) => item.label)).toEqual(['Setores']);
     expect(navSection('admin', 'VIEWER')).toEqual([]);
   });
 
@@ -130,7 +131,8 @@ describe('canAccessPath', () => {
     ['/dashboard', 'VIEWER', true],
     ['/contacts', 'ADMIN', true],
     ['/setores', 'ADMIN', true],
-    ['/setores', 'OPERATOR', false],
+    ['/setores', 'OPERATOR', true],
+    ['/setores', 'VIEWER', false],
     ['/setores/abc', 'ADMIN', true],
     ['/rota-inexistente', 'ADMIN', false],
   ] as const)('%s para %s → %s', (path, role, expected) => {
@@ -157,9 +159,19 @@ describe('NAV Turnos', () => {
     const admin = navSection('admin', 'ADMIN').map((item) => item.label);
     expect(admin.indexOf('Turnos')).toBe(admin.indexOf('Setores') + 1);
     expect(NAV.find((n) => n.to === '/turnos')?.roles).toEqual(['ADMIN']);
-    expect(navSection('admin', 'SUPERVISOR')).toEqual([]);
+    expect(navSection('admin', 'SUPERVISOR').map((item) => item.label)).toEqual(['Setores']);
     expect(canAccessPath('/turnos', 'OPERATOR')).toBe(false);
     expect(navLabelFor('/turnos')).toBe('Turnos');
+  });
+});
+
+describe('NAV Níveis', () => {
+  it('Níveis só para ADMIN, na seção admin logo após Turnos', () => {
+    const admin = navSection('admin', 'ADMIN').map((item) => item.label);
+    expect(admin.indexOf('Níveis')).toBe(admin.indexOf('Turnos') + 1);
+    expect(NAV.find((n) => n.to === '/niveis')?.roles).toEqual(['ADMIN']);
+    expect(canAccessPath('/niveis', 'SUPERVISOR')).toBe(false);
+    expect(navLabelFor('/niveis')).toBe('Níveis');
   });
 });
 
@@ -170,5 +182,13 @@ describe('NAV Escala', () => {
     expect(NAV.find((n) => n.to === '/escala')?.roles).toEqual(['ADMIN', 'SUPERVISOR', 'OPERATOR']);
     expect(navSection('ops', 'VIEWER').map((item) => item.label)).not.toContain('Escala');
     expect(navLabelFor('/escala')).toBe('Escala');
+  });
+});
+
+describe('NAV Setores', () => {
+  it('/setores para ADMIN, SUPERVISOR e OPERATOR, não para VIEWER', () => {
+    expect(NAV.find((n) => n.to === '/setores')?.roles).toEqual(['ADMIN', 'SUPERVISOR', 'OPERATOR']);
+    for (const role of ['ADMIN', 'SUPERVISOR', 'OPERATOR'] as const) expect(canAccessPath('/setores', role)).toBe(true);
+    expect(canAccessPath('/setores', 'VIEWER')).toBe(false);
   });
 });

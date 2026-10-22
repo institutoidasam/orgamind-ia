@@ -31,8 +31,17 @@ if (!Element.prototype.scrollIntoView) {
 const mutateAsync = vi
   .fn()
   .mockResolvedValue({ user: {}, temporaryPassword: "pw" });
-vi.mock("../api", () => ({
+vi.mock("../api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api")>()),
   useInviteUser: () => ({ mutateAsync, isPending: false }),
+}));
+vi.mock("@/features/levels/api", () => ({
+  useLevels: () => ({
+    data: [
+      { id: "lv1", name: "Líder", isActive: true, sortOrder: 0, userCount: 2 },
+      { id: "lv2", name: "Antigo", isActive: false, sortOrder: 1, userCount: 0 },
+    ],
+  }),
 }));
 vi.mock("@/features/internal-admin/api", () => ({
   useSectors: () => ({
@@ -230,5 +239,70 @@ describe("InviteUserDialog shift", () => {
       await fillAdminWithJobTitle("");
       await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Turno inválido. Atualize a página."));
     });
+  });
+});
+
+describe("InviteUserDialog acesso ao sistema e nível", () => {
+  const accessTrigger = () => screen.getByRole("combobox", { name: "Acesso ao sistema" });
+  async function chooseNoAccess() {
+    fireEvent.click(accessTrigger());
+    fireEvent.click(await screen.findByRole("option", { name: "Sem acesso" }));
+  }
+
+  it("começa Com acesso", () => {
+    wrap(dialog(true));
+    expect(accessTrigger()).toHaveTextContent("Com acesso");
+  });
+
+  it("Sem acesso esconde e-mail, perfil e senha, não exige setor e envia hasAccess false", async () => {
+    mutateAsync.mockResolvedValueOnce({ user: {}, temporaryPassword: null });
+    wrap(dialog(true));
+    await chooseNoAccess();
+    expect(document.querySelector('input[type="email"]')).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Perfil" })).toBeNull();
+    await userEvent.type(screen.getByLabelText("Nome"), "Rita");
+    await userEvent.type(phoneInput(), PHONE);
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    const payload = mutateAsync.mock.calls[0][0];
+    expect(payload).toMatchObject({ hasAccess: false, name: "Rita", phone: PHONE, sectorId: null });
+    expect(payload).not.toHaveProperty("email");
+    expect(payload).not.toHaveProperty("role");
+    expect(screen.queryByText("Senha temporária criada")).toBeNull();
+  });
+
+  it("Sem acesso exige o nome", async () => {
+    wrap(dialog(true));
+    await chooseNoAccess();
+    await userEvent.type(phoneInput(), PHONE);
+    fireEvent.click(submitButton());
+    expect(await screen.findByText("Informe o nome")).toBeTruthy();
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+});
+
+describe("InviteUserDialog acesso ao sistema e nível", () => {
+  it("Com acesso segue o fluxo de hoje e leva o nível escolhido", async () => {
+    wrap(dialog(true));
+    await userEvent.type(emailInput(), "op@x.com");
+    await userEvent.type(phoneInput(), PHONE);
+    fireEvent.click(screen.getByRole("combobox", { name: "Setor principal" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Engenharia" }));
+    fireEvent.click(screen.getByRole("combobox", { name: "Nível" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Líder" }));
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    const payload = mutateAsync.mock.calls[0][0];
+    expect(payload).toMatchObject({ email: "op@x.com", role: "OPERATOR", sectorId: "sector-1", levelId: "lv1" });
+    expect(payload).not.toHaveProperty("hasAccess");
+  });
+
+  it("Nível lista só ativos, mais Sem nível", async () => {
+    wrap(dialog(true));
+    const trigger = screen.getByRole("combobox", { name: "Nível" });
+    expect(trigger).toHaveTextContent("Sem nível");
+    fireEvent.click(trigger);
+    const names = (await screen.findAllByRole("option")).map((option) => option.textContent);
+    expect(names).toEqual(["Sem nível", "Líder"]);
   });
 });

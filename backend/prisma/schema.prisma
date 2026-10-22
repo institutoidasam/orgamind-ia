@@ -43,8 +43,12 @@ model Organization {
 
 model User {
   id                    String         @id @default(cuid())
-  email                 String         @unique
-  password              String
+  // Pessoa sem acesso (D1): `hasAccess = false`, e-mail e senha NULL, papel
+  // VIEWER. O CHECK `User_access_consistent` (só na migração; o Prisma não o
+  // modela) impede estado misto. Postgres aceita vários NULL no @unique.
+  email                 String?        @unique
+  password              String?
+  hasAccess             Boolean        @default(true)
   name                  String?
   role                  Role           @default(OPERATOR)
   // Membership is optional so the existing administrative bootstrap remains
@@ -56,6 +60,8 @@ model User {
   // enum `shift` coexistia; mantido para os `select`/`include` não mudarem).
   shiftId               String?
   workShift             Shift?         @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+  levelId               String?
+  level                 StaffLevel?    @relation(fields: [levelId], references: [id], onDelete: Restrict)
   // Função exibida na escala (texto livre, aparado); null = sem função.
   jobTitle              String?        @db.VarChar(80)
   isActive              Boolean        @default(true)
@@ -92,6 +98,7 @@ model User {
   staffExceptions       StaffScheduleException[]
 
   @@index([shiftId])
+  @@index([levelId])
 }
 
 enum Role {
@@ -1587,6 +1594,19 @@ model Shift {
   staffExceptions StaffScheduleException[]
 }
 
+// Nível hierárquico da pessoa (Coordenador, Líder…). Editável só pelo ADMIN;
+// não se apaga (Restrict): desativar tira do cadastro novo e do filtro, e a
+// pessoa e o histórico ficam com ele.
+model StaffLevel {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  sortOrder Int
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  users     User[]
+}
+
 enum TeamWhatsappTargetType {
   USER
   SECTOR
@@ -1645,6 +1665,9 @@ model TeamWhatsappDispatch {
   text        String
   createdAt   DateTime                @default(now())
   recipients  TeamWhatsappRecipient[]
+  // Setores do envio (C6/D5): uma linha por setor no alvo setor; nenhuma no alvo
+  // pessoa. `targetId` segue = primeiro setor (compatibilidade).
+  sectors     TeamWhatsappDispatchSector[]
   // Agendamento (C10): scheduledFor = início do turno na data (Manaus); firedAt =
   // hora real do disparo; cancelledAt/cancelledById = quem cancelou e quando.
   state         TeamWhatsappDispatchState @default(DISPATCHED)
@@ -1658,6 +1681,18 @@ model TeamWhatsappDispatch {
   @@index([state, scheduledFor])
 }
 
+/// Setor de um envio da equipe (C6/D5). `sectorId` sem FK, como `targetId`: o
+/// histórico sobrevive ao setor; `sectorName` = nome na hora do envio.
+model TeamWhatsappDispatchSector {
+  dispatchId String
+  dispatch   TeamWhatsappDispatch @relation(fields: [dispatchId], references: [id], onDelete: Cascade)
+  sectorId   String
+  sectorName String
+
+  @@id([dispatchId, sectorId])
+  @@index([sectorId])
+}
+
 model TeamWhatsappRecipient {
   id         String                      @id @default(cuid())
   dispatchId String
@@ -1669,6 +1704,11 @@ model TeamWhatsappRecipient {
   shiftId    String?
   workShift  Shift?                      @relation(fields: [shiftId], references: [id], onDelete: SetNull)
   shiftName  String?
+  // Setor em que a pessoa entrou e nível na hora (snapshot, sem FK); null = alvo
+  // pessoa ou envio anterior ao nível (levelName gravado a partir da T8b).
+  sectorId   String?
+  sectorName String?
+  levelName  String?
   status     TeamWhatsappRecipientStatus @default(QUEUED)
   skipReason TeamWhatsappSkipReason?
   // Gravado ANTES do envio (fase 1 do processor); a retentativa reaproveita a mesma Message.

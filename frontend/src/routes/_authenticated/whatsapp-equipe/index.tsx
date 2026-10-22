@@ -10,10 +10,11 @@ import { InProgressNotice } from '@/features/team-whatsapp/components/in-progres
 import { RecentDispatches } from '@/features/team-whatsapp/components/recent-dispatches';
 import { ScheduledDispatches } from '@/features/team-whatsapp/components/scheduled-dispatches';
 import { SendWhatsappDialog } from '@/features/team-whatsapp/components/send-whatsapp-dialog';
-import { MemberSelection } from '@/features/team-whatsapp/components/member-selection';
+import { MemberSelection, type SectorGroup } from '@/features/team-whatsapp/components/member-selection';
 import { SectorShiftPicker } from '@/features/team-whatsapp/components/sector-shift-picker';
 import {
-  buildSectorTarget, eligibleMembers, noScheduleCount, offMembers, selectedIdsIn, toggleAllEnabled,
+  buildSectorTarget, eligibleMembers, filterByLevel, noScheduleCount, offMembers, selectedIdsIn, toggleAllEnabled,
+  type LevelFilter,
 } from '@/features/team-whatsapp/member-filter';
 import type { SendTarget, TeamRoster, TeamTargets } from '@/features/team-whatsapp/schemas';
 import { useSendFilters } from '@/features/team-whatsapp/use-send-filters';
@@ -69,9 +70,9 @@ function SendSection({ targets, onSend }: SendProps) {
   if (targets.sectors.length === 0) {
     return <p className="rounded-md border p-6 text-sm text-muted-foreground">{NO_SECTORS_TEXT}</p>;
   }
-  const { sectorId, choice, date } = filters;
+  const { sectorIds, choice, date } = filters;
   const { inProgress } = targets;
-  const ready = sectorId !== null && choice !== null && date !== '';
+  const ready = sectorIds.length > 0 && choice !== null && date !== '';
   return (
     <section className="space-y-4">
       {inProgress && (
@@ -82,11 +83,14 @@ function SendSection({ targets, onSend }: SendProps) {
         />
       )}
       <SectorShiftPicker
-        sectors={targets.sectors} shifts={targets.shifts} sectorId={sectorId} date={date} choice={choice}
-        onSectorChange={filters.pickSector} onDateChange={filters.pickDate} onChoiceChange={filters.pickChoice}
+        sectors={targets.sectors} levels={targets.levels} shifts={targets.shifts}
+        sectorIds={sectorIds} levelIds={filters.levelIds} withoutLevel={filters.withoutLevel}
+        date={date} choice={choice}
+        onSectorsChange={filters.pickSectors} onLevelsChange={filters.pickLevels}
+        onDateChange={filters.pickDate} onChoiceChange={filters.pickChoice}
       />
       {ready ? (
-        <RosterSection targets={targets} filters={filters} picked={{ sectorId, date, choice }} onSend={onSend} />
+        <RosterSection targets={targets} filters={filters} picked={{ sectorIds, date, choice }} onSend={onSend} />
       ) : (
         <p className="rounded-md border p-6 text-sm text-muted-foreground">Escolha o setor, a data e o turno</p>
       )}
@@ -97,12 +101,12 @@ function SendSection({ targets, onSend }: SendProps) {
 type RosterSectionProps = {
   targets: TeamTargets;
   filters: Filters;
-  picked: { sectorId: string; date: string; choice: string };
+  picked: { sectorIds: string[]; date: string; choice: string };
   onSend: (target: SendTarget) => void;
 };
 
 function RosterSection({ targets, filters, picked, onSend }: RosterSectionProps) {
-  const roster = useTeamRoster({ sectorId: picked.sectorId, date: picked.date });
+  const roster = useTeamRoster(picked.sectorIds, picked.date);
   if (roster.isLoading) return <Skeleton className="h-40 w-full" />;
   if (roster.isError) return <QueryErrorFallback error={roster.error} onRetry={roster.refetch} />;
   if (!roster.data) return null;
@@ -127,22 +131,33 @@ function withShiftStart(roster: TeamRoster, targets: TeamTargets, target: SendTa
 
 function RosterList({ roster, targets, filters, choice, onSend }: RosterListProps) {
   const { includeOff, selected } = filters;
-  const visible = eligibleMembers(roster.members, choice, includeOff);
+  const levelFilter: LevelFilter = { levelIds: filters.levelIds, withoutLevel: filters.withoutLevel };
   const shiftNames = new Map(targets.shifts.map((s) => [s.id, s.name]));
+  // O filtro de nível vale para quem trabalha e para quem está de folga: a lista conferida é a que o servidor refaz.
+  const groups: SectorGroup[] = roster.sectors.map((s) => {
+    const members = filterByLevel(s.members, levelFilter);
+    return {
+      sectorId: s.sectorId,
+      name: s.name,
+      empty: !s.members.some((m) => m.isActive),
+      visible: eligibleMembers(members, choice, includeOff),
+      off: offMembers(members),
+      noSchedule: noScheduleCount(members),
+    };
+  });
+  const visible = groups.flatMap((g) => g.visible);
   const build = (selectedIds: string[] | null) =>
     withShiftStart(roster, targets, buildSectorTarget({
-      sectorId: roster.sectorId,
-      sectorName: targets.sectors.find((s) => s.id === roster.sectorId)?.name ?? '',
+      sectors: roster.sectors.map((s) => ({ id: s.sectorId, name: s.name, members: s.members })),
+      levels: targets.levels, levelFilter,
       shiftName: shiftNames.get(choice) ?? null,
       date: roster.date,
-      choice, includeOff, selectedIds, members: roster.members,
+      choice, includeOff, selectedIds,
     }));
   return (
     <MemberSelection
       choice={choice}
-      visible={visible}
-      off={offMembers(roster.members)}
-      noSchedule={noScheduleCount(roster.members)}
+      groups={groups}
       includeOff={includeOff}
       shiftNames={shiftNames}
       selected={selected}

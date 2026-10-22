@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   internalNumberInputSchema,
   internalNumberSchema,
+  sectorDetailSchema,
   sectorInputSchema,
   sectorSchema,
 } from "./schemas";
@@ -24,6 +25,36 @@ describe("setores e números internos", () => {
     expect(
       sectorInputSchema.parse({ name: "Engenharia", code: " eng " }).code,
     ).toBe("ENG");
+  });
+
+  const sectorBase = {
+    id: "sector-1",
+    name: "Engenharia",
+    code: "ENG",
+    description: null,
+    createdAt: "2026-10-10T00:00:00.000Z",
+    updatedAt: "2026-10-10T00:00:00.000Z",
+  };
+
+  it("sectorDetailSchema aceita membro sem acesso (email null)", () => {
+    const detail = sectorDetailSchema.parse({
+      ...sectorBase,
+      members: [
+        { id: "u1", email: "ana@x.com", name: "Ana", role: "OPERATOR" },
+        { id: "u2", email: null, name: "Bia", role: "VIEWER" },
+      ],
+    });
+
+    expect(detail.members.map(({ email }) => email)).toEqual(["ana@x.com", null]);
+  });
+
+  it("manager com email null (pessoa sem acesso) é aceito no setor", () => {
+    const sector = sectorSchema.parse({
+      ...sectorBase,
+      manager: { id: "u2", name: "Bia", email: null },
+    });
+
+    expect(sector.manager).toEqual({ id: "u2", name: "Bia", email: null });
   });
 
   it("aceita apenas E.164 para o registro estrutural e nunca presume canal conectado", () => {

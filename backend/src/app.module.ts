@@ -44,6 +44,8 @@ import { OrganizationModule } from './modules/organization/organization.module';
 import { InternalSectorsModule } from './modules/internal-sectors/internal-sectors.module';
 import { TeamWhatsappModule } from './modules/team-whatsapp/team-whatsapp.module';
 import { ShiftsModule } from './modules/shifts/shifts.module';
+import { LevelsModule } from './modules/levels/levels.module';
+import { SectorPeopleModule } from './modules/sector-people/sector-people.module';
 import { StaffScheduleModule } from './modules/staff-schedule/staff-schedule.module';
 import { InternalNumbersModule } from './modules/internal-numbers/internal-numbers.module';
 import { InternalCommunicationsModule } from './modules/internal-communications/internal-communications.module';
@@ -104,6 +106,8 @@ export const LOG_REDACT_PATHS = [
     UsersModule,
     InternalSectorsModule,
     ShiftsModule,
+    LevelsModule,
+    SectorPeopleModule,
     StaffScheduleModule,
     TeamWhatsappModule,
     InternalNumbersModule,

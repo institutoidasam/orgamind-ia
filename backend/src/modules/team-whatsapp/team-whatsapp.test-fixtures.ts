@@ -9,6 +9,7 @@ import type {
   TeamWhatsappRepository,
 } from './team-whatsapp.repository';
 import type { TeamActor } from './team-whatsapp.policy';
+import type { LevelsRepository } from '../levels/levels.repository';
 import type { ConsentService } from '../consent/consent.service';
 import type { AuditService } from '../../shared/audit/audit.service';
 import type { TeamWhatsappSendJob } from '../queue/queue.constants';
@@ -20,12 +21,14 @@ export const ADMIN: TeamActor = {
   id: 'a',
   role: 'ADMIN',
   isActive: true,
+  hasAccess: true,
   managedSectorIds: [],
 };
 export const MANAGER: TeamActor = {
   id: 'm',
   role: 'OPERATOR',
   isActive: true,
+  hasAccess: true,
   managedSectorIds: ['s1'],
 };
 
@@ -52,6 +55,8 @@ export const NO_SNAPSHOT = {
 };
 /** Turno gravado no destinatário sem turno no cadastro. */
 export const NO_SHIFT = { shiftId: null, shiftName: null };
+/** Snapshot de setor/nível do destinatário no alvo pessoa (C6). */
+export const NO_SECTOR = { sectorId: null, sectorName: null, levelName: null };
 
 /** Campos de turno do cadastro de um membro; `null` = sem turno. */
 export const onShift = (
@@ -75,12 +80,14 @@ export const member = (over: Partial<TeamMember> = {}): TeamMember => ({
   ...over,
 });
 
-/** Pessoa do envio por data: membro + função + escala (padrão: sem ciclo nem exceção). */
+/** Pessoa do envio por data: membro + função + nível + escala (padrão: sem nível, ciclo nem exceção). */
 export const dayPerson = (
   over: Partial<TeamMemberWithSchedule> = {},
 ): TeamMemberWithSchedule => ({
   ...member(),
   jobTitle: null,
+  levelId: null,
+  level: null,
   cycle: null,
   exceptions: [],
   ...over,
@@ -107,15 +114,18 @@ export type Harness = {
   consent: DeepMockProxy<ConsentService>;
   audit: DeepMockProxy<AuditService>;
   queue: DeepMockProxy<Queue<TeamWhatsappSendJob>>;
+  levels: DeepMockProxy<LevelsRepository>;
   service: TeamWhatsappService;
 };
 
-/** Canal válido, só SUPPRESSED em supressão e `createDispatch` ecoando ids r1, r2… */
+/** Canal válido, só SUPPRESSED em supressão, sem níveis ativos e `createDispatch` ecoando ids r1, r2… */
 export function createHarness(): Harness {
   const repo = mockDeep<TeamWhatsappRepository>();
   const consent = mockDeep<ConsentService>();
   const audit = mockDeep<AuditService>();
   const queue = mockDeep<Queue<TeamWhatsappSendJob>>();
+  const levels = mockDeep<LevelsRepository>();
+  levels.listActive.mockResolvedValue([]);
   consent.isSuppressed.mockImplementation((p) =>
     Promise.resolve(p === SUPPRESSED),
   );
@@ -133,7 +143,9 @@ export function createHarness(): Harness {
     }),
   );
   const service = new TeamWhatsappService(repo, consent, audit, queue);
-  return { repo, consent, audit, queue, service };
+  // `levels` é injetado por propriedade no Nest; aqui, à mão.
+  Object.assign(service, { levels });
+  return { repo, consent, audit, queue, levels, service };
 }
 
 /** Alvo setor: o setor (`findSector`) e as pessoas do dia, sem escala (`loadDayPeople`). */

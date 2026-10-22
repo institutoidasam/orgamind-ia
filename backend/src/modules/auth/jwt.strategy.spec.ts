@@ -27,6 +27,7 @@ describe('JwtStrategy', () => {
       email: 'a@b.com',
       role: 'OPERATOR',
       isActive: true,
+      hasAccess: true,
       sessionVersion: 0,
       sectorId: 'sector-1',
       name: null,
@@ -75,6 +76,7 @@ describe('JwtStrategy', () => {
       email: 'a@b.com',
       role: 'SUPERVISOR',
       isActive: true,
+      hasAccess: true,
       sessionVersion: 2,
       sectorId: 'sector-b',
       name: null,
@@ -96,6 +98,7 @@ describe('JwtStrategy', () => {
       email: 'a@b.com',
       role: 'OPERATOR',
       isActive: true,
+      hasAccess: true,
       sessionVersion: 3,
       sectorId: 'sector-b',
       name: null,
@@ -106,6 +109,35 @@ describe('JwtStrategy', () => {
         email: 'a@b.com',
         role: 'OPERATOR',
         sessionVersion: 2,
+      }),
+    ).rejects.toBeInstanceOf(UnauthorizedException);
+  });
+});
+
+// C2: pessoa sem acesso recebe a mesma recusa de usuário inativo.
+describe('JwtStrategy de quem não tem acesso', () => {
+  it('hasAccess false → 401', async () => {
+    const repo = { findById: vi.fn() };
+    const strategy = new JwtStrategy(
+      makeConfig(),
+      repo as unknown as AuthRepository,
+    );
+    repo.findById.mockResolvedValue({
+      id: 'u1',
+      email: null,
+      role: 'VIEWER',
+      isActive: true,
+      hasAccess: false,
+      sessionVersion: 0,
+      sectorId: 'sector-1',
+      name: 'Pessoa',
+    });
+    await expect(
+      strategy.validate({
+        sub: 'u1',
+        email: 'a@b.com',
+        role: 'VIEWER',
+        sessionVersion: 0,
       }),
     ).rejects.toBeInstanceOf(UnauthorizedException);
   });

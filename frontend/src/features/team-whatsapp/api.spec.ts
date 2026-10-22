@@ -22,6 +22,7 @@ function list(queued: number, ageMs: number): DispatchList {
       createdAt: new Date(NOW - ageMs).toISOString(),
       author: null,
       target: { type: 'sector', id: 's1', label: 'Compras', shift: null },
+      sectors: [{ id: 's1', name: 'Compras' }],
       channel: null,
       counts: { queued, sent: 0, failed: 0, skipped: 0, scheduled: 0, cancelled: 0 },
       recipients: [],
@@ -57,23 +58,23 @@ describe('useTeamRoster', () => {
   const wrapperFor = (qc: QueryClient) => ({ children }: { children: React.ReactNode }) =>
     React.createElement(QueryClientProvider, { client: qc }, children);
 
-  it('pede /internal/team-whatsapp/roster?sectorId&date com a key [team-whatsapp, roster, sectorId, date]', async () => {
-    const roster = { sectorId: 's1', date: '2026-10-21', shiftStarts: [], members: [] };
+  it('pede /internal/team-whatsapp/roster?sectorIds=a,b&date com a key [team-whatsapp, roster, a,b, date]', async () => {
+    const roster = { date: '2026-10-21', shiftStarts: [], sectors: [{ sectorId: 'a', name: 'A', members: [] }] };
     get.mockReturnValue({ json: () => Promise.resolve(roster) });
     const qc = new QueryClient();
-    const { result } = renderHook(() => useTeamRoster({ sectorId: 's1', date: '2026-10-21' }), {
+    const { result } = renderHook(() => useTeamRoster(['a', 'b'], '2026-10-21'), {
       wrapper: wrapperFor(qc),
     });
     await waitFor(() => expect(result.current.data).toEqual(roster));
     expect(get).toHaveBeenCalledWith('internal/team-whatsapp/roster', {
-      searchParams: { sectorId: 's1', date: '2026-10-21' },
+      searchParams: { sectorIds: 'a,b', date: '2026-10-21' },
     });
-    expect(qc.getQueryData(['team-whatsapp', 'roster', 's1', '2026-10-21'])).toEqual(roster);
+    expect(qc.getQueryData(['team-whatsapp', 'roster', 'a,b', '2026-10-21'])).toEqual(roster);
   });
 
   it('sem setor e data escolhidos não busca', () => {
     get.mockClear();
-    const { result } = renderHook(() => useTeamRoster(null), { wrapper: wrapperFor(new QueryClient()) });
+    const { result } = renderHook(() => useTeamRoster([], '2026-10-21'), { wrapper: wrapperFor(new QueryClient()) });
     expect(result.current.fetchStatus).toBe('idle');
     expect(get).not.toHaveBeenCalled();
   });

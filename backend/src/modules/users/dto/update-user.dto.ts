@@ -13,11 +13,14 @@ export const updateUserSchema = z
     shiftId: z.string().min(1).nullable().optional(),
     // Função. Ausente = mantém; null ou vazio = limpa. Apara e limita a 80.
     jobTitle: z.string().trim().max(80).nullable().optional(),
+    // Nível (id de StaffLevel). Ausente = mantém; null = limpa. Inexistente, ou
+    // inativo e diferente do atual = 422 users.invalid_level (UsersService).
+    levelId: z.string().min(1).nullable().optional(),
   })
   // O objeto já descarta chaves desconhecidas: basta um campo definido.
   .refine((d) => Object.values(d).some((value) => value !== undefined), {
     message:
-      'At least one of name, role, sectorId, isActive, phone, shiftId or jobTitle must be provided',
+      'At least one of name, role, sectorId, isActive, phone, shiftId, jobTitle or levelId must be provided',
   });
 
 export class UpdateUserDto extends createZodDto(updateUserSchema) {}

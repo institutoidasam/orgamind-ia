@@ -29,6 +29,7 @@ const user = (phoneE164: string | null) =>
   ({
     id: 'u1',
     email: 'u1@b.com',
+    hasAccess: true,
     name: null,
     role: 'ADMIN',
     sectorId: null,

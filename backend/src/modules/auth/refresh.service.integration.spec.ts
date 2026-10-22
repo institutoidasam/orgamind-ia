@@ -24,6 +24,7 @@ type TestUser = {
   email: string;
   role: 'ADMIN';
   isActive: boolean;
+  hasAccess: boolean;
   sessionVersion: number;
 };
 
@@ -78,6 +79,7 @@ describe.skipIf(!TESTCONTAINERS_ENABLED)(
         email: 'user@example.test',
         role: 'ADMIN',
         isActive: true,
+        hasAccess: true,
         sessionVersion: 0,
       };
       findById = vi.fn(() => Promise.resolve(user));

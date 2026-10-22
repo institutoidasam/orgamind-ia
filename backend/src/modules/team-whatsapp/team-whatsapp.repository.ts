@@ -43,10 +43,12 @@ export type TeamMember = Prisma.UserGetPayload<{
   select: typeof teamMemberSelect;
 }>;
 
-/** Membro do envio por data: o do alvo mais a função (`jobTitle`) da foto. */
+/** Membro do envio por data: o do alvo mais a função (`jobTitle`) da foto e o nível (C4). */
 const teamMemberRowSelect = {
   ...teamMemberSelect,
   jobTitle: true,
+  levelId: true,
+  level: { select: { id: true, name: true } },
 } satisfies Prisma.UserSelect;
 export type TeamMemberRow = Prisma.UserGetPayload<{
   select: typeof teamMemberRowSelect;
@@ -82,6 +84,7 @@ const dispatchListSelect = {
   firedAt: true,
   author: { select: { id: true, name: true, email: true } },
   channel: { select: { id: true, name: true } },
+  sectors: { select: { sectorId: true, sectorName: true } },
 } satisfies Prisma.TeamWhatsappDispatchSelect;
 export type TeamDispatchRow = Prisma.TeamWhatsappDispatchGetPayload<{
   select: typeof dispatchListSelect;
@@ -97,6 +100,10 @@ export type TeamRecipientRow = {
   status: TeamWhatsappRecipientStatus;
   errorCode: string | null;
   skipReason: TeamWhatsappSkipReason | null;
+  // Snapshot (C6): setor em que entrou e nível na hora; null = alvo pessoa ou
+  // envio anterior (o backfill preenche só o setor).
+  sectorName: string | null;
+  levelName: string | null;
 };
 
 /**
@@ -112,6 +119,20 @@ export type NewTeamRecipient = {
   skipReason: TeamWhatsappSkipReason | null;
 };
 
+/** Setor do envio (C6): uma linha por setor no alvo setor; nenhuma no alvo pessoa. */
+export type DispatchSector = { sectorId: string; sectorName: string };
+
+/**
+ * Snapshot de setor/nível do destinatário (C6): o setor em que a pessoa entrou
+ * e o nome do nível na hora (gravado a partir da T8b); tudo null no alvo pessoa.
+ */
+export type RecipientSnapshot = {
+  sectorId: string | null;
+  sectorName: string | null;
+  levelName: string | null;
+};
+export type NewTeamDispatchRecipient = NewTeamRecipient & RecipientSnapshot;
+
 export type NewTeamDispatch = {
   authorId: string;
   targetType: TeamWhatsappTargetType;
@@ -125,7 +146,9 @@ export type NewTeamDispatch = {
   shiftEndTime: string | null;
   channelId: string;
   text: string;
-  recipients: NewTeamRecipient[];
+  // `targetId` = primeiro setor; aqui vão todos os setores do envio.
+  sectors: DispatchSector[];
+  recipients: NewTeamDispatchRecipient[];
   // Foto da escala (C10; gravada no POST pela T7b). Ausente = null / false / null.
   rosterDate?: CivilDate | null;
   includeOff?: boolean;
@@ -163,6 +186,8 @@ export type TeamDispatchForCancel = {
   targetType: TeamWhatsappTargetType;
   targetId: string;
   state: TeamWhatsappDispatchState;
+  // Todos os setores do envio (C7); [] no alvo pessoa.
+  sectorIds: string[];
 };
 
 /**
@@ -311,10 +336,12 @@ export class TeamWhatsappRepository {
   }
 
   async createDispatch(data: NewTeamDispatch) {
-    const { recipients, rosterDate, includeOff, roster, ...dispatch } = data;
+    const { recipients, sectors, rosterDate, includeOff, roster, ...dispatch } =
+      data;
     return this.prisma.teamWhatsappDispatch.create({
       data: {
         ...dispatch,
+        sectors: { create: sectors },
         rosterDate: rosterDate ? toDbDate(rosterDate) : null,
         includeOff: includeOff ?? false,
         // parse descarta chaves fora do contrato (ex.: telefone) antes de gravar (GC10).
@@ -337,10 +364,19 @@ export class TeamWhatsappRepository {
   async findDispatchForCancel(
     id: string,
   ): Promise<TeamDispatchForCancel | null> {
-    return this.prisma.teamWhatsappDispatch.findUnique({
+    const row = await this.prisma.teamWhatsappDispatch.findUnique({
       where: { id },
-      select: { id: true, targetType: true, targetId: true, state: true },
+      select: {
+        id: true,
+        targetType: true,
+        targetId: true,
+        state: true,
+        sectors: { select: { sectorId: true } },
+      },
     });
+    if (!row) return null;
+    const { sectors, ...dispatch } = row;
+    return { ...dispatch, sectorIds: sectors.map((s) => s.sectorId) };
   }
 
   /**
@@ -403,7 +439,11 @@ export class TeamWhatsappRepository {
     });
   }
 
-  /** Só `state = SCHEDULED`, por `scheduledFor` asc; `onlySectorIds = null` → todos (ADMIN). */
+  /**
+   * Só `state = SCHEDULED`, por `scheduledFor` asc; `onlySectorIds = null` →
+   * todos (ADMIN). Gestor (C7/D5): só alvo setor com ≥1 setor e TODOS os setores
+   * do envio entre os dele (`every` sozinho aceitaria envio sem setor).
+   */
   async listScheduled(
     onlySectorIds: readonly string[] | null,
   ): Promise<ScheduledRow[]> {
@@ -411,7 +451,13 @@ export class TeamWhatsappRepository {
       where: {
         state: 'SCHEDULED',
         ...(onlySectorIds
-          ? { targetType: 'SECTOR', targetId: { in: [...onlySectorIds] } }
+          ? {
+              targetType: 'SECTOR',
+              sectors: {
+                some: {},
+                every: { sectorId: { in: [...onlySectorIds] } },
+              },
+            }
           : {}),
       },
       orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'asc' }],
@@ -464,6 +510,8 @@ export class TeamWhatsappRepository {
         status: true,
         errorCode: true,
         skipReason: true,
+        sectorName: true,
+        levelName: true,
       },
     });
   }

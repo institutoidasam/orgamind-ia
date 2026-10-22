@@ -156,8 +156,12 @@ export class ChatService {
     const conv = await this.repo.findConversation(conversationId);
     if (!conv) throw new NotFoundError('Conversation', conversationId);
     if (userId) {
-      const user = await this.prisma.user.findUnique({ where: { id: userId } });
-      if (!user) throw new NotFoundError('User', userId);
+      // Pessoa sem acesso (GC5) não é atribuível: mesmo erro de inexistente.
+      const user = await this.prisma.user.findUnique({
+        where: { id: userId },
+        select: { hasAccess: true },
+      });
+      if (!user?.hasAccess) throw new NotFoundError('User', userId);
     }
     await this.repo.assignConversation(conversationId, userId);
     // Handoff: atribuir a conversa a um operador pausa o bot (não pausa ao desatribuir).

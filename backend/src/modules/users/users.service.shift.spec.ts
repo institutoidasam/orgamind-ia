@@ -20,6 +20,7 @@ let svc: UsersService;
 const fullUser = (over: Partial<UserSummary> = {}): UserSummary => ({
   id: 'u1',
   email: 'u1@idasam.org',
+  hasAccess: true,
   name: 'Ana',
   role: 'OPERATOR',
   sectorId: 's1',
@@ -31,6 +32,8 @@ const fullUser = (over: Partial<UserSummary> = {}): UserSummary => ({
   phoneE164: '+5592991234567',
   shiftId: 'shift_first',
   jobTitle: null,
+  levelId: null,
+  level: null,
   createdAt: new Date('2026-10-01T12:00:00Z'),
   updatedAt: new Date('2026-10-01T12:00:00Z'),
   createdById: null,

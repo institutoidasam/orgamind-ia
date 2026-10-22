@@ -488,7 +488,8 @@ export class InternalCommunicationsService {
       where: { id: userId },
       select: actorSelect,
     });
-    if (!actor || !actor.isActive)
+    // Sem e-mail = pessoa sem acesso (C2): não age, como o inativo.
+    if (!actor || !actor.isActive || actor.email === null)
       throw new ForbiddenError(
         'Usuário interno inativo.',
         'internal.user_inactive',
@@ -498,7 +499,7 @@ export class InternalCommunicationsService {
         'Usuário sem setor interno.',
         'internal.sector_required',
       );
-    return actor;
+    return { ...actor, email: actor.email };
   }
 
   private async visible(actor: InternalActor, id: string): Promise<DetailRow> {
@@ -651,6 +652,7 @@ export class InternalCommunicationsService {
         id: assigneeId,
         sectorId,
         isActive: true,
+        hasAccess: true,
         role: { in: ['ADMIN', 'OPERATOR', 'SUPERVISOR'] },
       },
       select: { id: true },

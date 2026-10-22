@@ -1,11 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo } from "react";
+import { useLevels } from "@/features/levels/api";
 import { api } from "@/lib/api-client";
 import { useAuthStore } from "@/stores/auth.store";
+import type { CreateUserPayload } from "./invite-payload";
 import {
   userListResponseSchema,
-  type InviteUserOutput,
   type EditUserInput,
+  type UserSummary,
 } from "./schemas";
+import type { UserRole } from "./role";
 
 function invalidateUserList(qc: ReturnType<typeof useQueryClient>) {
   qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === "users" });
@@ -30,15 +34,26 @@ export function syncAuthStoreOnSelfEdit(id: string, data: EditUserInput) {
   });
 }
 
-export function useUsers(page = 1, pageSize = 20) {
+type UsersFilters = { hasAccess?: true };
+
+/** `filters.hasAccess` vira `?hasAccess=true` (filtro do servidor); sem filtro, lista todos. */
+export function useUsers(page = 1, pageSize = 20, filters?: UsersFilters) {
+  const hasAccess = filters?.hasAccess ? { hasAccess: true as const } : {};
   return useQuery({
-    queryKey: ["users", { page, pageSize }],
+    queryKey: ["users", { page, pageSize, ...hasAccess }],
     queryFn: () =>
       api
-        .get("users", { searchParams: { page, pageSize } })
+        .get("users", { searchParams: { page, pageSize, ...hasAccess } })
         .json()
         .then((d) => userListResponseSchema.parse(d)),
   });
+}
+
+/** Níveis ativos (cadastro novo). `GET /internal/levels` é só do ADMIN, como a tela de Usuários. */
+export function useActiveLevels() {
+  const { data, ...rest } = useLevels();
+  const active = useMemo(() => data?.filter((level) => level.isActive), [data]);
+  return { ...rest, data: active };
 }
 
 /** Administrative selectors must not silently lose users after the first page. */
@@ -70,9 +85,26 @@ export function useInviteUser() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (
-      input: InviteUserOutput,
-    ): Promise<{ user: unknown; temporaryPassword: string }> =>
+      input: CreateUserPayload,
+    ): Promise<{ user: unknown; temporaryPassword: string | null }> =>
       api.post("users", { json: input }).json(),
+    onSuccess: () => invalidateUserList(qc),
+  });
+}
+
+/** Dar acesso a uma pessoa sem acesso: devolve a senha temporária (só existe nesta resposta). */
+export function useGrantAccess() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      id,
+      ...json
+    }: {
+      id: string;
+      email: string;
+      role: UserRole;
+    }): Promise<{ user: UserSummary; temporaryPassword: string }> =>
+      api.post(`users/${id}/access`, { json }).json(),
     onSuccess: () => invalidateUserList(qc),
   });
 }

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   useCreateInternalNumber,
   useInternalNumbers,
+  useSector,
   useSectors,
   useUpdateInternalNumber,
 } from "./api";
@@ -46,6 +47,12 @@ function QueryProbe() {
   return <p>{`${sectorIds}/${numberIds}`}</p>;
 }
 
+function SectorDetailProbe() {
+  const detail = useSector("sector-1");
+  if (detail.isError) return <p>erro</p>;
+  return <p>{detail.data ? `${detail.data.members.length} membros / gestor ${detail.data.manager?.name}` : "carregando"}</p>;
+}
+
 function MutationProbe() {
   const create = useCreateInternalNumber();
   const update = useUpdateInternalNumber("number-1");
@@ -69,6 +76,16 @@ describe("internal admin API", () => {
     await waitFor(() => expect(screen.getByText("sector-1,sector-2/number-1")).toBeInTheDocument());
     expect(get).toHaveBeenCalledWith("internal/sectors", expect.objectContaining({ searchParams: expect.objectContaining({ activeOnly: true, page: 1 }) }));
     expect(get).toHaveBeenCalledWith("internal/sectors", expect.objectContaining({ searchParams: expect.objectContaining({ page: 2 }) }));
+  });
+
+  it("carrega o setor com pessoa sem acesso (email null) como membro e gestor", async () => {
+    get.mockReturnValue(response({
+      ...sector,
+      manager: { id: "u2", name: "Bia", email: null },
+      members: [{ id: "u2", email: null, name: "Bia", role: "VIEWER" }],
+    }));
+    wrap(<SectorDetailProbe />);
+    await waitFor(() => expect(screen.getByText("1 membros / gestor Bia")).toBeInTheDocument());
   });
 
   it("posts, patches and invalidates the number registry", async () => {

@@ -66,7 +66,10 @@ describe('ChatService handoff', () => {
   it('assignConversation to a user pauses the bot; unassign does not', async () => {
     const { svc, repo, prisma } = make();
     repo.findConversation.mockResolvedValue({ id: 'c1', instanceId: 'i1' } as never);
-    prisma.user.findUnique.mockResolvedValue({ id: 'u1' } as never);
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'u1',
+      hasAccess: true,
+    } as never);
 
     await svc.assignConversation('c1', 'u1', 'actor1');
     expect(repo.setBotPaused).toHaveBeenCalledWith('c1');

@@ -26,7 +26,7 @@ const toUser = (userId = 'u1'): CreateTeamDispatchInput => ({
 const toSector = (sectorId = 's1'): CreateTeamDispatchInput => ({
   channelId: 'c1',
   text: TEXT,
-  target: { type: 'sector', sectorId, date: '2026-10-21' },
+  target: { type: 'sector', sectorIds: [sectorId], date: '2026-10-21' },
 });
 // Membro no 1º turno do cadastro: "Todos os turnos" só alcança quem tem WORK no dia (D2).
 const onDuty = (over: Partial<TeamMember> = {}) =>
@@ -235,6 +235,13 @@ const recordedMembers = () => [
   onDuty({ id: 'u3', name: 'Caio', phoneE164: SUPPRESSED }),
 ];
 
+// T7 (C6): setor em que a pessoa entrou; nível só a partir da T8b.
+const FIN_SNAPSHOT = {
+  sectorId: 's1',
+  sectorName: 'Financeiro',
+  levelName: null,
+};
+
 describe('TeamWhatsappService.dispatch — setor grava o envio', () => {
   beforeEach(() => {
     h.repo.findActor.mockResolvedValue(MANAGER);
@@ -260,6 +267,7 @@ describe('TeamWhatsappService.dispatch — setor grava o envio', () => {
         ...FIRST,
         status: 'QUEUED',
         skipReason: null,
+        ...FIN_SNAPSHOT,
       },
       {
         userId: 'u2',
@@ -267,6 +275,7 @@ describe('TeamWhatsappService.dispatch — setor grava o envio', () => {
         ...FIRST,
         status: 'SKIPPED',
         skipReason: 'NO_PHONE',
+        ...FIN_SNAPSHOT,
       },
       {
         userId: 'u3',
@@ -274,6 +283,7 @@ describe('TeamWhatsappService.dispatch — setor grava o envio', () => {
         ...FIRST,
         status: 'SKIPPED',
         skipReason: 'SUPPRESSED',
+        ...FIN_SNAPSHOT,
       },
     ]);
   });
@@ -305,6 +315,7 @@ describe('TeamWhatsappService.dispatch — setor audita contagens', () => {
         actorId: 'm',
         targetType: 'SECTOR',
         targetId: 's1',
+        sectorIds: ['s1'],
         channelId: 'c1',
         queued: 1,
         skipped: 2,

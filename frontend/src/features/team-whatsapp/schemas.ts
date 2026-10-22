@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { levelRefSchema } from '@/features/levels/schemas';
 import { shiftRefSchema } from '@/features/shifts/schemas';
 import { civilDateSchema, daySituationSchema } from '@/features/staff-schedule/schemas';
 
@@ -7,7 +8,8 @@ import { civilDateSchema, daySituationSchema } from '@/features/staff-schedule/s
 const personSchema = z.object({
   id: z.string(),
   name: z.string().nullable(),
-  email: z.string(),
+  // null = pessoa sem acesso ao sistema.
+  email: z.string().nullable(),
 });
 
 export const teamConnectionStateSchema = z.enum(['open', 'connecting', 'close']);
@@ -35,6 +37,8 @@ export const teamTargetsSchema = z.object({
   shifts: shiftRefSchema.array(),
   channels: teamChannelSchema.array(),
   sectors: teamSectorSchema.array(),
+  // Níveis ativos por sortOrder (filtro do envio).
+  levels: levelRefSchema.array(),
 });
 
 export const rosterMemberSchema = personSchema.extend({
@@ -43,13 +47,14 @@ export const rosterMemberSchema = personSchema.extend({
   jobTitle: z.string().nullable(),
   fromOtherSector: z.boolean(),
   situation: daySituationSchema,
+  level: levelRefSchema.nullable(),
 });
 
+/** Escala dos setores pedidos na data; setores por nome, cada pessoa em um só. */
 export const teamRosterSchema = z.object({
-  sectorId: z.string(),
   date: civilDateSchema,
   shiftStarts: z.object({ shiftId: z.string(), startsAt: z.string() }).array(),
-  members: rosterMemberSchema.array(),
+  sectors: z.object({ sectorId: z.string(), name: z.string(), members: rosterMemberSchema.array() }).array(),
 });
 
 /** Turno gravado no envio; tolerante como o `teamShiftSnapshotSchema` do back (sem regex HH:mm). */
@@ -91,6 +96,9 @@ export const rosterPersonSchema = z.object({
   jobTitle: z.string().nullable(),
   shiftName: z.string().nullable(),
   reason: z.enum(['DAY_OFF', 'VACATION']).nullable(),
+  // Setor e nível da pessoa na hora do envio (D4); null = foto antiga, sem as chaves.
+  sectorName: z.string().nullable(),
+  levelName: z.string().nullable(),
 });
 
 export const dispatchRecipientSchema = z.object({
@@ -102,6 +110,9 @@ export const dispatchRecipientSchema = z.object({
   status: z.enum(['QUEUED', 'SENT', 'FAILED', 'SKIPPED', 'SCHEDULED', 'CANCELLED']),
   // errorCode quando FAILED; 'NO_PHONE' | 'SUPPRESSED' | 'INACTIVE' quando SKIPPED; senão null.
   reason: z.string().nullable(),
+  // Setor em que entrou e nível da época (não muda ao renomear); null = alvo pessoa ou envio antigo.
+  sectorName: z.string().nullable(),
+  levelName: z.string().nullable(),
 });
 
 export const dispatchListSchema = z.object({
@@ -117,6 +128,8 @@ export const dispatchListSchema = z.object({
         // Snapshot do filtro de turno; null = todos os turnos ou alvo pessoa.
         shift: shiftSnapshotSchema.nullable(),
       }),
+      // Setores do envio por nome (snapshot); [] no alvo pessoa. Mais de um = histórico agrupa por setor.
+      sectors: z.object({ id: z.string(), name: z.string() }).array(),
       // null = canal removido depois do envio.
       channel: z.object({ id: z.string(), name: z.string() }).nullable(),
       counts: dispatchCountsSchema,
@@ -162,7 +175,8 @@ export type TeamSector = z.infer<typeof teamSectorSchema>;
 export type TeamRoster = z.infer<typeof teamRosterSchema>;
 export type RosterMember = z.infer<typeof rosterMemberSchema>;
 export type RosterPerson = z.infer<typeof rosterPersonSchema>;
-export type RosterQuery = { sectorId: string; date: string };
+export type TeamLevel = z.infer<typeof levelRefSchema>;
+export type RosterSector = TeamRoster['sectors'][number];
 export type TeamChannel = z.infer<typeof teamChannelSchema>;
 export type DispatchResult = z.infer<typeof dispatchResultSchema>;
 export type DispatchList = z.infer<typeof dispatchListSchema>;
@@ -174,8 +188,11 @@ export type SendTarget =
   | { type: 'user'; userId: string; label: string }
   | {
       type: 'sector';
-      sectorId: string;
-      /** "Produção · Noite · 21/10" / "Produção · todos os turnos · 21/10" / "… · seleção de 2" */
+      sectorIds: string[];
+      /** Filtro de nível; vazio + `withoutLevel` falso = todos (não envia nada). */
+      levelIds: string[];
+      withoutLevel: boolean;
+      /** "Produção · Noite · 21/10" / "RH, TI +2 · Coordenador · todos os turnos · 21/10" / "… · seleção de 2" */
       label: string;
       date: string; // data da escala conferida na tela
       shiftId: string | null; // null = todos os turnos (não envia `shiftId`)
@@ -195,5 +212,14 @@ export type CreateDispatchInput = {
   when?: 'now' | 'shift_start';
   target:
     | { type: 'user'; userId: string }
-    | { type: 'sector'; sectorId: string; date: string; shiftId?: string; userIds?: string[]; includeOff?: boolean };
+    | {
+        type: 'sector';
+        sectorIds: string[];
+        date: string;
+        shiftId?: string;
+        userIds?: string[];
+        includeOff?: boolean;
+        levelIds?: string[];
+        withoutLevel?: boolean;
+      };
 };

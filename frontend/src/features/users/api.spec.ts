@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
 import React from 'react';
 import { useAuthStore } from '@/stores/auth.store';
-import { syncAuthStoreOnSelfEdit, useUpdateUser } from './api';
+import { syncAuthStoreOnSelfEdit, useActiveLevels, useUpdateUser, useUsers } from './api';
 
 function invalidateUserList(qc: QueryClient) {
   qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === 'users' });
@@ -86,5 +86,50 @@ describe('useUpdateUser — empty 204 body must not throw (regression)', () => {
         .map((q) => q.state.isInvalidated);
       expect(states).toEqual([true]);
     });
+  });
+});
+
+describe('useUsers e useActiveLevels (leitura)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const wrapper = ({ children }: { children: React.ReactNode }) =>
+    React.createElement(
+      QueryClientProvider,
+      { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
+      children,
+    );
+  const stubJson = (body: unknown) =>
+    vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }),
+    );
+  const requestedUrl = (spy: ReturnType<typeof stubJson>) => new URL((spy.mock.calls[0]![0] as Request).url);
+  const usersPage = { data: [], total: 0, page: 1, pageSize: 100 };
+
+  it('com { hasAccess: true } a query tem hasAccess=true', async () => {
+    const spy = stubJson(usersPage);
+    const { result } = renderHook(() => useUsers(1, 100, { hasAccess: true }), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(requestedUrl(spy).searchParams.get('hasAccess')).toBe('true');
+  });
+
+  it('sem filtro, a query é a de hoje (só page e pageSize)', async () => {
+    const spy = stubJson(usersPage);
+    const { result } = renderHook(() => useUsers(1, 20), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect([...requestedUrl(spy).searchParams.keys()].sort()).toEqual(['page', 'pageSize']);
+  });
+
+  it('useActiveLevels devolve só os níveis ativos de GET /internal/levels', async () => {
+    const level = { sortOrder: 0, userCount: 0 };
+    const spy = stubJson({
+      items: [
+        { id: 'l1', name: 'Líder', isActive: true, ...level },
+        { id: 'l2', name: 'Antigo', isActive: false, ...level },
+      ],
+    });
+    const { result } = renderHook(() => useActiveLevels(), { wrapper });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(requestedUrl(spy).pathname).toMatch(/internal\/levels$/);
+    expect(result.current.data?.map((l) => l.name)).toEqual(['Líder']);
   });
 });

@@ -73,7 +73,7 @@ const schedule = (extra: Partial<SectorTarget> = {}) =>
     when: 'shift_start',
     target: {
       type: 'sector',
-      sectorId: 's1',
+      sectorIds: ['s1'],
       date: DATE,
       shiftId: NOITE.id,
       ...extra,
@@ -190,6 +190,7 @@ const scheduleHarness = (): ScheduleHarness => {
     targetType: 'SECTOR',
     targetId: 's1',
     state: 'SCHEDULED',
+    sectorIds: ['s1'],
   });
   repo.findSector.mockResolvedValue(sector());
   repo.cancelScheduled.mockResolvedValue(true);
@@ -258,6 +259,43 @@ describe('cancelar agendado — setor desativado depois do agendamento', () => {
     expect(s.repo.cancelScheduled.mock.calls).toHaveLength(
       actor.role === 'ADMIN' ? 1 : 0,
     );
+  });
+});
+
+// C7: o gestor cancela só se TODO setor do envio passa por `canSendToSector`.
+describe('cancelar agendado — setores do envio', () => {
+  it.each<[string, TeamActor, string[], boolean]>([
+    ['gestor de A cancela envio de A (igual a hoje)', MANAGER, ['s1'], true],
+    [
+      'gestor de A cancela A+B → 403 sem cancelar',
+      MANAGER,
+      ['s1', 's2'],
+      false,
+    ],
+    ['gestor de A, envio sem setores → 403 sem cancelar', MANAGER, [], false],
+    ['ADMIN cancela A+B', ADMIN, ['s1', 's2'], true],
+  ])('%s', async (_label, actor, sectorIds, cancels) => {
+    const s = scheduleHarness();
+    s.repo.findActor.mockResolvedValue(actor);
+    s.repo.findDispatchForCancel.mockResolvedValue({
+      id: 'd1',
+      targetType: 'SECTOR',
+      targetId: 's1',
+      state: 'SCHEDULED',
+      sectorIds,
+    });
+    s.repo.findSector.mockImplementation((id) =>
+      Promise.resolve(sector({ id })),
+    );
+    const result = await s.service
+      .cancel(actor.id, 'd1')
+      .catch((e: unknown) => e);
+    expect(result).toMatchObject(
+      cancels
+        ? { id: 'd1', state: 'CANCELLED' }
+        : { code: 'team_whatsapp.forbidden', status: 403 },
+    );
+    expect(s.repo.cancelScheduled.mock.calls).toHaveLength(cancels ? 1 : 0);
   });
 });
 

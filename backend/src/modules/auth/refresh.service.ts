@@ -277,7 +277,16 @@ export class RefreshService {
 
   private async findActiveUser(userId: string): Promise<AuthUser> {
     const user = await this.authRepo.findById(userId);
-    if (!user || user.isActive === false) throw new InvalidCredentialsError();
+    // Pessoa sem acesso (C2) cai como usuário inativo; sem acesso não há e-mail
+    // para o access token.
+    if (
+      !user ||
+      user.isActive === false ||
+      !user.hasAccess ||
+      user.email === null
+    ) {
+      throw new InvalidCredentialsError();
+    }
     return user;
   }
 

@@ -53,6 +53,15 @@ export function invalidSelection(): DomainError {
   });
 }
 
+/** Algum `levelIds` do alvo setor inexistente ou inativo (C5): nada é criado. */
+export function invalidLevel(): DomainError {
+  return new DomainError({
+    code: 'team_whatsapp.invalid_level',
+    message: 'Nível inválido',
+    status: 422,
+  });
+}
+
 /** "No início do turno" com o início (data + turno, em Manaus) agora ou no passado. */
 export function scheduleInPast(): DomainError {
   return new DomainError({

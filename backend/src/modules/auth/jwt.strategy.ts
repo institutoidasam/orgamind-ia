@@ -38,9 +38,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // Old tokens without a version remain valid only for an untouched
     // version-zero identity. This closes reactivation and role-change token
     // resurrection without forcing all existing users to log in at migration.
+    // Pessoa sem acesso (C2) cai como usuário inativo.
     if (
       !user ||
       !user.isActive ||
+      !user.hasAccess ||
+      user.email === null ||
       (payload.sessionVersion ?? 0) !== user.sessionVersion
     ) {
       throw new UnauthorizedException();

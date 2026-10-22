@@ -19,7 +19,9 @@ describe("editableUserPayload", () => {
       ),
     ).toEqual({ role: "SUPERVISOR", sectorId: "s1", isActive: false });
   });
+});
 
+describe("editableUserPayload", () => {
   it("includes phone only when it changed and is not empty", () => {
     const data = { name: "Ana", phone: "92 98888-7777" };
     expect(editableUserPayload(data, false, { phone: true })).toEqual(data);
@@ -38,5 +40,17 @@ describe("editableUserPayload", () => {
     expect(editableUserPayload({ name: "Ana", jobTitle: "Operador" }, false)).toEqual({ name: "Ana" });
     expect(editableUserPayload({ name: "Ana", jobTitle: "Operador" }, false, { jobTitle: true })).toEqual({ name: "Ana", jobTitle: "Operador" });
     expect(editableUserPayload({ name: "Ana", jobTitle: "" }, false, { jobTitle: true })).toEqual({ name: "Ana", jobTitle: null });
+  });
+
+  it("includes levelId only when it changed; null clears it", () => {
+    expect(editableUserPayload({ name: "Ana", levelId: "lv1" }, false)).toEqual({ name: "Ana" });
+    expect(editableUserPayload({ name: "Ana", levelId: "lv1" }, false, { levelId: true })).toEqual({ name: "Ana", levelId: "lv1" });
+    expect(editableUserPayload({ name: "Ana", levelId: null }, false, { levelId: true })).toEqual({ name: "Ana", levelId: null });
+  });
+
+  it("never sends role for a person without access", () => {
+    expect(
+      editableUserPayload({ name: "Rita", role: "VIEWER", sectorId: "s1" }, false, {}, false),
+    ).toEqual({ name: "Rita", sectorId: "s1" });
   });
 });

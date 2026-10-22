@@ -62,8 +62,9 @@ describe('Sidebar', () => {
       expect(screen.getByRole('link', { name: 'Demandas' })).toHaveAttribute('aria-current', 'page');
       expect(screen.getByRole('link', { name: 'Comunicados' })).not.toHaveAttribute('aria-current');
       expect(screen.queryByRole('link', { name: 'Nova comunicação' })).toBe(canCreate ? screen.getByRole('link', { name: 'Nova comunicação' }) : null);
-      if (role === 'ADMIN') expect(screen.getByRole('link', { name: 'Setores' })).toBeInTheDocument();
-      else expect(screen.queryByRole('link', { name: 'Setores' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('link', { name: 'Setores' })).toBe(role === 'VIEWER' ? null : screen.getByRole('link', { name: 'Setores' }));
+      if (role === 'ADMIN') expect(screen.getByRole('link', { name: 'Usuários' })).toBeInTheDocument();
+      else expect(screen.queryByRole('link', { name: 'Usuários' })).not.toBeInTheDocument();
       unmount();
     }
   });

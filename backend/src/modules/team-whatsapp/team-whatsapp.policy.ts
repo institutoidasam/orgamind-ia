@@ -15,6 +15,8 @@ export type TeamActor = {
   id: string;
   role: Role;
   isActive: boolean;
+  /** Pessoa sem acesso (GC5) nunca envia nem vê a escala, qualquer que seja o papel. */
+  hasAccess: boolean;
   managedSectorIds: readonly string[];
 };
 
@@ -28,9 +30,10 @@ export type TeamTargetUser = {
 /** Papéis de escrita: VIEWER nunca envia, mesmo que ainda seja `managerId` de um setor. */
 const SENDER_ROLES: readonly Role[] = ['ADMIN', 'SUPERVISOR', 'OPERATOR'];
 
-/** ADMIN ativo, ou gestor ativo (de ≥1 setor ativo) com papel de escrita. */
+/** ADMIN ativo com acesso, ou gestor ativo com acesso (de ≥1 setor ativo) e papel de escrita. */
 export function isTeamSender(actor: TeamActor): boolean {
-  if (!actor.isActive || !SENDER_ROLES.includes(actor.role)) return false;
+  if (!actor.isActive || !actor.hasAccess) return false;
+  if (!SENDER_ROLES.includes(actor.role)) return false;
   return actor.role === 'ADMIN' || actor.managedSectorIds.length > 0;
 }
 

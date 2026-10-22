@@ -19,6 +19,7 @@ let svc: UsersService;
 const operator = {
   id: 'u7',
   email: 'operador@idasam.org',
+  hasAccess: true,
   name: 'Bia',
   role: 'OPERATOR',
   sectorId: 'sec_producao',
@@ -28,6 +29,8 @@ const operator = {
   phoneE164: null,
   shiftId: null,
   jobTitle: 'Operador de empilhadeira',
+  levelId: null,
+  level: null,
   createdAt: new Date('2026-10-21T12:00:00Z'),
   createdBy: null,
 } as unknown as UserSummary;

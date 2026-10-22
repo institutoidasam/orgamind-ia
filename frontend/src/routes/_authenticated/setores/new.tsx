@@ -1,10 +1,15 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, redirect, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { extractApiError } from "@/lib/api-error";
+import { useAuthStore } from "@/stores/auth.store";
 import { useCreateSector } from "@/features/internal-admin/api";
 import { SectorForm } from "@/features/internal-admin/components/sector-form";
 
 const route = createFileRoute("/_authenticated/setores/new")({
+  // /setores está aberta ao gestor (D9), mas criar setor continua só do ADMIN.
+  beforeLoad: () => {
+    if (useAuthStore.getState().user?.role !== "ADMIN") throw redirect({ to: "/dashboard" });
+  },
   component: NewSectorPage,
 });
 export { route as Route };

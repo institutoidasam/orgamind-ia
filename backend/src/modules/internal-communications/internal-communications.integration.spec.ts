@@ -402,6 +402,37 @@ describe('internal communications (Postgres + Nest HTTP)', () => {
     }
   });
 
+  describe('responsável sem acesso (GC5)', () => {
+    it('responsável sem acesso do próprio setor → ValidationError de hoje', async () => {
+      // Papel de escrita de propósito: só `hasAccess` pode tirá-la (D1: VIEWER é defesa extra).
+      const withoutAccess = await prisma.user.create({
+        data: {
+          name: 'Sem acesso B',
+          hasAccess: false,
+          email: null,
+          password: null,
+          role: 'OPERATOR',
+          sectorId: ids.sectorB,
+        },
+      });
+      const created = await createDemand(
+        tokens.operatorA,
+        '550e8400-e29b-41d4-a716-446655440015',
+      );
+      const response = await request(app.getHttpServer())
+        .patch(`/internal/communications/${created.body.id}/demand`)
+        .set(auth(tokens.operatorB))
+        .send({
+          expectedVersion: created.body.version,
+          assigneeId: withoutAccess.id,
+        })
+        .expect(400);
+      expect(response.body).toMatchObject({
+        code: 'internal.invalid_assignee',
+      });
+    });
+  });
+
   it('preserves a sanitized author snapshot after the creator is deleted', async () => {
     const created = await createDemand(
       tokens.operatorA,
@@ -523,7 +554,7 @@ function auth(token: string) {
 
 function tokenFor(user: {
   id: string;
-  email: string;
+  email: string | null;
   role: string;
   sessionVersion: number;
 }) {

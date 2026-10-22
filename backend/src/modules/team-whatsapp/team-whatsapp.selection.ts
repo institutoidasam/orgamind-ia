@@ -1,7 +1,6 @@
 import type { ShiftRef } from '../../schemas/contracts/shift.schema';
 import {
   addDays,
-  formatDayMonth,
   timeIn,
   todayIn,
   type CivilDate,
@@ -37,20 +36,4 @@ export function selectMembers<M extends { id: string }>(
   const wanted = new Set(userIds);
   const picked = eligible.filter((m) => wanted.has(m.id));
   return picked.length === wanted.size ? picked : null;
-}
-
-/** GC12: "Produção · Noite · 21/10 · seleção de 2", "Produção · todos os turnos · 21/10". */
-export function sectorTargetLabel(
-  sectorName: string,
-  shiftName: string | null,
-  date: CivilDate,
-  selectedCount: number | null,
-): string {
-  const parts = [
-    sectorName,
-    shiftName ?? 'todos os turnos',
-    formatDayMonth(date),
-  ];
-  if (selectedCount !== null) parts.push(`seleção de ${selectedCount}`);
-  return parts.join(' · ');
 }

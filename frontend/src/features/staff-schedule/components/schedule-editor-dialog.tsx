@@ -14,10 +14,15 @@ import { addDays, isoWeekday, mondayOf } from '@/lib/civil-date';
 import { useDeleteSchedule, usePutSchedule } from '../api';
 import { describeScheduleError } from '../error-messages';
 import type { ScheduleOptions, ScheduleTemplate, StaffSchedule } from '../schemas';
-import { applyPreset, custom, resizeCycle, type PresetTemplate } from '../templates';
+import { applyPreset, custom, resizeCycle, weekly, type PresetTemplate } from '../templates';
 
-/** Pessoa da linha; `schedule` nulo = ainda segue o turno do cadastro. */
-export type ScheduleTarget = { userId: string; name: string; schedule: StaffSchedule | null };
+/** Pessoa da linha; `schedule` nulo = ainda segue o turno do cadastro (`profileShiftId`). */
+export type ScheduleTarget = {
+  userId: string;
+  name: string;
+  schedule: StaffSchedule | null;
+  profileShiftId: string | null;
+};
 
 type Props = {
   target: ScheduleTarget;
@@ -55,10 +60,18 @@ function initialPicks(schedule: StaffSchedule, shifts: Shifts): Picks {
   return { a, b: worked.length > 0 ? worked[worked.length - 1] : (shifts[1]?.id ?? a) };
 }
 
+/** Rascunho inicial: a escala existente; sem escala, a semana no turno do cadastro (se ativo) ou tudo de folga. */
+function initialDraft(target: ScheduleTarget, options: Props['options']): StaffSchedule {
+  if (target.schedule) return target.schedule;
+  const { profileShiftId } = target;
+  if (profileShiftId && options.shifts.some((shift) => shift.id === profileShiftId)) {
+    return weekly(profileShiftId, options.today);
+  }
+  return custom(7, mondayOf(options.today));
+}
+
 function useDraft(target: ScheduleTarget, options: Props['options']) {
-  const [draft, setDraft] = useState<StaffSchedule>(
-    () => target.schedule ?? custom(7, mondayOf(options.today)),
-  );
+  const [draft, setDraft] = useState<StaffSchedule>(() => initialDraft(target, options));
   const [picks, setPicks] = useState(() => initialPicks(draft, options.shifts));
   const preset = (template: PresetTemplate, nextPicks: Picks, startDate: string) =>
     nextPicks.a === '' ? { ...draft, template } : applyPreset(template, { shiftA: nextPicks.a, shiftB: nextPicks.b, startDate });

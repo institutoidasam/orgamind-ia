@@ -32,10 +32,14 @@ const options = {
 
 type User = ReturnType<typeof userEvent.setup>;
 
-function setup(schedule: StaffSchedule | null = null) {
+function setup(schedule: StaffSchedule | null = null, profileShiftId: string | null = null) {
   const user = userEvent.setup();
   render(
-    <ScheduleEditorDialog target={{ userId: 'u1', name: 'Ana', schedule }} options={options} onClose={mocks.onClose} />,
+    <ScheduleEditorDialog
+      target={{ userId: 'u1', name: 'Ana', schedule, profileShiftId }}
+      options={options}
+      onClose={mocks.onClose}
+    />,
   );
   return user;
 }
@@ -101,6 +105,40 @@ describe('ScheduleEditorDialog: edição', () => {
     await save(user);
     await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1));
     expect(mocks.put.mock.calls[0][0].body.days).toStrictEqual(['noite', null, null]);
+  });
+});
+
+describe('ScheduleEditorDialog: sem escala', () => {
+  it('com turno do cadastro ativo abre em Semanal com esse turno e seg–sex no turno', async () => {
+    const user = setup(null, 'noite');
+    expect(screen.getByRole('combobox', { name: 'Modelo' })).toHaveTextContent('Semanal');
+    expect(screen.getByRole('combobox', { name: 'Turno' })).toHaveTextContent('Noite');
+    expect(screen.getByLabelText('Início')).toHaveValue('2026-10-19');
+    const days = screen.getAllByRole('combobox', { name: /^Dia \d+ / });
+    expect(days.map((day) => day.textContent)).toStrictEqual(['Noite', 'Noite', 'Noite', 'Noite', 'Noite', 'Folga', 'Folga']);
+    expect(mocks.put).not.toHaveBeenCalled();
+    await save(user);
+    await waitFor(() => expect(mocks.put).toHaveBeenCalledTimes(1));
+    expect(mocks.put.mock.calls[0][0]).toStrictEqual({
+      userId: 'u1',
+      body: {
+        template: 'WEEKLY',
+        startDate: '2026-10-19',
+        cycleLength: 7,
+        days: ['noite', 'noite', 'noite', 'noite', 'noite', null, null],
+      },
+    });
+  });
+
+  it.each([
+    ['nulo', null],
+    ['inativo (fora das opções)', 'turno-inativo'],
+  ])('com turno do cadastro %s abre em Personalizado com folga', (_caso, profileShiftId) => {
+    setup(null, profileShiftId);
+    expect(screen.getByRole('combobox', { name: 'Modelo' })).toHaveTextContent('Personalizado');
+    expect(screen.getByLabelText('Início')).toHaveValue('2026-10-19');
+    const days = screen.getAllByRole('combobox', { name: /^Dia \d+ / });
+    expect(days.map((day) => day.textContent)).toStrictEqual(Array(7).fill('Folga'));
   });
 });
 

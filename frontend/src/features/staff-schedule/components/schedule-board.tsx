@@ -101,7 +101,8 @@ function PersonRow({ row, board, lookups, separated, onSelect, onEditSchedule }:
             type="button"
             size="sm"
             variant="outline"
-            onClick={() => onEditSchedule({ userId: row.userId, name: row.name, schedule: row.schedule })}
+            onClick={() =>
+              onEditSchedule({ userId: row.userId, name: row.name, schedule: row.schedule, profileShiftId: row.profileShiftId })}
           >
             Editar escala
           </Button>

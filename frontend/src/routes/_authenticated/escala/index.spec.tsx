@@ -53,7 +53,7 @@ function boardFor({ sectorId, from, to }: Range) {
   return {
     sectorId, from, to, today: '2026-10-21', sectors: [producao], shifts: [{ ...noite, isActive: true }], exceptions: [],
     rows: [
-      row('u1', 'Ana', { jobTitle: 'Operadora', days: days(WORK_NOITE) }),
+      row('u1', 'Ana', { jobTitle: 'Operadora', profileShiftId: 'noite', days: days(WORK_NOITE) }),
       row('u2', 'Bia', { canEdit: false, days: days(DAY_OFF) }),
       row('u3', 'Caio', { fromOtherSector: true, jobTitle: 'Conferente', days: days(WORK_NOITE) }),
     ],
@@ -160,5 +160,8 @@ describe('/escala: editar escala', () => {
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByRole('heading', { name: 'Editar escala' })).toBeInTheDocument();
     expect(within(dialog).getByText('Ana')).toBeInTheDocument();
+    // Ana não tem escala e o turno do cadastro (Noite) está ativo: o editor parte dele.
+    expect(within(dialog).getByRole('combobox', { name: 'Modelo' })).toHaveTextContent('Semanal');
+    expect(within(dialog).getByRole('combobox', { name: 'Turno' })).toHaveTextContent('Noite');
   });
 });

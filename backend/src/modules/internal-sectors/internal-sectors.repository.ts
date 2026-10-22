@@ -76,8 +76,13 @@ export class InternalSectorsRepository {
       where: {
         sectorId,
         isActive: true,
+        // Elegível = quem age (GC5): sem `eligible`, a página do setor lista
+        // todos os ativos, inclusive a pessoa sem acesso.
         ...(eligible
-          ? { role: { in: [Role.ADMIN, Role.SUPERVISOR, Role.OPERATOR] } }
+          ? {
+              hasAccess: true,
+              role: { in: [Role.ADMIN, Role.SUPERVISOR, Role.OPERATOR] },
+            }
           : {}),
       },
       select: {
@@ -96,6 +101,7 @@ export class InternalSectorsRepository {
       where: {
         id,
         isActive: true,
+        hasAccess: true,
         role: { in: [Role.ADMIN, Role.SUPERVISOR, Role.OPERATOR] },
       },
       select: { id: true },

@@ -5,13 +5,17 @@ import {
   type TeamRosterMember,
   type TeamRosterPerson,
 } from '../../schemas/contracts/team-whatsapp.schema';
-import { zonedStart, type CivilDate } from '../staff-schedule/civil-date';
+import {
+  formatDayMonth,
+  zonedStart,
+  type CivilDate,
+} from '../staff-schedule/civil-date';
 import {
   resolveDay,
   type DaySituation,
 } from '../staff-schedule/schedule-resolver';
 import type {
-  TeamMember,
+  TeamMemberRow,
   TeamMemberWithSchedule,
 } from './team-whatsapp.repository';
 
@@ -41,15 +45,15 @@ export function rosterGroups(
   };
 }
 
-/** Pessoa da escala do setor na data (C6), com a situação resolvida (C3). */
-export type DayMember = TeamMember & {
-  jobTitle: string | null;
+/** Pessoa da escala do setor na data (C6), com função, nível e a situação resolvida (C3). */
+export type DayMember = TeamMemberRow & {
   fromOtherSector: boolean;
   situation: DaySituation;
 };
 
 const byName = new Intl.Collator('pt-BR');
-const nameOf = (m: { name: string | null; email: string }) => m.name ?? m.email;
+const nameOf = (m: { name: string | null; email: string | null }) =>
+  m.name ?? m.email ?? '';
 
 /** Do setor: entra se não trabalha em outro setor no dia; de fora: se trabalha aqui. */
 function inRoster(sectorId: string, member: DayMember): boolean {
@@ -93,21 +97,62 @@ export function dayMembers(input: {
     );
 }
 
+/** Filtro do alvo setor (C5): turno (ausente = todos), folga e nível. */
+export type DispatchFilter = {
+  shiftId?: string;
+  includeOff: boolean;
+  level?: LevelFilter;
+};
+
 /**
  * Quem o filtro alcança (D2): com turno, só WORK nesse turno; "Todos os turnos",
- * todo WORK (sem NONE); `includeOff` (só sem turno) acrescenta os OFF do setor.
+ * todo WORK (sem NONE); `includeOff` (só sem turno) acrescenta os OFF do setor;
+ * por fim o nível (C5, `passesLevel`; sem filtro = todos).
  */
 export function eligibleFor(
   members: readonly DayMember[],
-  filter: { shiftId?: string; includeOff: boolean },
+  filter: DispatchFilter,
 ): DayMember[] {
-  const { shiftId, includeOff } = filter;
-  return members.filter(({ situation, fromOtherSector }) => {
+  const { shiftId, includeOff, level = null } = filter;
+  return members.filter((m) => {
+    if (!passesLevel(m, level)) return false;
+    const { situation, fromOtherSector } = m;
     if (situation.kind === 'WORK')
       return shiftId === undefined || situation.shiftId === shiftId;
     const offHere = situation.kind === 'OFF' && !fromOtherSector;
     return offHere && includeOff && shiftId === undefined;
   });
+}
+
+/** Escala de um setor do envio na data (`dayMembers`), com o nome do setor. */
+export type SectorDay = {
+  sectorId: string;
+  sectorName: string;
+  members: readonly DayMember[];
+};
+
+/** Pessoa da lista conferida com o setor do envio em que entrou (C6). */
+export type SectorMember = DayMember & {
+  inSector: { sectorId: string; sectorName: string };
+};
+
+/**
+ * Lista conferida de vários setores (GC7/D7): os elegíveis de cada setor, na
+ * ordem recebida (o chamador ordena por nome), uma vez por pessoa, no primeiro
+ * setor em que aparece.
+ */
+export function eligibleAcross(
+  days: readonly SectorDay[],
+  filter: DispatchFilter,
+): SectorMember[] {
+  const seen = new Set<string>();
+  return days.flatMap(({ sectorId, sectorName, members }) =>
+    eligibleFor(members, filter).flatMap((m) => {
+      if (seen.has(m.id)) return [];
+      seen.add(m.id);
+      return [{ ...m, inSector: { sectorId, sectorName } }];
+    }),
+  );
 }
 
 /** Turno da pessoa no dia, para o destinatário gravado; fora de WORK → null. */
@@ -124,32 +169,43 @@ export function dayShift(
 }
 
 /**
- * Foto gravada no envio (C10), sem telefone (GC10): `working` = escalados no
- * filtro de turno, marcados ou não; `off` = de folga/férias do setor principal.
+ * Foto gravada no envio (C10), sem telefone (GC10), de todos os setores do
+ * envio: `working` = a lista conferida sem os de folga (marcados ou não);
+ * `off` = de folga/férias do setor principal; os dois no filtro de nível. Cada
+ * pessoa leva o setor em que entrou e o nome do nível na hora (C6).
  */
 export function rosterSnapshot(
-  members: readonly DayMember[],
-  filter: { shiftId?: string },
+  days: readonly SectorDay[],
+  filter: Omit<DispatchFilter, 'includeOff'>,
   shiftNames: ReadonlyMap<string, string>,
 ): RosterSnapshot {
-  const person = (
-    m: DayMember,
-  ): Omit<TeamRosterPerson, 'shiftName' | 'reason'> => ({
+  const person = (m: DayMember, sectorName: string) => ({
     userId: m.id,
     name: nameOf(m),
     jobTitle: m.jobTitle,
+    sectorName,
+    levelName: m.level?.name ?? null,
   });
-  const working = eligibleFor(members, { ...filter, includeOff: false }).map(
+  const working = eligibleAcross(days, { ...filter, includeOff: false }).map(
     (m) => ({
-      ...person(m),
+      ...person(m, m.inSector.sectorName),
       shiftName: dayShift(m, shiftNames).shiftName,
       reason: null,
     }),
   );
-  const off = members.flatMap((m) =>
-    m.situation.kind === 'OFF' && !m.fromOtherSector
-      ? [{ ...person(m), shiftName: null, reason: m.situation.reason }]
-      : [],
+  const level = filter.level ?? null;
+  const off = days.flatMap(({ sectorName, members }) =>
+    members.flatMap((m) =>
+      m.situation.kind === 'OFF' && !m.fromOtherSector && passesLevel(m, level)
+        ? [
+            {
+              ...person(m, sectorName),
+              shiftName: null,
+              reason: m.situation.reason,
+            },
+          ]
+        : [],
+    ),
   );
   return { working, off };
 }
@@ -165,7 +221,76 @@ export function toRosterMember(m: DayMember): TeamRosterMember {
     jobTitle: m.jobTitle,
     fromOtherSector: m.fromOtherSector,
     situation: m.situation,
+    level: m.level,
   };
+}
+
+/** Filtro de nível do envio (C5); `null` = todos. */
+export type LevelFilter = {
+  levelIds: ReadonlySet<string>;
+  withoutLevel: boolean;
+} | null;
+
+/**
+ * C5: sem filtro (ou lista vazia e sem `withoutLevel`) = todos; senão passa quem
+ * tem `levelId` na lista, ou não tem nível e `withoutLevel`.
+ */
+export function passesLevel(
+  member: { levelId: string | null },
+  filter: LevelFilter,
+): boolean {
+  if (!filter || (filter.levelIds.size === 0 && !filter.withoutLevel))
+    return true;
+  if (member.levelId === null) return filter.withoutLevel;
+  return filter.levelIds.has(member.levelId);
+}
+
+/** Rótulo de quem não tem nível no filtro e no `targetLabel` (GC12). */
+export const NO_LEVEL_LABEL = 'Sem nível';
+
+/**
+ * Filtro de nível do pedido contra os níveis ativos (C5), já por sortOrder.
+ * `null` = algum id inexistente ou inativo (422 no chamador). `names` = nomes
+ * para o rótulo, na ordem do sortOrder e `Sem nível` por último (GC12).
+ */
+export function pickLevels(
+  active: readonly { id: string; name: string }[],
+  wanted: { levelIds?: readonly string[]; withoutLevel?: boolean },
+): { filter: LevelFilter; names: string[] } | null {
+  const levelIds = new Set(wanted.levelIds);
+  const withoutLevel = wanted.withoutLevel === true;
+  if (levelIds.size === 0 && !withoutLevel) return { filter: null, names: [] };
+  const picked = active.filter((l) => levelIds.has(l.id));
+  if (picked.length !== levelIds.size) return null;
+  const names = picked.map((l) => l.name);
+  if (withoutLevel) names.push(NO_LEVEL_LABEL);
+  return { filter: { levelIds, withoutLevel }, names };
+}
+
+/** GC12: até dois nomes por `, `; com mais, os dois primeiros + ` +N`. */
+function compactNames(names: readonly string[]): string {
+  const head = names.slice(0, 2).join(', ');
+  return names.length > 2 ? `${head} +${names.length - 2}` : head;
+}
+
+/**
+ * GC12: `<setores> · <níveis>? · <turno | todos os turnos> · dd/MM · seleção de N?`.
+ * Nomes já ordenados pelo chamador: setores por nome (pt-BR), níveis pelo
+ * sortOrder com `Sem nível` no fim; sem filtro de nível a parte some. Um setor
+ * sem nível = rótulo de antes: "Produção · Noite · 21/10 · seleção de 2".
+ */
+export function sectorTargetLabel(input: {
+  sectorNames: readonly string[];
+  levelNames: readonly string[];
+  shiftName: string | null;
+  date: string;
+  selected: number | null;
+}): string {
+  const parts = [compactNames(input.sectorNames)];
+  if (input.levelNames.length > 0) parts.push(compactNames(input.levelNames));
+  parts.push(input.shiftName ?? 'todos os turnos', formatDayMonth(input.date));
+  if (input.selected !== null) parts.push(`seleção de ${input.selected}`);
+  return parts.join(' · ');
 }
 
 /** Início de cada turno na data, como instante ISO (GC5). */

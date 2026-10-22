@@ -15,6 +15,7 @@ function actor(role: TeamActor['role'], managed: string[] = []): TeamActor {
     id: `actor-${role}`,
     role,
     isActive: true,
+    hasAccess: true,
     managedSectorIds: managed,
   };
 }

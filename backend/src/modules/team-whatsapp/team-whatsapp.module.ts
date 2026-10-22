@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { LevelsModule } from '../levels/levels.module';
 import { StaffScheduleModule } from '../staff-schedule/staff-schedule.module';
 import { TeamWhatsappController } from './team-whatsapp.controller';
 import { TeamWhatsappRepository } from './team-whatsapp.repository';
@@ -10,10 +11,11 @@ import { TeamWhatsappService } from './team-whatsapp.service';
  * @Global. O módulo expõe as rotas HTTP; o processor da fila team-whatsapp.send
  * fica no WorkerModule e acessa o banco pelo PrismaService. O StaffScheduleModule
  * exporta o repositório da escala, que o envio por data lê (T7b). Agendados
- * (lista e cancelamento) ficam no TeamWhatsappScheduleService (T8).
+ * (lista e cancelamento) ficam no TeamWhatsappScheduleService (T8). O
+ * LevelsModule exporta `listActive` para `targets.levels` (C4).
  */
 @Module({
-  imports: [StaffScheduleModule],
+  imports: [StaffScheduleModule, LevelsModule],
   controllers: [TeamWhatsappController],
   providers: [
     TeamWhatsappService,

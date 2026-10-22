@@ -10,7 +10,19 @@ import {
   ForbiddenError,
   NotFoundError,
 } from '../../shared/errors/domain.error';
-import type { UserListResult, UserSummary } from './users.repository';
+import {
+  accessSectorError,
+  alreadyHasAccess,
+  emailTaken,
+  invalidLevel,
+  nameRequired,
+  noAccess,
+} from './users.errors';
+import type {
+  UserListFilters,
+  UserListResult,
+  UserSummary,
+} from './users.repository';
 import { Prisma, type Role } from '@prisma/client';
 
 export type UserListResponse = UserListResult & {
@@ -28,6 +40,17 @@ type UserPatch = {
   shiftId?: string | null;
   /** Função. Ausente = mantém; null ou vazio = limpa. Não é mudança de identidade. */
   jobTitle?: string | null;
+  /** Id de StaffLevel. Ausente = mantém; null = limpa. Não é mudança de identidade. */
+  levelId?: string | null;
+};
+/** Pessoa sem acesso (D1/D12): POST /users com hasAccess false e a T6. */
+type PersonWithoutAccessInput = {
+  name: string;
+  phone: string;
+  sectorId: string | null;
+  levelId?: string | null;
+  jobTitle?: string | null;
+  shiftId?: string | null;
 };
 type CreateUserInput = {
   email: string;
@@ -39,8 +62,23 @@ type CreateUserInput = {
   shiftId?: string | null;
   /** Função; ausente, null ou vazio = sem função. */
   jobTitle?: string | null;
+  /** Id de StaffLevel; ausente ou null = sem nível. */
+  levelId?: string | null;
 };
 type PhoneLink = { phoneE164: string; contactId: string };
+
+// P2002 no e-mail ao dar acesso = outro cadastro ficou com o e-mail entre a
+// checagem e o update → o mesmo 409 do convite.
+function rethrowEmailConflict(error: unknown): never {
+  if (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === 'P2002' &&
+    /email/.test(JSON.stringify(error.meta?.target ?? null))
+  ) {
+    throw emailTaken();
+  }
+  throw error;
+}
 
 // P2002 em phoneE164/contactId = dois cadastros do mesmo número em corrida (o
 // assertAvailable de cada um passou antes do outro gravar) → user.phone_taken.
@@ -69,6 +107,35 @@ function relationPatch(id: string | null) {
   return id ? { connect: { id } } : { disconnect: true };
 }
 
+// Relação opcional no cadastro: id = liga; ausente/null = campo omitido.
+function connectIfGiven(id: string | null | undefined) {
+  return id ? { connect: { id } } : undefined;
+}
+
+// D1: sem acesso grava SEMPRE VIEWER, sem e-mail/senha e sem troca de senha
+// pendente, qualquer que seja o input; a credencial só nasce em grantAccess.
+function personWithoutAccessData(
+  actorId: string,
+  input: PersonWithoutAccessInput,
+  phone: PhoneLink,
+): Prisma.UserCreateInput {
+  return {
+    name: input.name.trim(),
+    hasAccess: false,
+    role: 'VIEWER',
+    email: null,
+    password: null,
+    mustChangePassword: false,
+    phoneE164: phone.phoneE164,
+    contact: { connect: { id: phone.contactId } },
+    sector: connectIfGiven(input.sectorId),
+    level: connectIfGiven(input.levelId),
+    workShift: connectIfGiven(input.shiftId),
+    jobTitle: normalizeJobTitle(input.jobTitle),
+    createdBy: { connect: { id: actorId } },
+  };
+}
+
 // Defense-in-depth: strip any unexpected fields that the repo might leak (e.g.
 // if a future change accidentally swaps the allowlisted select back to a full
 // include). The repo already returns UserSummary; this enforces the contract.
@@ -76,6 +143,7 @@ function toUserSummary(u: UserSummary): UserSummary {
   return {
     id: u.id,
     email: u.email,
+    hasAccess: u.hasAccess,
     name: u.name,
     role: u.role,
     sectorId: u.sectorId,
@@ -87,11 +155,36 @@ function toUserSummary(u: UserSummary): UserSummary {
     phoneE164: u.phoneE164,
     shiftId: u.shiftId,
     jobTitle: u.jobTitle,
+    levelId: u.levelId,
+    level: u.level,
     createdAt: u.createdAt,
     updatedAt: u.updatedAt,
     createdById: u.createdById,
     createdBy: u.createdBy,
   };
+}
+
+// Regra de hoje para quem tem acesso: papel final ≠ ADMIN, ativo, sem setor.
+function lacksRequiredSector(user: UserSummary, input: UserPatch): boolean {
+  const role = input.role ?? user.role;
+  const sectorId =
+    input.sectorId === undefined ? user.sectorId : input.sectorId;
+  return role !== 'ADMIN' && input.isActive !== false && !sectorId;
+}
+
+// Pessoa sem acesso (spec §1) não pode ficar sem nome: é o que a identifica,
+// já que não tem e-mail. Quem tem acesso segue aceitando vazio, como hoje.
+function assertNameKept(user: UserSummary, name: string | undefined): void {
+  if (!user.hasAccess && name?.trim() === '') throw nameRequired();
+}
+
+// Nome do contato: o novo do PATCH, senão o atual, senão o e-mail; pessoa sem
+// acesso (C2) não tem e-mail, mas sempre tem nome.
+function contactNameFor(
+  user: UserSummary,
+  newName: string | undefined,
+): string {
+  return newName?.trim() || user.name?.trim() || (user.email ?? '');
 }
 
 @Injectable()
@@ -103,8 +196,12 @@ export class UsersService {
     private readonly phones: UserPhoneService,
   ) {}
 
-  async listUsers(page: number, pageSize: number): Promise<UserListResponse> {
-    const { data, total } = await this.repo.findMany(page, pageSize);
+  async listUsers(
+    page: number,
+    pageSize: number,
+    filters: UserListFilters = {},
+  ): Promise<UserListResponse> {
+    const { data, total } = await this.repo.findMany(page, pageSize, filters);
     return { data: data.map(toUserSummary), total, page, pageSize };
   }
 
@@ -116,6 +213,7 @@ export class UsersService {
     const existing = await this.repo.findByEmail(input.email);
     await this.assertCreatable(input, existing);
     await this.assertAssignableShift(input.shiftId);
+    await this.assertAssignableLevel(input.levelId, null);
     await this.phones.assertAvailable(phoneE164);
     const temporaryPassword = UsersRepository.generateTempPassword();
     const passwordHash = await argon2.hash(temporaryPassword, {
@@ -153,8 +251,7 @@ export class UsersService {
     input: CreateUserInput,
     existing: Awaited<ReturnType<UsersRepository['findByEmail']>>,
   ): Promise<void> {
-    if (existing)
-      throw new ConflictError('Email already taken', 'user.email_taken');
+    if (existing) throw emailTaken();
     if (input.role === 'ADMIN') return;
     if (
       !input.sectorId ||
@@ -189,9 +286,91 @@ export class UsersService {
         ...(input.shiftId
           ? { workShift: { connect: { id: input.shiftId } } }
           : {}),
+        level: connectIfGiven(input.levelId),
         createdBy: { connect: { id: createdById } },
       })
       .catch(rethrowPhoneConflict);
+  }
+
+  /**
+   * Pessoa sem acesso (D1): sem credencial e sem senha temporária. O telefone
+   * passa pelo mesmo caminho do convite (`UserPhoneService`): número de outra
+   * pessoa é recusado e o de um Contato existente liga a pessoa a ele.
+   */
+  async createPersonWithoutAccess(
+    actorId: string,
+    input: PersonWithoutAccessInput,
+  ): Promise<UserSummary> {
+    const phoneE164 = this.phones.normalize(input.phone);
+    await this.assertActiveSectorIfGiven(input.sectorId);
+    await this.assertAssignableShift(input.shiftId);
+    await this.assertAssignableLevel(input.levelId, null);
+    await this.phones.assertAvailable(phoneE164);
+    const contactId = await this.phones.resolveContactId(
+      phoneE164,
+      input.name.trim(),
+    );
+    const user = await this.repo
+      .createSummary(
+        personWithoutAccessData(actorId, input, { phoneE164, contactId }),
+      )
+      .catch(rethrowPhoneConflict);
+    // GC8: sem nome, e-mail ou telefone na auditoria.
+    await this.audit.log('user.person_created', 'User', user.id, {
+      actorId,
+      sectorId: user.sectorId,
+      hasAccess: false,
+    });
+    return toUserSummary(user);
+  }
+
+  /**
+   * Dá acesso a uma pessoa sem acesso (D1): e-mail, papel, hash da senha
+   * temporária, `mustChangePassword` e `hasAccess` num único update. A senha
+   * temporária só volta nesta resposta; nunca vai para log ou auditoria.
+   */
+  async grantAccess(
+    actorId: string,
+    userId: string,
+    input: { email: string; role: Role },
+  ): Promise<{ user: UserSummary; temporaryPassword: string }> {
+    const user = await this.repo.findById(userId);
+    if (!user) throw new NotFoundError('User', userId);
+    if (user.hasAccess) throw alreadyHasAccess();
+    const email = input.email.trim().toLowerCase();
+    if (await this.repo.findByEmail(email)) throw emailTaken();
+    await this.assertSectorForAccess(input.role, user.sectorId);
+    const temporaryPassword = UsersRepository.generateTempPassword();
+    const password = await argon2.hash(temporaryPassword, {
+      type: argon2.argon2id,
+    });
+    const granted = await this.repo
+      .grantAccess(userId, {
+        email,
+        role: input.role,
+        password,
+        mustChangePassword: true,
+        hasAccess: true,
+      })
+      .catch(rethrowEmailConflict);
+    // Null = outro pedido deu acesso entre a leitura e o update.
+    if (!granted) throw alreadyHasAccess();
+    await this.audit.log('user.access_granted', 'User', userId, {
+      actorId,
+      role: input.role,
+    });
+    return { user: toUserSummary(granted), temporaryPassword };
+  }
+
+  /** Papel ≠ ADMIN exige setor ativo (regra do convite), com o 422 de C2. */
+  private async assertSectorForAccess(
+    role: Role,
+    sectorId: string | null,
+  ): Promise<void> {
+    if (role === 'ADMIN') return;
+    if (!sectorId) throw accessSectorError('user.sector_required');
+    if (!(await this.repo.findActiveSector(sectorId)))
+      throw accessSectorError('user.sector_invalid');
   }
 
   async updateUser(
@@ -203,6 +382,7 @@ export class UsersService {
     if (!user) throw new NotFoundError('User', id);
 
     this.assertSelfChangeAllowed(id, actorId, input);
+    assertNameKept(user, input.name);
     await this.assertValidAssignment(user, input);
     await this.assertAssignableShift(input.shiftId);
     const changesIdentity = this.changesIdentity(input);
@@ -263,19 +443,41 @@ export class UsersService {
     user: UserSummary,
     input: UserPatch,
   ): Promise<void> {
-    if (input.sectorId && !(await this.repo.findActiveSector(input.sectorId)))
-      throw new ConflictError(
-        'Sector is inactive or missing',
-        'user.sector_invalid',
-      );
-    const role = input.role ?? user.role;
-    const sectorId =
-      input.sectorId === undefined ? user.sectorId : input.sectorId;
-    if (role !== 'ADMIN' && input.isActive !== false && !sectorId)
+    // Sem acesso não tem papel a mudar: o VIEWER gravado é defesa (D1).
+    if (input.role !== undefined && !user.hasAccess) throw noAccess();
+    await this.assertActiveSectorIfGiven(input.sectorId);
+    // "Não-ADMIN exige setor" só vale para quem tem acesso (C2).
+    if (user.hasAccess && lacksRequiredSector(user, input))
       throw new ConflictError(
         'An active sector is required',
         'user.sector_required',
       );
+    await this.assertAssignableLevel(input.levelId, user.levelId);
+  }
+
+  /** Setor informado (string) precisa existir e estar ativo; ausente/null passa. */
+  private async assertActiveSectorIfGiven(
+    sectorId: string | null | undefined,
+  ): Promise<void> {
+    if (sectorId && !(await this.repo.findActiveSector(sectorId)))
+      throw new ConflictError(
+        'Sector is inactive or missing',
+        'user.sector_invalid',
+      );
+  }
+
+  /**
+   * Nível informado precisa existir e estar ativo; o nível inativo que a
+   * pessoa já tem é aceito (manter não é atribuir). Ausente/null passa.
+   */
+  private async assertAssignableLevel(
+    levelId: string | null | undefined,
+    currentLevelId: string | null,
+  ): Promise<void> {
+    if (!levelId) return;
+    const level = await this.repo.findLevelForAssignment(levelId);
+    if (!level || (!level.isActive && level.id !== currentLevelId))
+      throw invalidLevel();
   }
 
   /** Turno informado (string) precisa existir e estar ativo; ausente/null passa. */
@@ -300,7 +502,7 @@ export class UsersService {
     changesIdentity: boolean,
   ): Prisma.UserUpdateInput {
     return {
-      ...(input.name !== undefined ? { name: input.name } : {}),
+      ...(input.name !== undefined ? { name: input.name.trim() } : {}),
       ...(input.role !== undefined ? { role: input.role } : {}),
       ...(input.sectorId !== undefined
         ? { sector: relationPatch(input.sectorId) }
@@ -311,6 +513,9 @@ export class UsersService {
         : {}),
       ...(input.jobTitle !== undefined
         ? { jobTitle: normalizeJobTitle(input.jobTitle) }
+        : {}),
+      ...(input.levelId !== undefined
+        ? { level: relationPatch(input.levelId) }
         : {}),
       ...(changesIdentity ? { sessionVersion: { increment: 1 } } : {}),
     };
@@ -335,7 +540,7 @@ export class UsersService {
     if (!sameNumber) await this.phones.assertAvailable(phoneE164, user.id);
     const contactId = await this.phones.resolveContactId(
       phoneE164,
-      newName?.trim() || user.name?.trim() || user.email,
+      contactNameFor(user, newName),
     );
     const contact = { connect: { id: contactId } };
     return sameNumber ? { contact } : { phoneE164, contact };
@@ -396,6 +601,9 @@ export class UsersService {
   ): Promise<{ temporaryPassword: string }> {
     const user = await this.repo.findById(id);
     if (!user) throw new NotFoundError('User', id);
+    // Antes de qualquer gravação: sem acesso não há senha (o CHECK
+    // User_access_consistent recusaria senha sem acesso com 500).
+    if (!user.hasAccess) throw noAccess();
 
     const temporaryPassword = UsersRepository.generateTempPassword();
     const passwordHash = await argon2.hash(temporaryPassword, {

@@ -65,9 +65,37 @@ describe('createTeamDispatchSchema — alvo setor com turno e seleção', () => 
     const parsed = createTeamDispatchSchema.parse(toSector({ shift: 'FIRST' }));
     expect(parsed.target).toEqual({
       type: 'sector',
-      sectorId: 's',
+      sectorIds: ['s'],
       date: DATE,
     });
+  });
+});
+
+describe('createTeamDispatchSchema — vários setores e nível (C5)', () => {
+  const sectors = (target: Record<string, unknown>) => ({
+    ...base,
+    target: { type: 'sector', date: DATE, ...target },
+  });
+  const ids = (n: number) => Array.from({ length: n }, (_, i) => `x${i}`);
+
+  it.each([
+    ['sectorIds vazio → falha', { sectorIds: [] }, false],
+    ['101 setores → falha', { sectorIds: ids(101) }, false],
+    ['levelIds com 51 → falha', { sectorIds: ['s'], levelIds: ids(51) }, false],
+    [
+      'sectorId e sectorIds juntos → falha',
+      { sectorId: 's', sectorIds: ['t'] },
+      false,
+    ],
+    [
+      'setores, níveis e sem nível → aceita',
+      { sectorIds: ids(100), levelIds: ids(50), withoutLevel: true },
+      true,
+    ],
+  ])('%s', (_caso, target, ok) => {
+    expect(createTeamDispatchSchema.safeParse(sectors(target)).success).toBe(
+      ok,
+    );
   });
 });
 

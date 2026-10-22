@@ -101,6 +101,43 @@ function parseFamily(serialized: string): {
   };
 }
 
+const user: AuthUser = {
+  id: 'u1',
+  email: 'a@b.c',
+  password: 'hashed',
+  name: null,
+  role: 'ADMIN',
+  sectorId: null,
+  sector: null,
+  isActive: true,
+  sessionVersion: 0,
+  mustChangePassword: false,
+  lastLoginAt: null,
+  createdById: null,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  phoneE164: null,
+  contactId: null,
+  shiftId: null,
+  levelId: null,
+  jobTitle: null,
+  hasAccess: true,
+};
+
+function makeRedisStub(): never {
+  return {
+    get: redisGet,
+    set: redisSet,
+    eval: redisEval,
+    del: redisDel,
+    sadd: redisSadd,
+    srem: redisSrem,
+    smembers: redisSmembers,
+    pttl: redisPttl,
+    expire: redisExpire,
+  } as never;
+}
+
 describe('RefreshService', () => {
   let service: RefreshService;
   let jwt: MockProxy<JwtService>;
@@ -108,26 +145,6 @@ describe('RefreshService', () => {
   let audit: MockProxy<AuditService>;
   let auditLog: Mock;
   let config: MockProxy<ConfigService<Env>>;
-
-  const user: AuthUser = {
-    id: 'u1',
-    email: 'a@b.c',
-    password: 'hashed',
-    name: null,
-    role: 'ADMIN',
-    sectorId: null,
-    sector: null,
-    isActive: true,
-    sessionVersion: 0,
-    mustChangePassword: false,
-    lastLoginAt: null,
-    createdById: null,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-    phoneE164: null,
-    contactId: null,
-    shiftId: null,
-  };
 
   beforeEach(() => {
     store.clear();
@@ -154,18 +171,7 @@ describe('RefreshService', () => {
       return undefined;
     });
 
-    const redisStub = {
-      get: redisGet,
-      set: redisSet,
-      eval: redisEval,
-      del: redisDel,
-      sadd: redisSadd,
-      srem: redisSrem,
-      smembers: redisSmembers,
-      pttl: redisPttl,
-      expire: redisExpire,
-    } as never;
-    service = new RefreshService(jwt, repo, audit, config, redisStub);
+    service = new RefreshService(jwt, repo, audit, config, makeRedisStub());
   });
 
   afterEach(() => {
@@ -453,5 +459,44 @@ describe('RefreshService', () => {
 
   it('revokeAllForUser is a no-op (no throw) when the user has no families', async () => {
     await expect(service.revokeAllForUser('nobody')).resolves.toBeUndefined();
+  });
+});
+
+// C2: sessão de quem não tem acesso cai como a de usuário inativo (401), sem
+// emitir token nem mexer na família.
+describe('RefreshService.rotate de quem não tem acesso', () => {
+  it('hasAccess false → InvalidCredentialsError sem emitir token', async () => {
+    store.clear();
+    const fid = 'fam-no-access';
+    store.set(
+      `auth:refresh-family:${fid}`,
+      JSON.stringify({
+        userId: 'u1',
+        currentTokenHash: sha256('cur'),
+        rotatedAt: Date.now(),
+      }),
+    );
+    const jwt = mockDeep<JwtService>();
+    const repo = mockDeep<AuthRepository>();
+    jwt.verifyAsync.mockResolvedValue({ sub: 'u1', fid, type: 'refresh' });
+    repo.findById.mockResolvedValue({
+      ...user,
+      hasAccess: false,
+      email: null,
+      password: null,
+    });
+    const service = new RefreshService(
+      jwt,
+      repo,
+      mockDeep<AuditService>(),
+      mockDeep<ConfigService<Env>>(),
+      makeRedisStub(),
+    );
+
+    await expect(service.rotate('cur')).rejects.toThrow(
+      InvalidCredentialsError,
+    );
+    expect((jwt.signAsync as unknown as Mock).mock.calls).toHaveLength(0);
+    expect(store.has(`auth:refresh-family:${fid}`)).toBe(true);
   });
 });

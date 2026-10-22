@@ -5,6 +5,7 @@ import {
 } from '../../schemas/contracts/team-whatsapp.schema';
 import type { ScheduleExceptionInput } from '../staff-schedule/schedule-resolver';
 import type { CreateTeamDispatchInput } from './dto/create-team-dispatch.dto';
+import { RosterQueryDto } from './dto/roster-query.dto';
 import type { TeamActor } from './team-whatsapp.policy';
 import {
   ADMIN,
@@ -35,6 +36,7 @@ const LOG_MANAGER: TeamActor = {
   id: 'g',
   role: 'OPERATOR',
   isActive: true,
+  hasAccess: true,
   managedSectorIds: [LOG],
 };
 const otherSector = (
@@ -112,7 +114,7 @@ const send = (extra: SectorExtra, actorId = ADMIN.id) =>
   h.service.dispatch(actorId, {
     channelId: 'c1',
     text: 'Oi',
-    target: { type: 'sector', sectorId: PROD, date: DATE, ...extra },
+    target: { type: 'sector', sectorIds: [PROD], date: DATE, ...extra },
   });
 const created = () => h.repo.createDispatch.mock.calls[0][0];
 const recipients = () =>
@@ -144,19 +146,49 @@ describe('targets em Manaus', () => {
         shifts: [SHIFT_FIRST, SHIFT_SECOND, NOITE],
         channels: [],
         sectors: [PRODUCAO],
+        levels: [],
       });
       expect(teamTargetsResponseSchema.parse(out)).toEqual(out);
     },
   );
 });
 
+// Vários setores (C4): TI e Operação, além de Produção e Logística.
+const TI = 's-ti';
+const OP = 's-op';
+const NAMES: Record<string, string> = {
+  [TI]: 'TI',
+  [OP]: 'Operação',
+  [PROD]: 'Produção',
+  [LOG]: 'Logística',
+};
+const COORD = { id: 'lvl-coord', name: 'Coordenador' };
+const givenNamedSectors = () => {
+  h.repo.findSector.mockImplementation((id) =>
+    Promise.resolve(sector({ id, name: NAMES[id] })),
+  );
+};
+
+describe('targets.levels (C4)', () => {
+  it('targets.levels só ativos: os de listActive, nunca a lista do cadastro', async () => {
+    h.repo.listEligibleChannels.mockResolvedValue([]);
+    h.repo.listSectors.mockResolvedValue([]);
+    h.levels.listActive.mockResolvedValue([COORD]);
+    const out = await h.service.targets(ADMIN.id);
+    expect(out.levels).toEqual([COORD]);
+    expect(h.levels.list.mock.calls).toHaveLength(0);
+    expect(teamTargetsResponseSchema.parse(out)).toEqual(out);
+  });
+});
+
 describe('roster por data', () => {
-  it('21/10: setor principal sem quem está em outro setor, mais quem vem de fora', async () => {
-    const out = await h.service.roster(ADMIN.id, {
-      sectorId: PROD,
-      date: DATE,
-    });
+  it('sectorId sozinho = sectorIds [sectorId]: setor principal sem quem está em outro setor, mais quem vem de fora', async () => {
+    const query = RosterQueryDto.schema.parse({ sectorId: PROD, date: DATE });
+    const out = await h.service.roster(ADMIN.id, query);
     expect(h.repo.loadDayPeople.mock.calls).toEqual([[PROD, DATE]]);
+    expect(out.sectors.map((s) => [s.sectorId, s.name])).toEqual([
+      [PROD, 'Produção'],
+    ]);
     const work = (shiftId: string, source: string) => ({
       kind: 'WORK',
       sectorId: PROD,
@@ -164,7 +196,7 @@ describe('roster por data', () => {
       source,
     });
     expect(
-      out.members.map((m) => [m.id, m.fromOtherSector, m.situation]),
+      out.sectors[0].members.map((m) => [m.id, m.fromOtherSector, m.situation]),
     ).toEqual([
       ['ana', false, work(SHIFT_FIRST.id, 'PROFILE')],
       ['beto', false, { kind: 'NONE' }],
@@ -186,9 +218,71 @@ describe('roster por data', () => {
   it('gestor de Logística pedindo Produção → 403', async () => {
     h.repo.findActor.mockResolvedValue(LOG_MANAGER);
     await expect(
-      h.service.roster(LOG_MANAGER.id, { sectorId: PROD, date: DATE }),
+      h.service.roster(LOG_MANAGER.id, { sectorIds: [PROD], date: DATE }),
     ).rejects.toMatchObject(FORBIDDEN);
     expect(h.repo.loadDayPeople.mock.calls).toHaveLength(0);
+  });
+});
+
+describe('roster de vários setores (C4)', () => {
+  beforeEach(givenNamedSectors);
+
+  it('roster de TI + Operação devolve sectors por nome com members[].level', async () => {
+    const bia = dayPerson({ id: 'bia', name: 'Bia', sectorId: OP });
+    const leo = dayPerson({
+      id: 'leo',
+      name: 'Léo',
+      sectorId: TI,
+      levelId: COORD.id,
+      level: COORD,
+    });
+    h.repo.loadDayPeople.mockImplementation((id) =>
+      Promise.resolve(id === TI ? [leo] : [bia]),
+    );
+    const out = await h.service.roster(ADMIN.id, {
+      sectorIds: [TI, OP],
+      date: DATE,
+    });
+    expect(
+      out.sectors.map((s) => [
+        s.sectorId,
+        s.name,
+        s.members.map((m) => [m.id, m.level]),
+      ]),
+    ).toEqual([
+      [OP, 'Operação', [['bia', null]]],
+      [TI, 'TI', [['leo', COORD]]],
+    ]);
+    expect(teamRosterResponseSchema.parse(out)).toEqual(out);
+  });
+
+  it('Produção + Logística: cada pessoa aparece em um setor só no dia', async () => {
+    const out = await h.service.roster(ADMIN.id, {
+      sectorIds: [PROD, LOG],
+      date: DATE,
+    });
+    expect(
+      out.sectors.map((s) => [s.name, s.members.map((m) => m.id)]),
+    ).toEqual([
+      ['Logística', ['davi']],
+      ['Produção', ['ana', 'beto', 'joao', 'maria', 'caio']],
+    ]);
+  });
+});
+
+describe('roster de vários setores — política (GC6)', () => {
+  beforeEach(givenNamedSectors);
+
+  it('gestor de Operação pedindo roster de Operação + TI → 403 antes de ler pessoas', async () => {
+    h.repo.findActor.mockResolvedValue({
+      ...LOG_MANAGER,
+      managedSectorIds: [OP],
+    });
+    await expect(
+      h.service.roster(LOG_MANAGER.id, { sectorIds: [OP, TI], date: DATE }),
+    ).rejects.toMatchObject(FORBIDDEN);
+    expect(h.repo.loadDayPeople.mock.calls).toHaveLength(0);
+    expect(h.repo.listActiveShifts.mock.calls).toHaveLength(0);
   });
 });
 
@@ -272,10 +366,13 @@ describe('foto e rótulo', () => {
       shiftStartTime: '22:00',
       shiftEndTime: '06:00',
     });
+    // T8b (C6): a foto leva o setor em que a pessoa entrou e o nível na hora.
     const person = (userId: string, name: string, jobTitle: string) => ({
       userId,
       name,
       jobTitle,
+      sectorName: 'Produção',
+      levelName: null,
     });
     expect(created().roster).toEqual({
       working: [

@@ -49,7 +49,7 @@ export function buildBoardRows(input: {
 }): BoardRow[] {
   const rows = input.people.map((person): BoardRow => ({
     userId: person.id,
-    name: person.name ?? person.email,
+    name: person.name ?? person.email ?? '',
     jobTitle: person.jobTitle,
     fromOtherSector: person.sectorId !== input.sectorId,
     canEdit: canEditPerson(input.actor, person),

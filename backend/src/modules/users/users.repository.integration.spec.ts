@@ -158,3 +158,92 @@ describe('UsersRepository função (real Postgres)', () => {
     });
   }, 60_000);
 });
+
+const FAKE_HASH = 'argon2id-fake';
+
+// Pessoa sem acesso como o UsersService grava (D1): o CHECK User_access_consistent aceita.
+const createPerson = (name: string, levelId?: string) =>
+  repo.createSummary({
+    name,
+    hasAccess: false,
+    role: 'VIEWER',
+    mustChangePassword: false,
+    ...(levelId ? { level: { connect: { id: levelId } } } : {}),
+  });
+
+describe('UsersRepository pessoas sem acesso e nível (real Postgres)', () => {
+  it('listagem traz quem não tem acesso com email null e level { id, name, isActive }', async () => {
+    const created = await createPerson(
+      'Sem acesso com nível',
+      'level_employee',
+    );
+    const level = { id: 'level_employee', name: 'Funcionário', isActive: true };
+    expect(created).toMatchObject({ email: null, hasAccess: false, level });
+
+    const { data } = await repo.findMany(1, 100);
+
+    expect(data.find((u) => u.id === created.id)).toMatchObject({
+      email: null,
+      hasAccess: false,
+      levelId: 'level_employee',
+      level,
+    });
+    await expect(
+      repo.findLevelForAssignment('level_employee'),
+    ).resolves.toEqual({ id: 'level_employee', isActive: true });
+    await expect(repo.findLevelForAssignment('level_nope')).resolves.toBeNull();
+  }, 60_000);
+
+  it('hasAccess=true exclui quem não tem acesso; sem o filtro lista todos', async () => {
+    await createPerson('Sem acesso para o filtro');
+    await prisma.user.create({
+      data: { email: 'with-access@test.local', password: 'x' },
+    });
+    const [all, withAccess] = await Promise.all([
+      prisma.user.count(),
+      prisma.user.count({ where: { hasAccess: true } }),
+    ]);
+
+    const filtered = await repo.findMany(1, 100, { hasAccess: true });
+    const unfiltered = await repo.findMany(1, 100);
+
+    expect(filtered.data.every((u) => u.hasAccess)).toBe(true);
+    expect(filtered.total).toBe(withAccess);
+    expect(unfiltered.total).toBe(all);
+    expect(unfiltered.data.some((u) => !u.hasAccess)).toBe(true);
+  }, 60_000);
+});
+
+describe('UsersRepository dar acesso (real Postgres)', () => {
+  const credential = (email: string) => ({
+    email,
+    role: 'OPERATOR' as const,
+    password: FAKE_HASH,
+    mustChangePassword: true as const,
+    hasAccess: true as const,
+  });
+
+  it('um único update grava a credencial; corrida dá acesso uma vez; e-mail de outro → P2002', async () => {
+    const person = await createPerson('Vai ter acesso');
+
+    const results = await Promise.all([
+      repo.grantAccess(person.id, credential('granted@test.local')),
+      repo.grantAccess(person.id, credential('granted-2@test.local')),
+    ]);
+
+    expect(results.filter((r) => r === null)).toHaveLength(1);
+    const row = await prisma.user.findUniqueOrThrow({
+      where: { id: person.id },
+    });
+    expect(row).toMatchObject({
+      hasAccess: true,
+      role: 'OPERATOR',
+      password: FAKE_HASH,
+      mustChangePassword: true,
+    });
+    const other = await createPerson('Outra pessoa');
+    await expect(
+      repo.grantAccess(other.id, credential(row.email ?? '')),
+    ).rejects.toMatchObject({ code: 'P2002' });
+  }, 60_000);
+});

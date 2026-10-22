@@ -15,6 +15,7 @@ export async function findTeamActor(
       id: true,
       role: true,
       isActive: true,
+      hasAccess: true,
       managedSectors: { where: { isActive: true }, select: { id: true } },
     },
   });

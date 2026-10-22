@@ -14,7 +14,13 @@ function actor(
   role: TeamActor['role'],
   managedSectorIds: string[] = [],
 ): TeamActor {
-  return { id: `actor-${role}`, role, isActive: true, managedSectorIds };
+  return {
+    id: `actor-${role}`,
+    role,
+    isActive: true,
+    hasAccess: true,
+    managedSectorIds,
+  };
 }
 
 const ADMIN = actor('ADMIN');

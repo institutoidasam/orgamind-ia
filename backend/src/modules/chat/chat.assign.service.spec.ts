@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mockDeep, type MockProxy } from 'vitest-mock-extended';
+import {
+  mockDeep,
+  type DeepMockProxy,
+  type MockProxy,
+} from 'vitest-mock-extended';
 import { ChatService } from './chat.service';
 import { ChatRepository } from './chat.repository';
 import { ChatEventsService } from './chat-events.service';
@@ -12,7 +16,7 @@ describe('ChatService assign/list governance', () => {
   let repo: MockProxy<ChatRepository>;
   let events: MockProxy<ChatEventsService>;
   let wa: MockProxy<WhatsappProvidersService>;
-  let prisma: MockProxy<PrismaService>;
+  let prisma: DeepMockProxy<PrismaService>;
   let audit: MockProxy<AuditService>;
   let svc: ChatService;
 
@@ -52,7 +56,10 @@ describe('ChatService assign/list governance', () => {
     });
 
     it('validates the target user exists, updates, audits, and publishes', async () => {
-      (prisma.user.findUnique as ReturnType<typeof mockDeep>).mockResolvedValue({ id: 'u9' } as never);
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'u9',
+        hasAccess: true,
+      } as never);
       await svc.assignConversation('c1', 'u9', 'actor-1');
       expect(prisma.user.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'u9' } }));
       expect(repo.assignConversation).toHaveBeenCalledWith('c1', 'u9');
@@ -80,9 +87,42 @@ describe('ChatService assign/list governance', () => {
     });
 
     it('reassigns from one user to another', async () => {
-      (prisma.user.findUnique as ReturnType<typeof mockDeep>).mockResolvedValue({ id: 'u2' } as never);
+      prisma.user.findUnique.mockResolvedValue({
+        id: 'u2',
+        hasAccess: true,
+      } as never);
       await svc.assignConversation('c1', 'u2', 'actor-1');
       expect(repo.assignConversation).toHaveBeenCalledWith('c1', 'u2');
     });
+  });
+});
+
+// GC5: pessoa sem acesso não é atribuível; mesmo erro de usuário inexistente.
+describe('ChatService.assignConversation — pessoa sem acesso', () => {
+  it('rejects a person without access like a missing user, without writing or auditing', async () => {
+    const repo = mockDeep<ChatRepository>();
+    const prisma = mockDeep<PrismaService>();
+    const audit = mockDeep<AuditService>();
+    const svc = new ChatService(
+      repo,
+      mockDeep<ChatEventsService>(),
+      mockDeep<WhatsappProvidersService>(),
+      prisma,
+      audit,
+    );
+    repo.findConversation.mockResolvedValue({
+      id: 'c1',
+      instanceId: 'i1',
+    } as never);
+    prisma.user.findUnique.mockResolvedValue({
+      id: 'u9',
+      hasAccess: false,
+    } as never);
+    await expect(
+      svc.assignConversation('c1', 'u9', 'actor-1'),
+    ).rejects.toBeInstanceOf(NotFoundError);
+    expect(repo.assignConversation.mock.calls).toEqual([]);
+    expect(repo.setBotPaused.mock.calls).toEqual([]);
+    expect(audit.log.mock.calls).toEqual([]);
   });
 });

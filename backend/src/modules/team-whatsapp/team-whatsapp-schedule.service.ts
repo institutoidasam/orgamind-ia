@@ -37,8 +37,8 @@ const DUE_BATCH = 50;
  * Envios agendados para o início do turno (C9): lista, cancelamento e disparo.
  * O agendamento nasce no POST de envio (`TeamWhatsappService.dispatch`); o
  * disparo roda no tick do worker (T9, `TeamWhatsappSchedulerProcessor`). Cancela
- * o ADMIN, ou o gestor que pode enviar para o setor do envio (`canSendToSector`),
- * e só enquanto ainda está SCHEDULED.
+ * o ADMIN, ou o gestor que pode enviar para TODOS os setores do envio
+ * (`canSendToSector`, C7), e só enquanto ainda está SCHEDULED.
  */
 @Injectable()
 export class TeamWhatsappScheduleService {
@@ -117,7 +117,7 @@ export class TeamWhatsappScheduleService {
     return { id: dispatch.id, state: 'CANCELLED' };
   }
 
-  /** ADMIN vê todos os agendados; gestor, os dos setores que gerencia. */
+  /** ADMIN vê todos os agendados; gestor, os que têm todos os setores entre os seus (C7). */
   async listScheduled(actorId: string): Promise<TeamScheduledListResponse> {
     const actor = await this.requireSender(actorId);
     const rows = await this.repo.listScheduled(
@@ -135,7 +135,9 @@ export class TeamWhatsappScheduleService {
   /**
    * Só envio a setor é agendável; alvo pessoa não tem setor a conferir → 403.
    * O ADMIN cancela mesmo com o setor desativado depois do agendamento (senão
-   * ninguém cancelaria); o gestor depende de `canSendToSector` (setor ativo).
+   * ninguém cancelaria); o gestor depende de `canSendToSector` (setor ativo) em
+   * CADA setor do envio (C7). Envio a setor sem linha de setor → 403 (o backfill
+   * dá uma linha a todo envio a setor; "todos" de uma lista vazia não autoriza).
    */
   private async requireSectorOf(
     actor: TeamActor,
@@ -143,8 +145,11 @@ export class TeamWhatsappScheduleService {
   ): Promise<void> {
     if (dispatch.targetType !== 'SECTOR') throw teamForbidden();
     if (actor.role === 'ADMIN') return;
-    const sector = await this.repo.findSector(dispatch.targetId);
-    if (!sector || !canSendToSector(actor, sector)) throw teamForbidden();
+    if (dispatch.sectorIds.length === 0) throw teamForbidden();
+    for (const sectorId of dispatch.sectorIds) {
+      const sector = await this.repo.findSector(sectorId);
+      if (!sector || !canSendToSector(actor, sector)) throw teamForbidden();
+    }
   }
 }
 

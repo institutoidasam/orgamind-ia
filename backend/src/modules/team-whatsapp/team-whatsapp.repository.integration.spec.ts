@@ -8,10 +8,15 @@ import {
 import {
   TeamWhatsappRepository,
   type NewTeamDispatch,
-  type NewTeamRecipient,
+  type NewTeamDispatchRecipient,
 } from './team-whatsapp.repository';
 import { StaffScheduleRepository } from '../staff-schedule/staff-schedule.repository';
-import { NO_SHIFT, NO_SNAPSHOT, PHONE } from './team-whatsapp.test-fixtures';
+import {
+  NO_SECTOR,
+  NO_SHIFT,
+  NO_SNAPSHOT,
+  PHONE,
+} from './team-whatsapp.test-fixtures';
 
 // Um container + `migrate deploy` para o arquivo inteiro (inclui a migração
 // 20261016100000_team_whatsapp: FKs SetNull/Cascade de verdade).
@@ -63,6 +68,7 @@ describe('TeamWhatsappRepository — ator e alvo (Postgres real)', () => {
       id: boss.id,
       role: 'OPERATOR',
       isActive: true,
+      hasAccess: true,
       managedSectorIds: [s1.id],
     });
     await expect(repo.findActor('missing')).resolves.toBeNull();
@@ -106,6 +112,7 @@ async function criarEnvioComDoisDestinatarios() {
     ...NO_SNAPSHOT,
     channelId: channel.id,
     text: 'oi',
+    sectors: [],
     recipients: [
       {
         userId: author.id,
@@ -113,6 +120,7 @@ async function criarEnvioComDoisDestinatarios() {
         ...NO_SHIFT,
         status: 'QUEUED',
         skipReason: null,
+        ...NO_SECTOR,
       },
       {
         userId: author.id,
@@ -120,6 +128,7 @@ async function criarEnvioComDoisDestinatarios() {
         ...NO_SHIFT,
         status: 'SKIPPED',
         skipReason: 'NO_PHONE',
+        ...NO_SECTOR,
       },
     ],
   });
@@ -166,7 +175,10 @@ async function criarSetorComTurnos() {
   return { prod, joao, ze, channel };
 }
 
-const snapshotOf = (joaoId: string, zeId: string): NewTeamRecipient[] => [
+const snapshotOf = (
+  joaoId: string,
+  zeId: string,
+): NewTeamDispatchRecipient[] => [
   {
     userId: joaoId,
     userName: 'João',
@@ -174,6 +186,7 @@ const snapshotOf = (joaoId: string, zeId: string): NewTeamRecipient[] => [
     shiftName: '2º turno',
     status: 'QUEUED',
     skipReason: null,
+    ...NO_SECTOR,
   },
   {
     userId: zeId,
@@ -181,6 +194,7 @@ const snapshotOf = (joaoId: string, zeId: string): NewTeamRecipient[] => [
     ...NO_SHIFT,
     status: 'SKIPPED',
     skipReason: 'NO_PHONE',
+    ...NO_SECTOR,
   },
 ];
 
@@ -190,6 +204,23 @@ const SECOND = {
   shiftStartTime: '14:00',
   shiftEndTime: '22:00',
 };
+
+function linhasEsperadas(
+  dispatchId: string,
+  recipients: NewTeamDispatchRecipient[],
+) {
+  return recipients.map((r) => ({
+    dispatchId,
+    userId: r.userId,
+    userName: r.userName,
+    shiftName: r.shiftName,
+    status: r.status,
+    errorCode: null,
+    skipReason: r.skipReason,
+    sectorName: r.sectorName,
+    levelName: r.levelName,
+  }));
+}
 
 describe('TeamWhatsappRepository — turno (Postgres real)', () => {
   it('createDispatch grava snapshot do turno e listRecipients devolve shiftName', async () => {
@@ -217,6 +248,7 @@ describe('TeamWhatsappRepository — turno (Postgres real)', () => {
       ...SECOND,
       channelId: channel.id,
       text: 'oi',
+      sectors: [{ sectorId: prod.id, sectorName: 'Produção' }],
       recipients,
     });
     const [row] = await repo.listDispatches(joao.id);
@@ -225,17 +257,7 @@ describe('TeamWhatsappRepository — turno (Postgres real)', () => {
     const rows = await repo.listRecipients([created.id]);
     expect(rows).toHaveLength(2);
     expect(rows).toEqual(
-      expect.arrayContaining(
-        recipients.map((r) => ({
-          dispatchId: created.id,
-          userId: r.userId,
-          userName: r.userName,
-          shiftName: r.shiftName,
-          status: r.status,
-          errorCode: null,
-          skipReason: r.skipReason,
-        })),
-      ),
+      expect.arrayContaining(linhasEsperadas(created.id, recipients)),
     );
   }, 60_000);
 });
@@ -284,12 +306,18 @@ async function criarSetorComVisitantes() {
       sectorId: string;
       isActive?: boolean;
       jobTitle?: string;
+      levelId?: string;
     },
   ) => prisma.user.create({ data: { email, password: 'x', ...data } });
+  const coord = await prisma.staffLevel.create({
+    data: { name: 'Coordenador (escala do dia)', sortOrder: 1 },
+    select: { id: true, name: true },
+  });
   const ana = await user('ana.dia@test.local', {
     name: 'Ana',
     sectorId: mnt.id,
     jobTitle: 'Técnica',
+    levelId: coord.id,
   });
   await user('ina.dia@test.local', {
     name: 'Inativa',
@@ -306,16 +334,19 @@ async function criarSetorComVisitantes() {
     sectorId: log.id,
     isActive: false,
   });
-  return { mnt, log, ana, caio, ivo };
+  return { mnt, log, ana, caio, ivo, coord };
 }
 
 describe('TeamWhatsappRepository — escala do dia (Postgres real)', () => {
   it('findMembersForDay traz os ativos do setor e os visitantes pedidos, sem inativos', async () => {
-    const { mnt, log, caio, ivo } = await criarSetorComVisitantes();
+    const { mnt, log, caio, ivo, coord } = await criarSetorComVisitantes();
     const found = await repo.findMembersForDay(mnt.id, [caio.id, ivo.id]);
-    expect(found.map((m) => [m.name, m.jobTitle, m.sectorId])).toEqual([
-      ['Ana', 'Técnica', mnt.id],
-      ['Caio', null, log.id],
+    // T8b: o nível vem junto (filtro do envio e `levelName` gravado, C5/C6).
+    expect(
+      found.map((m) => [m.name, m.jobTitle, m.sectorId, m.levelId, m.level]),
+    ).toEqual([
+      ['Ana', 'Técnica', mnt.id, coord.id, coord],
+      ['Caio', null, log.id, null, null],
     ]);
     // loadDayPeople acha o visitante pela exceção OTHER_SECTOR da data e a carrega.
     const day = new Date('2026-10-21T00:00:00.000Z');
@@ -331,10 +362,15 @@ describe('TeamWhatsappRepository — escala do dia (Postgres real)', () => {
     });
     const people = await repo.loadDayPeople(mnt.id, '2026-10-21');
     expect(
-      people.map((p) => [p.name, p.cycle, p.exceptions.map((e) => e.kind)]),
+      people.map((p) => [
+        p.name,
+        p.level,
+        p.cycle,
+        p.exceptions.map((e) => e.kind),
+      ]),
     ).toEqual([
-      ['Ana', null, []],
-      ['Caio', null, ['OTHER_SECTOR']],
+      ['Ana', coord, null, []],
+      ['Caio', null, null, ['OTHER_SECTOR']],
     ]);
   }, 60_000);
 });
@@ -381,6 +417,7 @@ async function criarEnvioDaEscala(
     ...SECOND,
     channelId: channel.id,
     text: 'oi',
+    sectors: [{ sectorId: 'setor', sectorName: 'Produção' }],
     recipients: [],
     ...roster,
   });
@@ -397,6 +434,9 @@ const ROSTER = {
       jobTitle: 'Operadora',
       shiftName: '2º turno',
       reason: null,
+      // T8b (C6): setor em que entrou e nível na hora ficam na foto.
+      sectorName: 'Produção',
+      levelName: 'Coordenador',
     },
     {
       userId: null,
@@ -454,12 +494,15 @@ async function agendar(code: string, scheduledFor: string) {
   const channel = await prisma.channel.create({
     data: { name: `Canal ${code}`, provider: 'GOZAP' },
   });
-  const recipient = (userName: string): NewTeamRecipient => ({
+  const recipient = (userName: string): NewTeamDispatchRecipient => ({
     userId: author.id,
     userName,
     ...NO_SHIFT,
     status: 'SCHEDULED',
     skipReason: null,
+    sectorId: sector.id,
+    sectorName: code,
+    levelName: null,
   });
   const created = await repo.createDispatch({
     authorId: author.id,
@@ -475,6 +518,7 @@ async function agendar(code: string, scheduledFor: string) {
     rosterDate: '2026-10-21',
     state: 'SCHEDULED',
     scheduledFor: new Date(scheduledFor),
+    sectors: [{ sectorId: sector.id, sectorName: code }],
     recipients: [
       recipient('Ana'),
       { ...recipient('Bia'), status: 'SKIPPED', skipReason: 'NO_PHONE' },
@@ -506,6 +550,7 @@ describe('TeamWhatsappRepository — lista de agendados (Postgres real)', () => 
       targetType: 'SECTOR',
       targetId: late.sectorId,
       state: 'SCHEDULED',
+      sectorIds: [late.sectorId],
     });
   });
 });

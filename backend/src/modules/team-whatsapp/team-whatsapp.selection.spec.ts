@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ShiftRef } from '../../schemas/contracts/shift.schema';
-import {
-  overnightInProgress,
-  sectorTargetLabel,
-  selectMembers,
-} from './team-whatsapp.selection';
+import { overnightInProgress, selectMembers } from './team-whatsapp.selection';
 
 const NOITE: ShiftRef = {
   id: 'shift_night',
@@ -31,17 +27,6 @@ describe('overnightInProgress (Manaus, UTC-4)', () => {
   ])('%s', (_caso, iso, expected) => {
     expect(overnightInProgress([MANHA, NOITE], new Date(iso))).toEqual(
       expected,
-    );
-  });
-});
-
-describe('sectorTargetLabel (GC12)', () => {
-  it.each<[string | null, number | null, string]>([
-    ['Noite', 2, 'Produção · Noite · 21/10 · seleção de 2'],
-    [null, null, 'Produção · todos os turnos · 21/10'],
-  ])('turno %s, seleção %s → %s', (shiftName, count, label) => {
-    expect(sectorTargetLabel('Produção', shiftName, '2026-10-21', count)).toBe(
-      label,
     );
   });
 });

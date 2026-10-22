@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import argon2 from 'argon2';
-import { AuthRepository } from './auth.repository';
+import { AuthRepository, type AuthUser } from './auth.repository';
 import { RefreshService } from './refresh.service';
 import { InvalidCredentialsError } from './errors/auth.errors';
 import { AuditService } from '../../shared/audit/audit.service';
@@ -40,7 +40,7 @@ export type CurrentAuthUser = {
 // verify the supplied password against this dummy so both paths spend ~one
 // argon2 verify. The plaintext behind it is irrelevant — it never matches a real
 // credential and the result is discarded.
-const DUMMY_PASSWORD_HASH =
+export const DUMMY_PASSWORD_HASH =
   '$argon2id$v=19$m=65536,t=3,p=4$UM0ORSFAAq1MdFhk6WmsyQ$Q5rCVyCRPpcULlRdNgJP5mWa8Q1MExzawzUqVBMDXnM';
 
 @Injectable()
@@ -55,10 +55,14 @@ export class AuthService {
     const user = await this.repo.findByEmail(input.email);
     if (!user) return this.rejectUnknownLogin(input);
     await this.assertLoginAllowed(user, input);
+    // Quem passou tem acesso e, pelo CHECK `User_access_consistent`, e-mail; a
+    // guarda só estreita o tipo (sem `!`).
+    const email = user.email;
+    if (email === null) throw new InvalidCredentialsError();
 
     const { accessToken, refreshToken } = await this.refresh.issueNew(
       user.id,
-      user.email,
+      email,
       user.role,
       user.sessionVersion,
     );
@@ -66,7 +70,7 @@ export class AuthService {
     await this.repo.updateLastLoginAt(user.id);
     await this.audit.log('auth.login_success', 'User', user.id);
 
-    return this.loginResult(user, accessToken, refreshToken);
+    return this.loginResult({ ...user, email }, accessToken, refreshToken);
   }
 
   private async rejectUnknownLogin(input: LoginInput): Promise<never> {
@@ -82,6 +86,16 @@ export class AuthService {
     user: NonNullable<Awaited<ReturnType<AuthRepository['findByEmail']>>>,
     input: LoginInput,
   ): Promise<void> {
+    // D2: sem acesso (ou sem senha) recusa antes do verify real, que quebraria
+    // com NULL; o hash fictício iguala o tempo ao do e-mail inexistente. A
+    // auditoria nova não grava e-mail (GC8).
+    if (!user.hasAccess || user.password === null) {
+      await argon2.verify(DUMMY_PASSWORD_HASH, input.password);
+      await this.audit.log('auth.login_failed', 'User', user.id, {
+        reason: 'no_access',
+      });
+      throw new InvalidCredentialsError();
+    }
     const ok = await argon2.verify(user.password, input.password);
     if (ok && user.isActive !== false) return;
     await this.audit.log('auth.login_failed', 'User', user.id, {
@@ -92,7 +106,7 @@ export class AuthService {
   }
 
   private loginResult(
-    user: NonNullable<Awaited<ReturnType<AuthRepository['findByEmail']>>>,
+    user: AuthUser & { email: string },
     accessToken: string,
     refreshToken: string,
   ): LoginResult {
@@ -128,7 +142,11 @@ export class AuthService {
       throw new NotFoundError('User', userId);
     }
 
-    const ok = await argon2.verify(user.password, input.currentPassword);
+    // Sem acesso não há senha (C2) nem sessão; recusa como senha errada.
+    const ok =
+      user.hasAccess &&
+      user.password !== null &&
+      (await argon2.verify(user.password, input.currentPassword));
     if (!ok) {
       throw new InvalidCredentialsError();
     }

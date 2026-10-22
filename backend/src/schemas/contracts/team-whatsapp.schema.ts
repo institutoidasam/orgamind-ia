@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { civilDateSchema } from './civil-date.schema';
+import { levelRefSchema } from './level.schema';
 import { shiftRefSchema } from './shift.schema';
 import { daySituationSchema } from './staff-schedule.schema';
 
@@ -58,6 +59,15 @@ export const rosterPersonSchema = z.object({
   jobTitle: z.string().nullable(),
   shiftName: z.string().nullable(),
   reason: z.enum(['DAY_OFF', 'VACATION']).nullable(),
+  // C6: setor e nível da pessoa na foto (gravados a partir da T8b); foto antiga
+  // não tem as chaves e a lista devolve null.
+  sectorName: z.string().nullable().optional(),
+  levelName: z.string().nullable().optional(),
+});
+/** Pessoa da foto na lista de envios: setor/nível sempre presentes (null = foto antiga). */
+const listedRosterPersonSchema = rosterPersonSchema.extend({
+  sectorName: z.string().nullable(),
+  levelName: z.string().nullable(),
 });
 /** working = escalados no filtro (marcados ou não); off = de folga/férias do setor. */
 export const rosterSnapshotSchema = z.object({
@@ -65,16 +75,18 @@ export const rosterSnapshotSchema = z.object({
   off: rosterPersonSchema.array(),
 });
 
+// e-mail NULL = pessoa sem acesso (C2).
 const personSchema = z.object({
   id: z.string(),
   name: z.string().nullable(),
-  email: z.string(),
+  email: z.string().nullable(),
 });
 
 /**
  * C6: alvos do envio. `today` e `inProgress` em Manaus (GC5): `inProgress` = turno
  * que começou na véspera e ainda não acabou (atalho "Ver esse turno"); `shifts` =
- * turnos ativos por sortOrder. Os membros vêm de `roster`, por data.
+ * turnos ativos por sortOrder; `levels` = níveis ativos por sortOrder (C4). Os
+ * membros vêm de `roster`, por data.
  */
 export const teamTargetsResponseSchema = z.object({
   today: civilDateSchema,
@@ -94,31 +106,65 @@ export const teamTargetsResponseSchema = z.object({
   sectors: z
     .object({ id: z.string(), name: z.string(), code: z.string() })
     .array(),
+  levels: levelRefSchema.array(),
 });
 
-/** Query do GET /internal/team-whatsapp/roster. */
-export const teamRosterQuerySchema = z.object({
-  sectorId: z.string().min(1),
-  date: civilDateSchema,
+const MAX_ROSTER_SECTORS = 100;
+
+/** `a,b,a` → `['a', 'b']`: vazios fora, repetidos contam uma vez; 1..100 setores. */
+const sectorIdListSchema = z
+  .string()
+  .transform((raw) => [
+    ...new Set(
+      raw
+        .split(',')
+        .map((id) => id.trim())
+        .filter((id) => id.length > 0),
+    ),
+  ])
+  .pipe(z.string().array().min(1).max(MAX_ROSTER_SECTORS));
+
+/** D7: `sectorId` sozinho (aba aberta no deploy) vira `sectorIds` antes da validação. */
+function sectorIdAlias(raw: unknown): unknown {
+  if (typeof raw !== 'object' || raw === null) return raw;
+  const query = raw as Record<string, unknown>;
+  if (query.sectorIds !== undefined || query.sectorId === undefined) return raw;
+  return { ...query, sectorIds: query.sectorId };
+}
+
+/** Query do GET /internal/team-whatsapp/roster (C4): `sectorIds=a,b&date`. */
+export const teamRosterQuerySchema = z.preprocess(
+  sectorIdAlias,
+  z.object({ sectorIds: sectorIdListSchema, date: civilDateSchema }),
+);
+
+/**
+ * C6: escala de um setor na data. Ativos do setor principal, menos quem
+ * trabalha em outro setor no dia, mais ativos de fora com WORK aqui
+ * (`fromOtherSector`). `phoneE164` = o que o envio usaria (contato ligado, senão
+ * o do usuário), para o grupo "Sem telefone". `level` = nível do cadastro (C4).
+ */
+const teamRosterMemberSchema = personSchema.extend({
+  phoneE164: z.string().nullable(),
+  isActive: z.boolean(),
+  jobTitle: z.string().nullable(),
+  fromOtherSector: z.boolean(),
+  situation: daySituationSchema,
+  level: levelRefSchema.nullable(),
 });
 
 /**
- * C6: escala do setor na data. `members` = ativos do setor principal, menos quem
- * trabalha em outro setor no dia, mais ativos de fora com WORK aqui
- * (`fromOtherSector`). `phoneE164` = o que o envio usaria (contato ligado, senão
- * o do usuário), para o grupo "Sem telefone". `startsAt` = início do turno na data (ISO).
+ * C4: escala dos setores pedidos na data, setores por nome (pt-BR); cada pessoa
+ * aparece em um setor só. `startsAt` = início do turno na data (ISO).
  */
 export const teamRosterResponseSchema = z.object({
-  sectorId: z.string(),
   date: civilDateSchema,
   shiftStarts: z.object({ shiftId: z.string(), startsAt: z.string() }).array(),
-  members: personSchema
-    .extend({
-      phoneE164: z.string().nullable(),
-      isActive: z.boolean(),
-      jobTitle: z.string().nullable(),
-      fromOtherSector: z.boolean(),
-      situation: daySituationSchema,
+  sectors: z
+    .object({
+      sectorId: z.string(),
+      name: z.string(),
+      members: teamRosterMemberSchema.array(),
     })
     .array(),
 });
@@ -164,6 +210,8 @@ export const teamDispatchListResponseSchema = z.object({
         // Snapshot do filtro de turno; null = todos os turnos ou alvo pessoa.
         shift: teamShiftSnapshotSchema.nullable(),
       }),
+      // C6: setores do envio por nome (snapshot); [] no alvo pessoa.
+      sectors: z.object({ id: z.string(), name: z.string() }).array(),
       // null = canal removido depois do envio (o front mostra "canal removido").
       channel: z.object({ id: z.string(), name: z.string() }).nullable(),
       counts: teamDispatchCountsSchema,
@@ -177,6 +225,10 @@ export const teamDispatchListResponseSchema = z.object({
           shiftName: z.string().nullable(),
           status: teamRecipientStatusSchema,
           reason: z.string().nullable(),
+          // C6: setor em que entrou e nível na hora; null = alvo pessoa ou
+          // envio anterior (o backfill preenche só o setor).
+          sectorName: z.string().nullable(),
+          levelName: z.string().nullable(),
         })
         .array(),
       // Data da escala do envio; null = envio anterior à foto da escala.
@@ -187,9 +239,9 @@ export const teamDispatchListResponseSchema = z.object({
       // Hora real do disparo do agendado (ISO); null = imediato ou não disparado.
       firedAt: z.string().nullable(),
       // Da foto: escalados no filtro que não são destinatários.
-      unselected: rosterPersonSchema.array(),
+      unselected: listedRosterPersonSchema.array(),
       // Da foto: de folga que não são destinatários. Sem foto → [] nos dois.
-      off: rosterPersonSchema.array(),
+      off: listedRosterPersonSchema.array(),
     })
     .array(),
 });
@@ -225,7 +277,7 @@ export type TeamRosterPerson = z.infer<typeof rosterPersonSchema>;
 export type TeamTargetsResponse = z.infer<typeof teamTargetsResponseSchema>;
 export type TeamRosterQuery = z.infer<typeof teamRosterQuerySchema>;
 export type TeamRosterResponse = z.infer<typeof teamRosterResponseSchema>;
-export type TeamRosterMember = TeamRosterResponse['members'][number];
+export type TeamRosterMember = z.infer<typeof teamRosterMemberSchema>;
 export type CreateTeamDispatchResponse = z.infer<
   typeof createTeamDispatchResponseSchema
 >;

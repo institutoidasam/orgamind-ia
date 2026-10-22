@@ -14,6 +14,7 @@ const PHONE = '92991234567';
 const adminUser = {
   id: 'u1',
   email: 'admin@test.com',
+  hasAccess: true,
   name: 'Admin',
   role: 'ADMIN' as const,
   password: 'hash',

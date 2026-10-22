@@ -10,13 +10,13 @@ if (!Element.prototype.hasPointerCapture) Element.prototype.hasPointerCapture = 
 if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => {};
 
 const state = vi.hoisted(() => ({ mutateAsync: vi.fn(), isPending: false }));
-vi.mock("../api", () => ({ useUpdateUser: () => state }));
+vi.mock("../api", () => ({ useUpdateUser: () => state, useActiveLevels: () => ({ data: [] }) }));
 vi.mock("@/features/internal-admin/api", () => ({ useSectors: () => ({ data: { items: [] } }) }));
 vi.mock("@/features/shifts/api", () => ({ useShifts: () => ({ data: [] }) }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 const base = {
-  id: "u1", email: "ana@gbr.test", name: "Ana", role: "ADMIN" as const, phoneE164: null as string | null,
+  id: "u1", email: "ana@gbr.test", hasAccess: true, name: "Ana", role: "ADMIN" as const, phoneE164: null as string | null,
   sectorId: null, sector: null, isActive: true, lastLoginAt: null, createdAt: "2026-10-10", createdBy: null,
 };
 const withPhone = { ...base, phoneE164: "+5592991234567" };

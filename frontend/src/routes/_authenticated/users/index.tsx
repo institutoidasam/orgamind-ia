@@ -17,10 +17,10 @@ import { Badge } from '@/components/ui/badge';
 import { QueryErrorFallback } from '@/components/query-error-fallback';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useAuthStore } from '@/stores/auth.store';
-import { extractApiError } from '@/lib/api-error';
 import { useUsers, useDeleteUser, useResetUserPassword } from '@/features/users/api';
 import { InviteUserDialog } from '@/features/users/components/invite-user-dialog';
 import { EditUserDialog } from '@/features/users/components/edit-user-dialog';
+import { GrantAccessDialog } from '@/features/users/components/grant-access-dialog';
 import { TemporaryPasswordModal } from '@/features/users/components/temporary-password-modal';
 import { UserPermissionsDialog } from '@/features/users/components/user-permissions-dialog';
 import { SendWhatsappDialog } from '@/features/team-whatsapp/components/send-whatsapp-dialog';
@@ -28,6 +28,7 @@ import { formatPhoneBR } from '@/lib/format-phone';
 import { useShifts } from '@/features/shifts/api';
 import { NO_SHIFT_LABEL } from '@/features/shifts/labels';
 import { ROLE_LABEL } from '@/features/users/role';
+import { toastUserError } from '@/features/users/submit-error';
 import type { UserSummary } from '@/features/users/schemas';
 
 const route = createFileRoute('/_authenticated/users/')({
@@ -78,9 +79,10 @@ function useUserDialogState() {
   const [permissionsTarget, setPermissionsTarget] = useState<UserSummary | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<UserSummary | null>(null);
   const [resetTarget, setResetTarget] = useState<UserSummary | null>(null);
+  const [grantTarget, setGrantTarget] = useState<UserSummary | null>(null);
   const [whatsappTarget, setWhatsappTarget] = useState<UserSummary | null>(null);
   const [tmpPwd, setTmpPwd] = useState<string | null>(null);
-  return { whatsappTarget, setWhatsappTarget, inviteOpen, setInviteOpen, editTarget, setEditTarget, permissionsTarget, setPermissionsTarget, deleteTarget, setDeleteTarget, resetTarget, setResetTarget, tmpPwd, setTmpPwd };
+  return { whatsappTarget, setWhatsappTarget, inviteOpen, setInviteOpen, editTarget, setEditTarget, permissionsTarget, setPermissionsTarget, deleteTarget, setDeleteTarget, resetTarget, setResetTarget, grantTarget, setGrantTarget, tmpPwd, setTmpPwd };
 }
 
 type UserDialogState = ReturnType<typeof useUserDialogState>;
@@ -132,39 +134,57 @@ function shiftCellText(user: UserSummary, shiftNames: ReadonlyMap<string, string
   return shiftNames.get(user.shiftId) ?? '—';
 }
 
+/** Sem acesso não tem papel nem sessão: o estado Ativo/Inativo só faz sentido para quem entra. */
+function AccessBadge({ user }: { user: UserSummary }) {
+  if (!user.hasAccess) return <Badge variant="outline">Sem acesso</Badge>;
+  return <Badge variant={user.isActive ? 'default' : 'outline'}>{user.isActive ? 'Ativo' : 'Inativo'}</Badge>;
+}
+
+/** Como a pessoa é chamada em mensagens: e-mail quando tem, senão o nome. */
+function userLabel(user: UserSummary): string {
+  return user.email ?? user.name ?? 'esta pessoa';
+}
+
 function UserRow({ user, shiftNames, isSelf, dialogs }: { user: UserSummary; shiftNames: ReadonlyMap<string, string>; isSelf: boolean; dialogs: UserDialogState }) {
   return (
     <TableRow>
       <TableCell className="font-medium">{user.name ?? '—'}</TableCell>
-      <TableCell className="text-sm" style={{ color: 'var(--foreground-muted)' }}>{user.email}</TableCell>
+      <TableCell className="text-sm" style={{ color: 'var(--foreground-muted)' }}>{user.email ?? '—'}</TableCell>
       <TableCell className="text-sm">{formatPhoneBR(user.phoneE164)}</TableCell>
       <TableCell>{user.sector?.name ?? 'Sem setor'}</TableCell>
       <TableCell>{shiftCellText(user, shiftNames)}</TableCell>
       <TableCell>{user.jobTitle ?? '—'}</TableCell>
-      <TableCell><Badge variant={user.role === 'ADMIN' ? 'default' : 'secondary'}>{ROLE_LABEL[user.role]}</Badge></TableCell>
-      <TableCell><Badge variant={user.isActive ? 'default' : 'outline'}>{user.isActive ? 'Ativo' : 'Inativo'}</Badge></TableCell>
-      <TableCell>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" aria-label="Ações"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={() => dialogs.setEditTarget(user)}>Editar</DropdownMenuItem>
-            <DropdownMenuItem onClick={() => dialogs.setPermissionsTarget(user)}>Ver permissões</DropdownMenuItem>
-            <DropdownMenuItem disabled={!user.phoneE164 || !user.isActive} title={whatsappHint(user)} onClick={() => dialogs.setWhatsappTarget(user)}>Enviar WhatsApp</DropdownMenuItem>
-            <DropdownMenuItem disabled={isSelf} onClick={() => dialogs.setResetTarget(user)}>Resetar senha</DropdownMenuItem>
-            <DropdownMenuItem className="text-destructive" disabled={isSelf} onClick={() => dialogs.setDeleteTarget(user)}>Remover usuário</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </TableCell>
+      <TableCell>{user.hasAccess ? <Badge variant={user.role === 'ADMIN' ? 'default' : 'secondary'}>{ROLE_LABEL[user.role]}</Badge> : '—'}</TableCell>
+      <TableCell><AccessBadge user={user} /></TableCell>
+      <TableCell><UserActionsMenu user={user} isSelf={isSelf} dialogs={dialogs} /></TableCell>
     </TableRow>
+  );
+}
+
+function UserActionsMenu({ user, isSelf, dialogs }: { user: UserSummary; isSelf: boolean; dialogs: UserDialogState }) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" aria-label="Ações"><MoreHorizontal className="size-4" /></Button></DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onClick={() => dialogs.setEditTarget(user)}>Editar</DropdownMenuItem>
+        {user.hasAccess && <DropdownMenuItem onClick={() => dialogs.setPermissionsTarget(user)}>Ver permissões</DropdownMenuItem>}
+        <DropdownMenuItem disabled={!user.phoneE164 || !user.isActive} title={whatsappHint(user)} onClick={() => dialogs.setWhatsappTarget(user)}>Enviar WhatsApp</DropdownMenuItem>
+        {user.hasAccess
+          ? <DropdownMenuItem disabled={isSelf} onClick={() => dialogs.setResetTarget(user)}>Resetar senha</DropdownMenuItem>
+          : <DropdownMenuItem onClick={() => dialogs.setGrantTarget(user)}>Dar acesso</DropdownMenuItem>}
+        <DropdownMenuItem className="text-destructive" disabled={isSelf} onClick={() => dialogs.setDeleteTarget(user)}>Remover usuário</DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
 function UserDialogs({ dialogs, selfId, deletePending, resetPending, onDelete, onReset }: { dialogs: UserDialogState; selfId?: string; deletePending: boolean; resetPending: boolean; onDelete: () => Promise<void>; onReset: () => Promise<void> }) {
   return <>
     <InviteUserDialog open={dialogs.inviteOpen} onOpenChange={dialogs.setInviteOpen} />
+    <GrantAccessDialog user={dialogs.grantTarget} onClose={() => dialogs.setGrantTarget(null)} />
     {dialogs.editTarget && <EditUserDialog user={dialogs.editTarget} open onOpenChange={(open) => { if (!open) dialogs.setEditTarget(null); }} isSelf={dialogs.editTarget.id === selfId} />}
     {dialogs.permissionsTarget && <UserPermissionsDialog user={dialogs.permissionsTarget} open onOpenChange={(open) => { if (!open) dialogs.setPermissionsTarget(null); }} />}
-    {dialogs.whatsappTarget && <SendWhatsappDialog open target={{ type: 'user', userId: dialogs.whatsappTarget.id, label: dialogs.whatsappTarget.name ?? dialogs.whatsappTarget.email }} onOpenChange={(open) => { if (!open) dialogs.setWhatsappTarget(null); }} />}
+    {dialogs.whatsappTarget && <SendWhatsappDialog open target={{ type: 'user', userId: dialogs.whatsappTarget.id, label: dialogs.whatsappTarget.name ?? dialogs.whatsappTarget.email ?? '' }} onOpenChange={(open) => { if (!open) dialogs.setWhatsappTarget(null); }} />}
     <DeleteUserDialog user={dialogs.deleteTarget} pending={deletePending} onOpenChange={(open) => { if (!open) dialogs.setDeleteTarget(null); }} onDelete={onDelete} />
     <ResetUserDialog user={dialogs.resetTarget} pending={resetPending} onOpenChange={(open) => { if (!open) dialogs.setResetTarget(null); }} onReset={onReset} />
     {dialogs.tmpPwd && <TemporaryPasswordModal password={dialogs.tmpPwd} onClose={() => dialogs.setTmpPwd(null)} />}
@@ -172,21 +192,20 @@ function UserDialogs({ dialogs, selfId, deletePending, resetPending, onDelete, o
 }
 
 function DeleteUserDialog({ user, pending, onOpenChange, onDelete }: { user: UserSummary | null; pending: boolean; onOpenChange: (open: boolean) => void; onDelete: () => Promise<void> }) {
-  return <AlertDialog open={!!user} onOpenChange={onOpenChange}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Remover usuário?</AlertDialogTitle><AlertDialogDescription>O usuário <strong>{user?.email}</strong> será permanentemente removido. Esta ação não pode ser desfeita.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancelar</AlertDialogCancel><AlertDialogAction onClick={onDelete} disabled={pending}>{pending ? 'Removendo...' : 'Remover'}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>;
+  return <AlertDialog open={!!user} onOpenChange={onOpenChange}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Remover usuário?</AlertDialogTitle><AlertDialogDescription>O usuário <strong>{user && userLabel(user)}</strong> será permanentemente removido. Esta ação não pode ser desfeita.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancelar</AlertDialogCancel><AlertDialogAction onClick={onDelete} disabled={pending}>{pending ? 'Removendo...' : 'Remover'}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>;
 }
 
 function ResetUserDialog({ user, pending, onOpenChange, onReset }: { user: UserSummary | null; pending: boolean; onOpenChange: (open: boolean) => void; onReset: () => Promise<void> }) {
-  return <AlertDialog open={!!user} onOpenChange={onOpenChange}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Resetar senha?</AlertDialogTitle><AlertDialogDescription>Uma nova senha temporária será gerada para <strong>{user?.email}</strong>. O usuário deverá trocá-la no próximo acesso.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancelar</AlertDialogCancel><AlertDialogAction onClick={onReset} disabled={pending}>{pending ? 'Gerando...' : 'Resetar'}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>;
+  return <AlertDialog open={!!user} onOpenChange={onOpenChange}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Resetar senha?</AlertDialogTitle><AlertDialogDescription>Uma nova senha temporária será gerada para <strong>{user && userLabel(user)}</strong>. O usuário deverá trocá-la no próximo acesso.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancelar</AlertDialogCancel><AlertDialogAction onClick={onReset} disabled={pending}>{pending ? 'Gerando...' : 'Resetar'}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>;
 }
 
 async function deleteSelectedUser(user: UserSummary | null, mutation: ReturnType<typeof useDeleteUser>, close: () => void) {
   if (!user) return;
   try {
     await mutation.mutateAsync(user.id);
-    toast.success(`Usuário ${user.email} removido.`);
+    toast.success(`Usuário ${userLabel(user)} removido.`);
   } catch (error) {
-    const { title, message } = await extractApiError(error);
-    toast.error(title, { description: message });
+    await toastUserError(error);
   } finally {
     close();
   }
@@ -198,8 +217,7 @@ async function resetSelectedUser(user: UserSummary | null, mutation: ReturnType<
     const result = await mutation.mutateAsync(user.id);
     setTemporaryPassword(result.temporaryPassword);
   } catch (error) {
-    const { title, message } = await extractApiError(error);
-    toast.error(title, { description: message });
+    await toastUserError(error);
   } finally {
     close();
   }

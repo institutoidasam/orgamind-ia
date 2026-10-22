@@ -26,17 +26,20 @@ type SectorTarget = Extract<SendTarget, { type: 'sector' }>;
 
 /**
  * Corpo do POST: sempre leva a data conferida; "todos os turnos" não manda `shiftId`,
- * "todos da lista" não manda `userIds`, e `includeOff` só vai quando marcado.
+ * "todos da lista" não manda `userIds`, `includeOff` só vai quando marcado e o filtro
+ * de nível (`levelIds`, `withoutLevel`) só vai quando há filtro.
  */
 function requestTarget(target: SendTarget): CreateDispatchInput['target'] {
   if (target.type === 'user') return { type: 'user', userId: target.userId };
   return {
     type: 'sector',
-    sectorId: target.sectorId,
+    sectorIds: target.sectorIds,
     date: target.date,
     ...(target.shiftId ? { shiftId: target.shiftId } : {}),
     ...(target.userIds ? { userIds: target.userIds } : {}),
     ...(target.includeOff ? { includeOff: true } : {}),
+    ...(target.levelIds.length > 0 ? { levelIds: target.levelIds } : {}),
+    ...(target.withoutLevel ? { withoutLevel: true } : {}),
   };
 }
 

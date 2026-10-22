@@ -31,6 +31,29 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.10.22',
+    date: '2026-10-22',
+    title: 'Pessoas no setor, níveis e envio para vários setores',
+    items: [
+      {
+        text: 'Na página do setor, use "Adicionar pessoas" para incluir uma pessoa nova, vários contatos de uma vez ou alguém já cadastrado. Quem só recebe WhatsApp entra "Sem acesso", sem e-mail e sem senha.',
+        where: '/setores',
+      },
+      {
+        text: 'Cada pessoa pode ter um nível: Coordenador, Líder, Funcionário ou Operador. A lista de níveis pode ser editada.',
+        where: '/niveis',
+      },
+      {
+        text: 'No WhatsApp da equipe, escolha um ou mais setores e o nível. Para mandar só para os coordenadores, marque os setores e o nível Coordenador.',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'Em Usuários, quem não entra no sistema aparece como "Sem acesso" e pode receber acesso depois.',
+        where: '/users',
+      },
+    ],
+  },
+  {
     version: '2026.10.21.1',
     date: '2026-10-21',
     title: 'Escala da equipe, turnos com horário e envio agendado',

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HTTPError } from 'ky';
 import type { ComponentType } from 'react';
@@ -13,11 +13,14 @@ const { useTeamTargets, useTeamDispatches, useTeamRoster, useScheduledDispatches
 
 vi.mock('@tanstack/react-router', () => ({
   createFileRoute: () => (opts: Record<string, unknown>) => ({ ...opts }),
+  Link: ({ children, to, params }: { children: React.ReactNode; to: string; params: { sectorId: string } }) => (
+    <a href={to.replace('$sectorId', params.sectorId)}>{children}</a>
+  ),
 }));
 vi.mock('@/features/team-whatsapp/api', () => ({
   useTeamTargets: () => useTeamTargets(),
   useTeamDispatches: () => useTeamDispatches(),
-  useTeamRoster: (q: unknown) => useTeamRoster(q),
+  useTeamRoster: (ids: string[], date: string) => useTeamRoster(ids, date),
   useScheduledDispatches: () => useScheduledDispatches(),
   useCancelDispatch: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
@@ -42,15 +45,17 @@ if (!Element.prototype.scrollIntoView) {
 
 type User = ReturnType<typeof userEvent.setup>;
 
-async function pick(user: User, trigger: 'Setor' | 'Turno', option: string) {
+async function pick(user: User, trigger: 'Turno', option: string) {
   await user.click(screen.getByRole('combobox', { name: trigger }));
   await user.click(screen.getByRole('option', { name: option }));
 }
 
+const toggleBox = (user: User, name: string) => user.click(screen.getByRole('checkbox', { name }));
+
 async function openProducao(turno: string) {
   const user = userEvent.setup();
   render(<Page />);
-  await pick(user, 'Setor', 'Produção');
+  await toggleBox(user, 'Produção');
   await pick(user, 'Turno', turno);
   return user;
 }
@@ -69,7 +74,7 @@ const noite = { id: 'noite', name: 'Noite', startTime: '22:00', endTime: '06:00'
 const work = (shiftId: string): RosterMember['situation'] => ({ kind: 'WORK', sectorId: 's1', shiftId, source: 'CYCLE' });
 const member = (id: string, name: string, situation: RosterMember['situation'], extra: Partial<RosterMember> = {}): RosterMember => ({
   id, name, email: `${id}@x.test`, phoneE164: '+5592991234567', isActive: true, jobTitle: null,
-  fromOtherSector: false, situation, ...extra,
+  fromOtherSector: false, situation, level: null, ...extra,
 });
 const members = [
   member('ana', 'Ana', work('manha'), { jobTitle: 'Operadora' }),
@@ -81,13 +86,23 @@ const members = [
   member('ze', 'Zé', { kind: 'NONE' }),
 ];
 const sectors = [{ id: 's1', name: 'Produção', code: 'PROD' }, { id: 's2', name: 'Expedição', code: 'EXP' }];
-const targets = { today: '2026-10-21', inProgress: null, shifts: [manha, noite], channels: [], sectors };
+const levels = [{ id: 'l1', name: 'Coordenador' }, { id: 'l2', name: 'Funcionário' }];
+const targets = { today: '2026-10-21', inProgress: null, shifts: [manha, noite], channels: [], sectors, levels };
+let membersBySector: Record<string, RosterMember[]> = {};
+const rosterOf = (ids: string[], date: string, shiftStarts: unknown[] = []) => ({
+  data: {
+    date, shiftStarts,
+    sectors: ids.map((id) => ({ sectorId: id, name: sectors.find((s) => s.id === id)?.name, members: membersBySector[id] ?? [] })),
+  },
+  isLoading: false, isError: false,
+});
 const dispatches = {
   items: [
     {
       id: 'd1', createdAt: '2026-10-16T12:00:00.000Z',
       author: { id: 'a1', name: 'Ada', email: 'ada@x.test' },
       target: { type: 'sector' as const, id: 's1', label: 'Compras', shift: null },
+      sectors: [{ id: 's1', name: 'Compras' }],
       channel: { id: 'ch1', name: 'GoZap Principal' },
       counts: { queued: 1, sent: 2, failed: 3, skipped: 4 },
       recipients: [], rosterDate: null, unselected: [], off: [],
@@ -96,6 +111,7 @@ const dispatches = {
       id: 'd2', createdAt: '2026-10-15T12:00:00.000Z',
       author: null,
       target: { type: 'user' as const, id: 'u1', label: 'Ana', shift: null },
+      sectors: [],
       channel: null,
       counts: { queued: 0, sent: 1, failed: 0, skipped: 0 },
       recipients: [], rosterDate: null, unselected: [], off: [],
@@ -111,9 +127,8 @@ beforeEach(() => {
   useTeamTargets.mockReturnValue({ data: targets, isLoading: false, isError: false });
   useTeamDispatches.mockReturnValue({ data: dispatches, isLoading: false, isError: false });
   useScheduledDispatches.mockReturnValue({ data: { items: [] }, isLoading: false, isError: false });
-  useTeamRoster.mockImplementation((q: { sectorId: string; date: string } | null) => ({
-    data: q ? { ...q, shiftStarts: [], members } : undefined, isLoading: false, isError: false,
-  }));
+  membersBySector = { s1: members, s2: [] };
+  useTeamRoster.mockImplementation((ids: string[], date: string) => rosterOf(ids, date));
 });
 
 describe('WhatsApp da equipe: acesso', () => {
@@ -135,7 +150,7 @@ describe('WhatsApp da equipe: acesso', () => {
     useTeamTargets.mockReturnValue({ data: { ...targets, sectors: [] }, isLoading: false, isError: false });
     render(<Page />);
     expect(screen.getByText('Nenhum setor ativo para envio. Cadastre setores em Setores.')).toBeInTheDocument();
-    expect(screen.queryByRole('combobox', { name: 'Setor' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Produção' })).not.toBeInTheDocument();
     expect(screen.getByText('Envios recentes')).toBeInTheDocument();
   });
 });
@@ -155,7 +170,7 @@ describe('WhatsApp da equipe: seletores', () => {
     expect(screen.getByText(NEEDS_CHOICE)).toBeInTheDocument();
     await pick(user, 'Turno', 'Noite');
     expect(screen.getByText(NEEDS_CHOICE)).toBeInTheDocument();
-    await pick(user, 'Setor', 'Produção');
+    await toggleBox(user, 'Produção');
     expect(screen.queryByText(NEEDS_CHOICE)).not.toBeInTheDocument();
   });
 
@@ -163,7 +178,7 @@ describe('WhatsApp da equipe: seletores', () => {
     useTeamTargets.mockReturnValue({ data: { ...targets, sectors: [sectors[0]] }, isLoading: false, isError: false });
     const user = userEvent.setup();
     render(<Page />);
-    expect(screen.getByRole('combobox', { name: 'Setor' })).toHaveTextContent('Produção');
+    expect(screen.getByRole('checkbox', { name: 'Produção' })).toBeChecked();
     expect(screen.getByText(NEEDS_CHOICE)).toBeInTheDocument();
     await pick(user, 'Turno', 'Noite');
     expect(screen.queryByText(NEEDS_CHOICE)).not.toBeInTheDocument();
@@ -173,7 +188,7 @@ describe('WhatsApp da equipe: seletores', () => {
 describe('WhatsApp da equipe: quem aparece', () => {
   it('Noite lista só os escalados na Noite com a função; De folga mostra Maria (Férias)', async () => {
     await openProducao('Noite');
-    expect(useTeamRoster).toHaveBeenLastCalledWith({ sectorId: 's1', date: '2026-10-21' });
+    expect(useTeamRoster).toHaveBeenLastCalledWith(['s1'], '2026-10-21');
     expect(checkboxNames()).toEqual(['João', 'Rui']);
     expect(screen.getByRole('listitem', { name: 'João' })).toHaveTextContent('Líder');
     expect(screen.getByRole('listitem', { name: 'Rui' })).toHaveTextContent('de outro setor');
@@ -200,6 +215,53 @@ describe('WhatsApp da equipe: quem aparece', () => {
   });
 });
 
+describe('WhatsApp da equipe: vários setores e níveis', () => {
+  async function openBoth() {
+    const user = userEvent.setup();
+    render(<Page />);
+    await toggleBox(user, 'Todos os setores');
+    await pick(user, 'Turno', 'Noite');
+    return user;
+  }
+
+  it('começa vazio com mais de um setor e pede o roster com todos os setores e a data', async () => {
+    render(<Page />);
+    expect(screen.queryByRole('checkbox', { name: 'Produção' })).not.toBeChecked();
+    expect(screen.getByText(NEEDS_CHOICE)).toBeInTheDocument();
+    cleanup();
+    await openBoth();
+    expect(useTeamRoster).toHaveBeenLastCalledWith(['s1', 's2'], '2026-10-21');
+  });
+
+  it('setor sem ninguém mostra o aviso e o link para adicionar pessoas', async () => {
+    await openBoth();
+    expect(screen.getByRole('heading', { name: 'Expedição' })).toBeInTheDocument();
+    expect(screen.getByText('Ninguém neste setor ainda.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Adicionar pessoas' })).toHaveAttribute('href', '/setores/s2');
+    expect(within(screen.getByRole('list', { name: 'Escalados · Produção' })).getAllByRole('checkbox')).toHaveLength(2);
+  });
+
+  it('filtrar por nível troca a lista (de folga também) e o alvo leva levelIds e a lista conferida', async () => {
+    membersBySector.s1 = [
+      member('ana', 'Ana', work('noite'), { level: levels[0] }),
+      member('joao', 'João', work('noite'), { level: levels[1] }),
+      member('zeca', 'Zeca', work('noite')),
+      member('maria', 'Maria', { kind: 'OFF', reason: 'VACATION', source: 'EXCEPTION' }, { level: levels[1] }),
+    ];
+    const user = await openBoth();
+    await toggleBox(user, 'Coordenador');
+    expect(screen.getByText('Ana · Coordenador')).toBeInTheDocument();
+    expect(screen.queryByRole('listitem', { name: 'João' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: /De folga/ })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Enviar para todos (1)' }));
+    expect(dialogTarget()).toMatchObject({
+      sectorIds: ['s1', 's2'], levelIds: ['l1'], withoutLevel: false, userIds: null,
+      label: 'Expedição, Produção · Coordenador · Noite · 21/10',
+      recipients: [{ id: 'ana', name: 'Ana' }],
+    });
+  });
+});
+
 describe('WhatsApp da equipe: turno em andamento', () => {
   it('aviso A Noite de 21/10 ainda está em andamento; Ver esse turno troca data e turno', async () => {
     const inProgress = { date: '2026-10-21', shift: noite };
@@ -222,7 +284,7 @@ describe('WhatsApp da equipe: seleção e envio', () => {
     await user.click(screen.getByRole('checkbox', { name: 'João' }));
     await user.click(screen.getByRole('button', { name: 'Enviar para selecionados (2)' }));
     expect(dialogTarget()).toEqual({
-      type: 'sector', sectorId: 's1', date: '2026-10-21', shiftId: 'noite', includeOff: false, userIds: ['joao', 'rui'],
+      type: 'sector', sectorIds: ['s1'], levelIds: [], withoutLevel: false, date: '2026-10-21', shiftId: 'noite', includeOff: false, userIds: ['joao', 'rui'],
       label: 'Produção · Noite · 21/10 · seleção de 2',
       recipients: [{ id: 'joao', name: 'João' }, { id: 'rui', name: 'Rui' }],
       leftOut: [],
@@ -234,7 +296,7 @@ describe('WhatsApp da equipe: seleção e envio', () => {
     await user.click(screen.getByRole('checkbox', { name: INCLUDE_OFF }));
     await user.click(screen.getByRole('button', { name: 'Enviar para todos (4)' }));
     expect(dialogTarget()).toEqual({
-      type: 'sector', sectorId: 's1', date: '2026-10-21', shiftId: null, includeOff: true, userIds: null,
+      type: 'sector', sectorIds: ['s1'], levelIds: [], withoutLevel: false, date: '2026-10-21', shiftId: null, includeOff: true, userIds: null,
       label: 'Produção · todos os turnos · 21/10',
       recipients: [{ id: 'ana', name: 'Ana' }, { id: 'joao', name: 'João' }, { id: 'maria', name: 'Maria' }, { id: 'rui', name: 'Rui' }],
       leftOut: [{ id: 'pedro', name: 'Pedro' }],
@@ -253,15 +315,15 @@ describe('WhatsApp da equipe: seleção e envio', () => {
     const user = await openProducao('Noite');
     await user.click(screen.getByRole('checkbox', { name: 'João' }));
     fireEvent.change(screen.getByLabelText('Data'), { target: { value: '2026-10-22' } });
-    expect(useTeamRoster).toHaveBeenLastCalledWith({ sectorId: 's1', date: '2026-10-22' });
+    expect(useTeamRoster).toHaveBeenLastCalledWith(['s1'], '2026-10-22');
     expect(screen.getByRole('button', { name: 'Enviar para selecionados (0)' })).toBeDisabled();
     await user.click(screen.getByRole('checkbox', { name: 'João' }));
     await pick(user, 'Turno', 'Manhã');
     expect(screen.getByRole('button', { name: 'Enviar para selecionados (0)' })).toBeDisabled();
     await pick(user, 'Turno', 'Noite');
     await user.click(screen.getByRole('checkbox', { name: 'João' }));
-    await pick(user, 'Setor', 'Expedição');
-    await pick(user, 'Setor', 'Produção');
+    await toggleBox(user, 'Expedição');
+    await toggleBox(user, 'Expedição');
     expect(screen.getByRole('button', { name: 'Enviar para selecionados (0)' })).toBeDisabled();
   });
 });
@@ -295,10 +357,10 @@ describe('WhatsApp da equipe: envios recentes', () => {
 
 describe('WhatsApp da equipe: Ver destinatários', () => {
   const recipient = (name: string, shiftName: string | null, status: string, reason: string | null) => ({
-    userId: `id-${name}`, name, shiftName, status, reason,
+    userId: `id-${name}`, name, shiftName, status, reason, sectorName: 'Produção', levelName: null,
   });
   const person = (name: string, extra: Record<string, unknown> = {}) => ({
-    userId: `id-${name}`, name, jobTitle: null, shiftName: null, reason: null, ...extra,
+    userId: `id-${name}`, name, jobTitle: null, shiftName: null, reason: null, sectorName: 'Produção', levelName: null, ...extra,
   });
   const withGroups = {
     ...dispatches.items[0],
@@ -339,10 +401,8 @@ describe('WhatsApp da equipe: agendamento', () => {
   };
 
   it('o alvo de um turno leva o início do turno do servidor e a hora gravada', async () => {
-    useTeamRoster.mockImplementation((q: { sectorId: string; date: string } | null) => ({
-      data: q ? { ...q, shiftStarts: [{ shiftId: 'noite', startsAt: '2026-10-22T02:00:00.000Z' }], members } : undefined,
-      isLoading: false, isError: false,
-    }));
+    useTeamRoster.mockImplementation((ids: string[], date: string) =>
+      rosterOf(ids, date, [{ shiftId: 'noite', startsAt: '2026-10-22T02:00:00.000Z' }]));
     const user = await openProducao('Noite');
     await user.click(screen.getByRole('button', { name: 'Enviar para todos (2)' }));
     expect(dialogTarget().shiftStart).toEqual({ startsAt: '2026-10-22T02:00:00.000Z', startTime: '22:00' });

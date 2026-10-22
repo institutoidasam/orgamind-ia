@@ -190,11 +190,29 @@ describe('novidades de WhatsApp da equipe e Usuários', () => {
 });
 
 describe('novidade 2026.10.21.1', () => {
-  it('é a primeira entrada, cobre as quatro telas e cita os horários migrados', () => {
-    const note = RELEASE_NOTES[0];
-    expect(note.version).toBe('2026.10.21.1');
-    expect(note.items.map((i) => i.where)).toEqual(['/turnos', '/escala', '/whatsapp-equipe', '/users']);
-    expect(note.items[0].text).toContain('06:00–14:00');
-    expect(note.items[0].text).toContain('14:00–22:00');
+  it('segue registrada, cobre as quatro telas e cita os horários migrados', () => {
+    const note = RELEASE_NOTES.find((n) => n.version === '2026.10.21.1');
+    expect(note).toBeDefined();
+    expect(note?.items.map((i) => i.where)).toEqual(['/turnos', '/escala', '/whatsapp-equipe', '/users']);
+    expect(note?.items[0].text).toContain('06:00–14:00');
+    expect(note?.items[0].text).toContain('14:00–22:00');
+  });
+});
+
+describe('novidade 2026.10.22', () => {
+  it('está no topo', () => {
+    expect(RELEASE_NOTES[0].version).toBe('2026.10.22');
+  });
+
+  it('where /setores, /niveis, /whatsapp-equipe e /users', () => {
+    const note = RELEASE_NOTES.find((n) => n.version === '2026.10.22');
+    expect(note?.items.map((i) => i.where)).toEqual(['/setores', '/niveis', '/whatsapp-equipe', '/users']);
+  });
+
+  it("texto cita 'Adicionar pessoas' e 'Coordenador'", () => {
+    const note = RELEASE_NOTES.find((n) => n.version === '2026.10.22');
+    const textos = note?.items.map((i) => i.text).join('\n') ?? '';
+    expect(textos).toContain('Adicionar pessoas');
+    expect(textos).toContain('Coordenador');
   });
 });

@@ -18,13 +18,13 @@ const { state, toastError, shifts } = vi.hoisted(() => ({
     { id: "sh3", name: "Madrugada", startTime: "22:00", endTime: "06:00", isActive: false, sortOrder: 2, crossesMidnight: true, inUse: [] },
   ],
 }));
-vi.mock("../api", () => ({ useUpdateUser: () => state }));
+vi.mock("../api", () => ({ useUpdateUser: () => state, useActiveLevels: () => ({ data: [] }) }));
 vi.mock("@/features/internal-admin/api", () => ({ useSectors: () => ({ data: { items: [] } }) }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: toastError } }));
 vi.mock("@/features/shifts/api", () => ({ useShifts: () => ({ data: shifts }) }));
 
 const morningUser = {
-  id: "u1", email: "ana@gbr.test", name: "Ana", role: "ADMIN" as const, phoneE164: null as string | null,
+  id: "u1", email: "ana@gbr.test", hasAccess: true, name: "Ana", role: "ADMIN" as const, phoneE164: null as string | null,
   sectorId: null, sector: null, isActive: true, lastLoginAt: null, createdAt: "2026-10-10", createdBy: null,
   shiftId: "sh1" as string | null, jobTitle: null as string | null,
 };

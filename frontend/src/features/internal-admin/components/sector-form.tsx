@@ -91,7 +91,8 @@ function SectorManager({
   users: Array<{
     id: string;
     name: string | null;
-    email: string;
+    email: string | null;
+    hasAccess: boolean;
     isActive: boolean;
     role: "ADMIN" | "SUPERVISOR" | "OPERATOR" | "VIEWER";
   }>;
@@ -111,10 +112,10 @@ function SectorManager({
         <SelectContent>
           <SelectItem value="none">Definir depois</SelectItem>
           {users
-            .filter((user) => user.isActive && user.role !== "VIEWER")
+            .filter((user) => user.isActive && user.hasAccess && user.role !== "VIEWER")
             .map((user) => (
               <SelectItem value={user.id} key={user.id}>
-                {user.name ?? user.email}
+                {user.name ?? user.email ?? "Sem nome"}
               </SelectItem>
             ))}
         </SelectContent>

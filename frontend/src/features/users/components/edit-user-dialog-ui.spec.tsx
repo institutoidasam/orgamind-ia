@@ -10,13 +10,13 @@ if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => 
 
 const state = vi.hoisted(() => ({ mutateAsync: vi.fn(), isPending: false }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
-vi.mock("../api", () => ({ useUpdateUser: () => state }));
+vi.mock("../api", () => ({ useUpdateUser: () => state, useActiveLevels: () => ({ data: [] }) }));
 vi.mock("@/features/internal-admin/api", () => ({ useSectors: () => ({ data: { items: [{ id: "s1", name: "Engenharia" }] } }) }));
 vi.mock("@/features/shifts/api", () => ({ useShifts: () => ({ data: [] }) }));
 vi.mock("sonner", () => ({ toast }));
 
 const user = {
-  id: "u1", email: "ana@gbr.test", name: "Ana", role: "ADMIN" as const,
+  id: "u1", email: "ana@gbr.test", hasAccess: true, name: "Ana", role: "ADMIN" as const,
   sectorId: null, sector: null, isActive: true, lastLoginAt: null,
   createdAt: "2026-10-10", createdBy: null,
 };

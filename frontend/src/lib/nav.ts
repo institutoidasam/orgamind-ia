@@ -14,6 +14,7 @@ import {
   Settings,
   Clock,
   CalendarDays,
+  Layers,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -82,8 +83,9 @@ export const NAV: NavItem[] = [
   { to: '/escala', label: 'Escala', icon: CalendarDays, section: 'ops', roles: WRITE_INTERNAL_ROLES },
   { to: '/demandas', label: 'Demandas', icon: FileText, section: 'sys', roles: ALL_INTERNAL_ROLES },
   { to: '/comunicados', label: 'Comunicados', icon: MessageSquare, section: 'sys', roles: ALL_INTERNAL_ROLES },
-  { to: '/setores', label: 'Setores', icon: Users, section: 'admin', roles: ['ADMIN'] },
+  { to: '/setores', label: 'Setores', icon: Users, section: 'admin', roles: WRITE_INTERNAL_ROLES },
   { to: '/turnos', label: 'Turnos', icon: Clock, section: 'admin', roles: ['ADMIN'] },
+  { to: '/niveis', label: 'Níveis', icon: Layers, section: 'admin', roles: ['ADMIN'] },
   { to: '/users', label: 'Usuários', icon: UserCog, section: 'admin', roles: ['ADMIN'] },
   { to: '/connect', label: 'Números e canais', icon: Wifi, section: 'admin', roles: ['ADMIN'] },
 

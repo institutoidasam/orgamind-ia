@@ -11,7 +11,7 @@ const sectorSummarySchema = z.object({
 const managerSchema = z.object({
   id: z.string(),
   name: z.string().nullable(),
-  email: z.string().email(),
+  email: z.string().email().nullable(),
 });
 
 export const sectorSchema = sectorSummarySchema.extend({
@@ -29,7 +29,7 @@ export const sectorDetailSchema = sectorSchema.extend({
     .array(
       z.object({
         id: z.string(),
-        email: z.string().email(),
+        email: z.string().email().nullable(),
         name: z.string().nullable(),
         role: roleSchema,
         isActive: z.boolean().default(true),

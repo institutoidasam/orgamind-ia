@@ -1,5 +1,6 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { HTTPError } from 'ky';
 import type { ComponentType } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -40,13 +41,19 @@ vi.mock('@/features/users/components/invite-user-dialog', () => ({
 vi.mock('@/features/users/components/edit-user-dialog', () => ({
   EditUserDialog: ({ user, onOpenChange }: { user: { name: string | null }; onOpenChange: (open: boolean) => void }) => <div role="dialog">Editar {user.name}<button onClick={() => onOpenChange(false)}>Cancelar edição</button></div>,
 }));
+vi.mock('@/features/users/components/grant-access-dialog', () => ({
+  GrantAccessDialog: ({ user, onClose }: { user: { name: string | null } | null; onClose: () => void }) => user && <div role="dialog">Dar acesso a {user.name}<button onClick={onClose}>Fechar acesso</button></div>,
+}));
 vi.mock('@/features/users/components/temporary-password-modal', () => ({
   TemporaryPasswordModal: ({ password, onClose }: { password: string; onClose: () => void }) => <div role="dialog">Senha temporária: {password}<button onClick={onClose}>Fechar senha</button></div>,
 }));
 vi.mock('@/features/team-whatsapp/components/send-whatsapp-dialog', () => ({
   SendWhatsappDialog: ({ target }: { target: unknown }) => <div role="dialog">Diálogo {JSON.stringify(target)}</div>,
 }));
-vi.mock('@/lib/api-error', () => ({ extractApiError: vi.fn().mockResolvedValue({ title: 'Erro HTTP', message: 'Tente novamente.' }) }));
+vi.mock('@/lib/api-error', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api-error')>()),
+  extractApiError: vi.fn().mockResolvedValue({ title: 'Erro HTTP', message: 'Tente novamente.' }),
+}));
 vi.mock('sonner', () => ({ toast: { success: toastSuccess, error: toastError } }));
 
 import { Route } from './index';
@@ -54,10 +61,10 @@ import { Route } from './index';
 const UsersPage = (Route as unknown as { component: ComponentType }).component;
 
 const users = [
-  { id: 'admin-1', email: 'admin@gbr.test', name: 'Ada', phoneE164: '+5592991234567', role: 'ADMIN' as const, sectorId: null, sector: null, isActive: true, lastLoginAt: null, createdAt: '2026-10-10', createdBy: null },
-  { id: 'supervisor-1', email: 'supervisor@gbr.test', name: 'Bia', phoneE164: null, role: 'SUPERVISOR' as const, sectorId: 's1', sector: { id: 's1', name: 'Engenharia', code: 'ENG', isActive: true }, isActive: true, lastLoginAt: null, createdAt: '2026-10-10', createdBy: null },
-  { id: 'operator-1', email: 'operator@gbr.test', name: 'Caio', phoneE164: null, role: 'OPERATOR' as const, sectorId: 's2', sector: { id: 's2', name: 'Produção', code: 'PROD', isActive: true }, isActive: false, lastLoginAt: null, createdAt: '2026-10-10', createdBy: null },
-  { id: 'viewer-1', email: 'viewer@gbr.test', name: 'Dora', phoneE164: null, role: 'VIEWER' as const, sectorId: 's3', sector: { id: 's3', name: 'Qualidade', code: 'QUAL', isActive: true }, isActive: true, lastLoginAt: null, createdAt: '2026-10-10', createdBy: null },
+  { id: 'admin-1', email: 'admin@gbr.test', hasAccess: true, name: 'Ada', phoneE164: '+5592991234567', role: 'ADMIN' as const, sectorId: null, sector: null, isActive: true, lastLoginAt: null, createdAt: '2026-10-10', createdBy: null },
+  { id: 'supervisor-1', email: 'supervisor@gbr.test', hasAccess: true, name: 'Bia', phoneE164: null, role: 'SUPERVISOR' as const, sectorId: 's1', sector: { id: 's1', name: 'Engenharia', code: 'ENG', isActive: true }, isActive: true, lastLoginAt: null, createdAt: '2026-10-10', createdBy: null },
+  { id: 'operator-1', email: 'operator@gbr.test', hasAccess: true, name: 'Caio', phoneE164: null, role: 'OPERATOR' as const, sectorId: 's2', sector: { id: 's2', name: 'Produção', code: 'PROD', isActive: true }, isActive: false, lastLoginAt: null, createdAt: '2026-10-10', createdBy: null },
+  { id: 'viewer-1', email: 'viewer@gbr.test', hasAccess: true, name: 'Dora', phoneE164: null, role: 'VIEWER' as const, sectorId: 's3', sector: { id: 's3', name: 'Qualidade', code: 'QUAL', isActive: true }, isActive: true, lastLoginAt: null, createdAt: '2026-10-10', createdBy: null },
 ];
 
 describe('UsersPage', () => {
@@ -151,6 +158,50 @@ describe('UsersPage', () => {
 
     await waitFor(() => expect(toastError).toHaveBeenCalledWith('Erro HTTP', { description: 'Tente novamente.' }));
     expect(screen.getByRole('table')).toBeInTheDocument();
+  });
+});
+
+describe('UsersPage pessoa sem acesso', () => {
+  const noAccess = { ...users[1], id: 'sem-1', name: 'Rita', email: null, hasAccess: false, role: 'VIEWER' as const, sector: null, sectorId: null };
+
+  beforeEach(() => {
+    getState.mockReturnValue(authState);
+    useUsers.mockReturnValue({
+      data: { data: [users[0], users[3], noAccess], total: 3 }, isLoading: false, isError: false, error: null, refetch: vi.fn(),
+    });
+  });
+
+  it('Email —, Perfil —, Acesso "Sem acesso", sem Resetar senha e com Dar acesso', async () => {
+    const user = userEvent.setup();
+    render(<UsersPage />);
+    const cells = within(screen.getByRole('row', { name: /Rita/ })).getAllByRole('cell');
+    expect(cells[1]).toHaveTextContent('—');
+    expect(cells[6]).toHaveTextContent('—');
+    expect(cells[7]).toHaveTextContent('Sem acesso');
+
+    await openActions(user, /Rita/);
+    expect(screen.queryByRole('menuitem', { name: /(Resetar|Redefinir) senha/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Ver permissões' })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('menuitem', { name: 'Dar acesso' }));
+    expect(screen.getByRole('dialog')).toHaveTextContent('Dar acesso a Rita');
+  });
+
+  it('quem tem acesso mantém Resetar senha e não ganha Dar acesso', async () => {
+    const user = userEvent.setup();
+    render(<UsersPage />);
+    await openActions(user, /Ada.*admin@gbr\.test/i);
+    expect(screen.getByRole('menuitem', { name: 'Resetar senha' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: 'Dar acesso' })).not.toBeInTheDocument();
+  });
+
+  it('users.no_access ao resetar (lista velha) mostra a mensagem em pt-BR', async () => {
+    resetMutate.mockRejectedValue(new HTTPError(new Response(JSON.stringify({ code: 'users.no_access' }), { status: 422 }), new Request('https://x'), {} as never));
+    const user = userEvent.setup();
+    render(<UsersPage />);
+    await openActions(user, /Dora.*viewer@gbr\.test/i);
+    await user.click(screen.getByRole('menuitem', { name: 'Resetar senha' }));
+    await user.click(screen.getByRole('button', { name: 'Resetar' }));
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith('Esta pessoa não tem acesso ao sistema.'));
   });
 });
 

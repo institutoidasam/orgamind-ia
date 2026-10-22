@@ -22,6 +22,7 @@ vi.mock("@/features/users/api", () => ({
         email: "admin@gbr.com",
         name: "Admin",
         role: "ADMIN",
+        hasAccess: true,
         isActive: true,
       },
       {
@@ -29,6 +30,7 @@ vi.mock("@/features/users/api", () => ({
         email: "viewer@gbr.com",
         name: "Leitura",
         role: "VIEWER",
+        hasAccess: true,
         isActive: true,
       },
       {
@@ -36,7 +38,16 @@ vi.mock("@/features/users/api", () => ({
         email: "inactive@gbr.com",
         name: "Inativo",
         role: "OPERATOR",
+        hasAccess: true,
         isActive: false,
+      },
+      {
+        id: "semacesso",
+        email: null,
+        name: "Sem Acesso",
+        role: "OPERATOR",
+        hasAccess: false,
+        isActive: true,
       },
     ],
   }),
@@ -70,5 +81,18 @@ describe("SectorForm", () => {
     expect(await screen.findByRole("option", { name: "Admin" })).toBeTruthy();
     expect(screen.queryByRole("option", { name: "Leitura" })).toBeNull();
     expect(screen.queryByRole("option", { name: "Inativo" })).toBeNull();
+  });
+
+  it("Gestor não lista pessoa sem acesso", async () => {
+    render(
+      <SectorForm
+        pending={false}
+        onCancel={() => {}}
+        onSubmit={async () => {}}
+      />,
+    );
+    fireEvent.click(screen.getByRole("combobox", { name: "Gestor" }));
+    expect(await screen.findByRole("option", { name: "Admin" })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: "Sem Acesso" })).toBeNull();
   });
 });

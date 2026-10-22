@@ -9,7 +9,6 @@ import {
   teamTargetsSchema,
   type CreateDispatchInput,
   type DispatchList,
-  type RosterQuery,
   type ScheduledList,
 } from './schemas';
 
@@ -28,14 +27,17 @@ export function useTeamTargets() {
   });
 }
 
-/** `null` = ainda sem setor, data e turno escolhidos: não busca. */
-export function useTeamRoster(q: RosterQuery | null) {
+/** Sem setor ou sem data: não busca. Os ids vão numa lista separada por vírgula. */
+export function useTeamRoster(sectorIds: readonly string[], date: string) {
+  const ids = sectorIds.join(',');
   return useQuery({
-    queryKey: ['team-whatsapp', 'roster', q?.sectorId, q?.date],
-    enabled: q !== null,
+    queryKey: ['team-whatsapp', 'roster', ids, date],
+    enabled: ids !== '' && date !== '',
     retry: false,
     queryFn: async () =>
-      teamRosterSchema.parse(await api.get('internal/team-whatsapp/roster', { searchParams: { ...q } }).json()),
+      teamRosterSchema.parse(
+        await api.get('internal/team-whatsapp/roster', { searchParams: { sectorIds: ids, date } }).json(),
+      ),
   });
 }
 

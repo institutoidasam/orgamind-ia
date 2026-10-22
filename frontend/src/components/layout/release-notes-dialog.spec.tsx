@@ -29,7 +29,7 @@ vi.mock('@/release-notes', () => ({
         { text: 'Item com link.', where: '/contacts' },
         { text: 'Item sem link.' },
         { text: 'Item da visão geral.', where: '/dashboard' },
-        { text: 'Item de setores.', where: '/setores' },
+        { text: 'Item de setores.', where: '/users' },
       ],
     },
   ],
@@ -70,7 +70,7 @@ describe('ReleaseNotesDialog', () => {
 
   it('mostra "Ver" só nos itens que têm `where`, apontando para a rota', () => {
     render(<ReleaseNotesDialog open onOpenChange={() => {}} />);
-    expect(verHrefs()).toEqual(['/contacts', '/dashboard', '/setores']);
+    expect(verHrefs()).toEqual(['/contacts', '/dashboard', '/users']);
   });
 
   it('clicar em "Ver" fecha o diálogo', async () => {
@@ -94,7 +94,7 @@ describe('ReleaseNotesDialog — "Ver" por papel', () => {
   it.each([
     ['VIEWER', ['/dashboard']],
     ['OPERATOR', ['/contacts', '/dashboard']],
-    ['ADMIN', ['/contacts', '/dashboard', '/setores']],
+    ['ADMIN', ['/contacts', '/dashboard', '/users']],
   ] as const)('%s vê "Ver" apenas das rotas que acessa', (role, hrefs) => {
     signInAs(role);
     render(<ReleaseNotesDialog open onOpenChange={() => {}} />);

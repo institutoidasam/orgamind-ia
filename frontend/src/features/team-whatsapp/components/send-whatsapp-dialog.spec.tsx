@@ -20,7 +20,8 @@ import { SendWhatsappDialog } from './send-whatsapp-dialog';
 import type { SendTarget, TeamChannel } from '../schemas';
 
 const sector: SendTarget = {
-  type: 'sector', sectorId: 's1', label: 'Compras · todos os turnos · 21/10', date: '2026-10-21',
+  type: 'sector', sectorIds: ['s1'], levelIds: [], withoutLevel: false,
+  label: 'Compras · todos os turnos · 21/10', date: '2026-10-21',
   shiftId: null, includeOff: false, userIds: null,
   recipients: [{ id: 'a', name: 'Ana' }, { id: 'b', name: 'Bia' }, { id: 'c', name: 'Caio' }], leftOut: [],
 };
@@ -184,7 +185,7 @@ describe('SendWhatsappDialog envio', () => {
     const { user, onOpenChange } = setup();
     await submit(user);
     expect(mutateAsync).toHaveBeenCalledWith({
-      channelId: 'ch1', text: 'Oi equipe', target: { type: 'sector', sectorId: 's1', date: '2026-10-21' },
+      channelId: 'ch1', text: 'Oi equipe', target: { type: 'sector', sectorIds: ['s1'], date: '2026-10-21' },
     });
     await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
     const [title, opts] = toastSuccess.mock.calls[0];
@@ -215,13 +216,14 @@ describe('SendWhatsappDialog envio', () => {
   });
 });
 
-describe('SendWhatsappDialog: nomes', () => {
-  const shiftTarget = (userIds: string[] | null, leftOut: { id: string; name: string }[]): SendTarget => ({
-    type: 'sector', sectorId: 's1', label: 'Produção · Noite · 21/10', date: '2026-10-21', shiftId: 'noite',
-    includeOff: false, userIds, leftOut, recipients: [{ id: 'joao', name: 'João' }, { id: 'maria', name: 'Maria' }],
-  });
-  const withOff: SendTarget = { ...shiftTarget(null, []), shiftId: null, includeOff: true };
+const shiftTarget = (userIds: string[] | null, leftOut: { id: string; name: string }[]): SendTarget => ({
+  type: 'sector', sectorIds: ['s1'], levelIds: [], withoutLevel: false,
+  label: 'Produção · Noite · 21/10', date: '2026-10-21', shiftId: 'noite',
+  includeOff: false, userIds, leftOut, recipients: [{ id: 'joao', name: 'João' }, { id: 'maria', name: 'Maria' }],
+});
+const withOff: SendTarget = { ...shiftTarget(null, []), shiftId: null, includeOff: true };
 
+describe('SendWhatsappDialog: nomes', () => {
   it.each([
     ['todos do turno', shiftTarget(null, [{ id: 'pedro', name: 'Pedro' }]), { shiftId: 'noite' }, true],
     ['selecionados', shiftTarget(['joao', 'maria'], []), { shiftId: 'noite', userIds: ['joao', 'maria'] }, false],
@@ -237,9 +239,50 @@ describe('SendWhatsappDialog: nomes', () => {
     }
     await submit(user);
     expect(mutateAsync).toHaveBeenCalledWith({
-      channelId: 'ch1', text: 'Oi equipe', target: { type: 'sector', sectorId: 's1', date: '2026-10-21', ...extra },
+      channelId: 'ch1', text: 'Oi equipe', target: { type: 'sector', sectorIds: ['s1'], date: '2026-10-21', ...extra },
     });
     expect(mutateAsync.mock.calls[0][0].target).not.toHaveProperty('shift');
+  });
+});
+
+describe('SendWhatsappDialog: nomes', () => {
+  it('TI + Operação + Coordenador envia sectorIds [ti, op] e levelIds [level_coordinator]', async () => {
+    mutateAsync.mockResolvedValue({ dispatchId: 'd1', queued: 2, skipped: [] });
+    const { user } = setup({
+      ...shiftTarget(null, []), sectorIds: ['ti', 'op'], levelIds: ['level_coordinator'],
+      label: 'Operação, TI · Coordenador · Noite · 21/10',
+    });
+    await submit(user);
+    expect(mutateAsync.mock.calls[0][0].target).toEqual({
+      type: 'sector', sectorIds: ['ti', 'op'], levelIds: ['level_coordinator'], date: '2026-10-21', shiftId: 'noite',
+    });
+  });
+
+  it('só Sem nível envia withoutLevel true, sem levelIds', async () => {
+    mutateAsync.mockResolvedValue({ dispatchId: 'd1', queued: 2, skipped: [] });
+    const { user } = setup({ ...shiftTarget(null, []), withoutLevel: true });
+    await submit(user);
+    const body = mutateAsync.mock.calls[0][0].target;
+    expect(body).toMatchObject({ withoutLevel: true });
+    expect(body).not.toHaveProperty('levelIds');
+  });
+
+  it('um setor sem nível envia sectorIds [id] sem levelIds nem withoutLevel', async () => {
+    mutateAsync.mockResolvedValue({ dispatchId: 'd1', queued: 2, skipped: [] });
+    const { user } = setup(shiftTarget(null, []));
+    await submit(user);
+    const body = mutateAsync.mock.calls[0][0].target;
+    expect(body.sectorIds).toEqual(['s1']);
+    expect(body).not.toHaveProperty('levelIds');
+    expect(body).not.toHaveProperty('withoutLevel');
+  });
+
+  it('nível inválido (422) mostra a mensagem e não fecha', async () => {
+    mutateAsync.mockRejectedValue(httpError(422, 'team_whatsapp.invalid_level'));
+    const { user, onOpenChange } = setup({ ...shiftTarget(null, []), levelIds: ['x'] });
+    await submit(user);
+    expect(await screen.findByRole('alert')).toHaveTextContent('Nível inválido. Atualize a página e tente de novo.');
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
 
   it('seleção inválida (422) mostra que a lista mudou e não fecha', async () => {

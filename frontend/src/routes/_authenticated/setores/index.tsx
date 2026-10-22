@@ -12,6 +12,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { QueryErrorFallback } from "@/components/query-error-fallback";
+import { useAuthStore } from "@/stores/auth.store";
 import { useSectors } from "@/features/internal-admin/api";
 import type { Sector } from "@/features/internal-admin/schemas";
 
@@ -22,6 +23,10 @@ export { route as Route };
 
 function SectorsPage() {
   const sectors = useSectors();
+  const user = useAuthStore((state) => state.user);
+  const isAdmin = user?.role === "ADMIN";
+  // D9: o gestor só vê os setores que gerencia (o filtro é o usuário logado).
+  const items = (sectors.data?.items ?? []).filter((sector) => isAdmin || sector.manager?.id === user?.id);
   if (sectors.isError)
     return (
       <QueryErrorFallback error={sectors.error} onRetry={sectors.refetch} />
@@ -36,16 +41,19 @@ function SectorsPage() {
             Origem, destino e responsáveis pelas comunicações internas.
           </p>
         </div>
-        <Button asChild>
-          <Link to="/setores/new">
-            <Plus className="mr-2 size-4" />
-            Novo setor
-          </Link>
-        </Button>
+        {isAdmin && (
+          <Button asChild>
+            <Link to="/setores/new">
+              <Plus className="mr-2 size-4" />
+              Novo setor
+            </Link>
+          </Button>
+        )}
       </header>
       <SectorTable
         loading={sectors.isLoading}
-        items={sectors.data?.items ?? []}
+        items={items}
+        emptyMessage={isAdmin ? "Nenhum setor cadastrado." : "Você não gerencia nenhum setor."}
       />
     </div>
   );
@@ -54,9 +62,11 @@ function SectorsPage() {
 function SectorTable({
   loading,
   items,
+  emptyMessage,
 }: {
   loading: boolean;
   items: Sector[];
+  emptyMessage: string;
 }) {
   if (loading)
     return (
@@ -69,7 +79,7 @@ function SectorTable({
   if (!items.length)
     return (
       <p className="rounded-lg border p-6 text-sm text-muted-foreground">
-        Nenhum setor cadastrado.
+        {emptyMessage}
       </p>
     );
   return <SectorTableContent items={items} />;

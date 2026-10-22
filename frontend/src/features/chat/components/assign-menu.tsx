@@ -12,6 +12,8 @@ import { useAssignConversation } from '../api';
 /**
  * "Atribuir" dropdown for the message-thread header. Lists operators (via
  * useUsers) plus a "Remover atribuição" option, wired to useAssignConversation.
+ * Só quem tem acesso recebe a conversa: o filtro `hasAccess` é do servidor (filtrar
+ * no cliente esconderia agentes reais além da 1ª página).
  */
 export function AssignMenu({
   conversationId,
@@ -22,7 +24,7 @@ export function AssignMenu({
   assignedUserId: string | null;
   assignedUserName: string | null;
 }) {
-  const usersQuery = useUsers(1, 100);
+  const usersQuery = useUsers(1, 100, { hasAccess: true });
   const assign = useAssignConversation(conversationId);
   const users = usersQuery.data?.data ?? [];
 

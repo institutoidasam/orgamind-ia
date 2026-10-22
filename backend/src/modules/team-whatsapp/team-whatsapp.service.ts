@@ -4,7 +4,6 @@ import { Queue } from 'bullmq';
 import type {
   TeamWhatsappRecipientStatus,
   TeamWhatsappTargetType,
-  WorkShift,
 } from '@prisma/client';
 import { ConsentService } from '../consent/consent.service';
 import { AuditService } from '../../shared/audit/audit.service';
@@ -17,8 +16,13 @@ import {
   type CreateTeamDispatchResponse,
   type TeamDispatchCounts,
   type TeamDispatchListResponse,
+  type TeamRosterQuery,
+  type TeamRosterResponse,
+  type TeamShiftSnapshot,
   type TeamTargetsResponse,
 } from '../../schemas/contracts/team-whatsapp.schema';
+import type { ShiftRef } from '../../schemas/contracts/shift.schema';
+import { fromDbDate, todayIn, zonedStart } from '../staff-schedule/civil-date';
 import type { CreateTeamDispatchInput } from './dto/create-team-dispatch.dto';
 import {
   canSendToSector,
@@ -31,28 +35,62 @@ import {
   channelDisconnected,
   channelInvalid,
   invalidSelection,
+  invalidShift,
   noRecipients,
+  scheduleInPast,
   teamForbidden,
 } from './team-whatsapp.errors';
-import { sectorTargetLabel, selectMembers } from './team-whatsapp.selection';
+import {
+  overnightInProgress,
+  sectorTargetLabel,
+  selectMembers,
+} from './team-whatsapp.selection';
+import {
+  dayMembers,
+  dayShift,
+  eligibleFor,
+  parseRosterSnapshot,
+  rosterGroups,
+  rosterSnapshot,
+  shiftStarts,
+  toRosterMember,
+  type RosterSnapshot,
+} from './team-whatsapp.roster';
 import {
   TeamWhatsappRepository,
   type NewTeamRecipient,
+  type TeamCreatedDispatch,
   type TeamDispatchRow,
   type TeamMember,
   type TeamRecipientRow,
+  type TeamSector,
   type TeamStatusCount,
 } from './team-whatsapp.repository';
 
 const QUEUE_UNAVAILABLE = 'team_whatsapp.queue_unavailable';
 
+/** Destinatário resolvido: o membro e o turno gravado nele (dia ou cadastro). */
+type TargetMember = {
+  member: TeamMember;
+  shiftId: string | null;
+  shiftName: string | null;
+};
+
+/** Foto da escala do alvo setor (C10); o alvo pessoa não tem. */
+type DayRoster = {
+  rosterDate: string;
+  includeOff: boolean;
+  roster: RosterSnapshot;
+};
+
 type ResolvedTarget = {
   targetType: TeamWhatsappTargetType;
   targetId: string;
   targetLabel: string;
-  // Filtro de turno do alvo setor; null = todos os turnos ou alvo pessoa.
-  shift: WorkShift | null;
-  members: TeamMember[];
+  // Turno do filtro do alvo setor; null = todos os turnos ou alvo pessoa.
+  shift: TeamShiftSnapshot | null;
+  members: TargetMember[];
+  day: DayRoster | null;
 };
 
 type SectorTargetInput = Extract<
@@ -62,17 +100,34 @@ type SectorTargetInput = Extract<
 
 type SkippedRecipient = CreateTeamDispatchResponse['skipped'][number];
 
+/** Status de quem vai receber: QUEUED (agora) ou SCHEDULED (início do turno). */
+type PendingStatus = Extract<
+  TeamWhatsappRecipientStatus,
+  'QUEUED' | 'SCHEDULED'
+>;
+
+/** Envio já gravado, a enfileirar (agora) ou só auditar (agendado). */
+type CreatedDispatch = {
+  actorId: string;
+  channelId: string;
+  target: ResolvedTarget;
+  created: TeamCreatedDispatch;
+  skipped: SkippedRecipient[];
+};
+
 const displayName = (u: { name: string | null; email: string }) =>
   u.name ?? u.email;
 
 /**
  * Recado de ADMIN/gestor para a equipe. Ordem do POST: remetente → alvo +
- * política (403) → seleção de setor/turno (422 `invalid_selection`) → canal
- * (422/409) → destinatários (422 `no_recipients`) → grava → enfileira →
- * auditoria. A política vem antes da seleção (`userIds` não abre outro setor)
- * e antes do canal (não revela canais a quem não pode). A seleção é refeita
- * sobre os membros ativos atuais: inválida = nada gravado, enfileirado ou
- * auditado. Texto e telefones nunca vão para log nem auditoria.
+ * política (403) → turno ativo (422 `invalid_shift`) → escala da data refeita
+ * no servidor e seleção contra ela (422 `invalid_selection`) → no agendado,
+ * início do turno no futuro (422 `schedule_in_past`) → canal (422/409, D7) →
+ * destinatários (422 `no_recipients`) → grava (com a foto da escala) →
+ * enfileira (agendado: não; o disparo é da T9) → auditoria. A política vem antes da seleção (`userIds`
+ * não abre outro setor) e antes do canal (não revela canais a quem não pode).
+ * Seleção inválida = nada gravado, enfileirado ou auditado (GC9). Texto e
+ * telefones nunca vão para log, auditoria nem foto.
  */
 @Injectable()
 export class TeamWhatsappService {
@@ -90,64 +145,137 @@ export class TeamWhatsappService {
   ): Promise<CreateTeamDispatchResponse> {
     const actor = await this.requireSender(actorId);
     const target = await this.resolveTarget(actor, input.target);
+    const scheduledFor =
+      input.when === 'shift_start' ? shiftStartOf(target, new Date()) : null;
     await this.requireChannel(input.channelId);
-    const recipients = await this.classify(target.members);
-    if (!recipients.some((r) => r.status === 'QUEUED')) throw noRecipients();
+    const pending: PendingStatus = scheduledFor ? 'SCHEDULED' : 'QUEUED';
+    const recipients = await this.classify(target.members, pending);
+    if (!recipients.some((r) => r.status === pending)) throw noRecipients();
 
-    const { targetType, targetId, targetLabel } = target;
     const created = await this.repo.createDispatch({
       authorId: actor.id,
-      targetType,
-      targetId,
-      targetLabel,
-      shift: target.shift,
+      targetType: target.targetType,
+      targetId: target.targetId,
+      targetLabel: target.targetLabel,
+      ...shiftColumns(target.shift),
+      ...target.day,
       channelId: input.channelId,
       text: input.text,
       recipients,
+      ...(scheduledFor ? { state: 'SCHEDULED' as const, scheduledFor } : {}),
     });
+    const done: CreatedDispatch = {
+      actorId: actor.id,
+      channelId: input.channelId,
+      target,
+      created,
+      skipped: recipients.filter(isSkipped).map(toSkipped),
+    };
+    return scheduledFor
+      ? this.scheduled(done, scheduledFor)
+      : this.dispatchNow(done);
+  }
+
+  /** Agendado (T8): nada vai para a fila agora; o disparo é do worker (T9). */
+  private async scheduled(
+    { actorId, created, skipped }: CreatedDispatch,
+    scheduledFor: Date,
+  ): Promise<CreateTeamDispatchResponse> {
+    const scheduled = created.recipients.filter(
+      (r) => r.status === 'SCHEDULED',
+    ).length;
+    await this.audit.log(
+      'team_whatsapp.schedule',
+      'TeamWhatsappDispatch',
+      created.id,
+      { actorId, dispatchId: created.id, scheduled, skipped: skipped.length },
+    );
+    return {
+      dispatchId: created.id,
+      queued: 0,
+      scheduled,
+      scheduledFor: scheduledFor.toISOString(),
+      skipped,
+    };
+  }
+
+  private async dispatchNow({
+    actorId,
+    channelId,
+    target,
+    created,
+    skipped,
+  }: CreatedDispatch): Promise<CreateTeamDispatchResponse> {
     const queuedIds = created.recipients
       .filter((r) => r.status === 'QUEUED')
       .map((r) => r.id);
-    await this.enqueue(queuedIds);
-
-    const skipped = recipients.filter(isSkipped).map(toSkipped);
+    await enqueueTeamSend(this.queue, this.repo, queuedIds);
     await this.audit.log(
       'team_whatsapp.dispatch',
       'TeamWhatsappDispatch',
       created.id,
       {
-        actorId: actor.id,
-        targetType,
-        targetId,
-        channelId: input.channelId,
+        actorId,
+        targetType: target.targetType,
+        targetId: target.targetId,
+        channelId,
         queued: queuedIds.length,
         skipped: skipped.length,
       },
     );
-    return { dispatchId: created.id, queued: queuedIds.length, skipped };
+    return {
+      dispatchId: created.id,
+      queued: queuedIds.length,
+      scheduled: 0,
+      scheduledFor: null,
+      skipped,
+    };
   }
 
-  /** Alvos permitidos ao remetente: ADMIN vê todos os setores ativos; gestor, os seus. */
+  /**
+   * Alvos permitidos ao remetente: ADMIN vê todos os setores ativos; gestor, os
+   * seus. `today`/`inProgress` no fuso de Manaus (GC5).
+   */
   async targets(actorId: string): Promise<TeamTargetsResponse> {
     const actor = await this.requireSender(actorId);
     const onlyIds = actor.role === 'ADMIN' ? null : actor.managedSectorIds;
-    const [channels, sectors] = await Promise.all([
+    const [channels, sectors, shifts] = await Promise.all([
       this.repo.listEligibleChannels(),
       this.repo.listSectors(onlyIds),
+      this.repo.listActiveShifts(),
     ]);
-    const eligible = channels.flatMap(
-      ({ provider, connectionEvents, ...rest }) =>
-        isTeamProvider(provider)
-          ? [
-              {
-                ...rest,
-                provider,
-                connectionState: toConnectionState(connectionEvents[0]?.state),
-              },
-            ]
-          : [],
-    );
-    return { channels: eligible, sectors };
+    const now = new Date();
+    return {
+      today: todayIn(now),
+      inProgress: overnightInProgress(shifts, now),
+      shifts,
+      channels: eligibleChannels(channels),
+      sectors,
+    };
+  }
+
+  /** Escala do setor na data (C6); 403 pela política de envio (GC7). */
+  async roster(
+    actorId: string,
+    query: TeamRosterQuery,
+  ): Promise<TeamRosterResponse> {
+    const actor = await this.requireSender(actorId);
+    const sector = await this.requireSector(actor, query.sectorId);
+    const [shifts, people] = await Promise.all([
+      this.repo.listActiveShifts(),
+      this.repo.loadDayPeople(sector.id, query.date),
+    ]);
+    const members = dayMembers({
+      sectorId: sector.id,
+      date: query.date,
+      people,
+    });
+    return {
+      sectorId: sector.id,
+      date: query.date,
+      shiftStarts: shiftStarts(shifts, query.date),
+      members: members.map(toRosterMember),
+    };
   }
 
   /** 20 envios mais novos: ADMIN vê todos; gestor, os próprios. */
@@ -194,29 +322,64 @@ export class TeamWhatsappService {
       targetId: user.id,
       targetLabel: displayName(user),
       shift: null,
-      members: [user],
+      // Alvo pessoa: o turno gravado é o do cadastro.
+      members: [
+        {
+          member: user,
+          shiftId: user.shiftId,
+          shiftName: user.workShift?.name ?? null,
+        },
+      ],
+      day: null,
     };
   }
 
-  /** Política (403) antes da seleção (422): `userIds` não abre outro setor. */
+  private async requireSector(
+    actor: TeamActor,
+    sectorId: string,
+  ): Promise<TeamSector> {
+    const sector = await this.repo.findSector(sectorId);
+    if (!sector || !canSendToSector(actor, sector)) throw teamForbidden();
+    return sector;
+  }
+
+  /**
+   * Política (403) antes do turno (422 `invalid_shift`) e da seleção (422
+   * `invalid_selection`): `userIds` não abre outro setor. A seleção é validada
+   * contra a escala da data refeita agora (GC9), não contra a lista da tela.
+   */
   private async resolveSector(
     actor: TeamActor,
     target: SectorTargetInput,
   ): Promise<ResolvedTarget> {
-    const sector = await this.repo.findSectorWithActiveMembers(target.sectorId);
-    if (!sector || !canSendToSector(actor, sector)) throw teamForbidden();
-    // O repositório já filtra ativos; o filtro aqui protege contra um select mais largo.
-    const active = sector.members.filter((m) => m.isActive);
-    const members = selectMembers(active, target.shift, target.userIds);
+    const sector = await this.requireSector(actor, target.sectorId);
+    const shifts = await this.repo.listActiveShifts();
+    const shift = requireShift(shifts, target.shiftId);
+    const { date, shiftId } = target;
+    const people = await this.repo.loadDayPeople(sector.id, date);
+    const day = dayMembers({ sectorId: sector.id, date, people });
+    const includeOff = shiftId === undefined && target.includeOff === true;
+    const eligible = eligibleFor(day, { shiftId, includeOff });
+    const members = selectMembers(eligible, target.userIds);
     if (members === null) throw invalidSelection();
-    const shift = target.shift ?? null;
+    const names = new Map(shifts.map((s) => [s.id, s.name]));
     const selected = target.userIds ? members.length : null;
     return {
       targetType: 'SECTOR',
       targetId: sector.id,
-      targetLabel: sectorTargetLabel(sector.name, shift, selected),
+      targetLabel: sectorTargetLabel(
+        sector.name,
+        shift?.name ?? null,
+        date,
+        selected,
+      ),
       shift,
-      members,
+      members: members.map((m) => ({ member: m, ...dayShift(m, names) })),
+      day: {
+        rosterDate: date,
+        includeOff,
+        roster: rosterSnapshot(day, { shiftId }, names),
+      },
     };
   }
 
@@ -229,14 +392,24 @@ export class TeamWhatsappService {
       throw channelDisconnected();
   }
 
-  /** O contato carrega a grafia que o merge elegeu como a que entrega. */
+  /**
+   * O contato carrega a grafia que o merge elegeu como a que entrega. Sem
+   * telefone/suprimido → SKIPPED já aqui, também no agendamento (D9); o resto
+   * fica `pending` (QUEUED agora, SCHEDULED no agendado).
+   */
   private async classify(
-    members: readonly TeamMember[],
+    targets: readonly TargetMember[],
+    pending: PendingStatus,
   ): Promise<NewTeamRecipient[]> {
     const recipients: NewTeamRecipient[] = [];
-    for (const m of members) {
+    for (const { member: m, shiftId, shiftName } of targets) {
       const phone = m.contact?.phoneE164 ?? m.phoneE164;
-      const base = { userId: m.id, userName: displayName(m), shift: m.shift };
+      const base = {
+        userId: m.id,
+        userName: displayName(m),
+        shiftId,
+        shiftName,
+      };
       if (!phone) {
         recipients.push({ ...base, status: 'SKIPPED', skipReason: 'NO_PHONE' });
       } else if (await this.consent.isSuppressed(phone)) {
@@ -246,27 +419,88 @@ export class TeamWhatsappService {
           skipReason: 'SUPPRESSED',
         });
       } else {
-        recipients.push({ ...base, status: 'QUEUED', skipReason: null });
+        recipients.push({ ...base, status: pending, skipReason: null });
       }
     }
     return recipients;
   }
+}
 
-  /** Sem fila não há envio: quem ficou QUEUED vira FAILED e o erro sobe (500). */
-  private async enqueue(recipientIds: readonly string[]): Promise<void> {
-    try {
-      await this.queue.addBulk(
-        recipientIds.map((id) => ({
-          name: 'send',
-          data: { recipientId: id },
-          opts: { jobId: id },
-        })),
-      );
-    } catch (err) {
-      await this.repo.markFailed(recipientIds, QUEUE_UNAVAILABLE);
-      throw err;
-    }
+/**
+ * Sem fila não há envio: quem ficou QUEUED vira FAILED e o erro sobe (500 no
+ * POST). Um job por destinatário, jobId = recipientId. Usado pelo envio imediato
+ * e pelo disparo agendado (T9).
+ */
+export async function enqueueTeamSend(
+  queue: Queue<TeamWhatsappSendJob>,
+  repo: Pick<TeamWhatsappRepository, 'markFailed'>,
+  recipientIds: readonly string[],
+): Promise<void> {
+  try {
+    await queue.addBulk(
+      recipientIds.map((id) => ({
+        name: 'send',
+        data: { recipientId: id },
+        opts: { jobId: id },
+      })),
+    );
+  } catch (err) {
+    await repo.markFailed(recipientIds, QUEUE_UNAVAILABLE);
+    throw err;
   }
+}
+
+/**
+ * Início do turno do filtro na data da escala, em Manaus (GC5). O DTO garante
+ * alvo setor com turno em `shift_start`; agora ou no passado → 422.
+ */
+function shiftStartOf(target: ResolvedTarget, now: Date): Date {
+  if (!target.shift || !target.day) throw invalidShift();
+  const start = zonedStart(target.day.rosterDate, target.shift.startTime);
+  if (start.getTime() <= now.getTime()) throw scheduleInPast();
+  return start;
+}
+
+/** Sem `shiftId` = todos os turnos; com, o turno precisa estar entre os ativos. */
+function requireShift(
+  active: readonly ShiftRef[],
+  shiftId: string | undefined,
+): TeamShiftSnapshot | null {
+  if (shiftId === undefined) return null;
+  const shift = active.find((s) => s.id === shiftId);
+  if (!shift) throw invalidShift();
+  return shift;
+}
+
+type ChannelRow = Awaited<
+  ReturnType<TeamWhatsappRepository['listEligibleChannels']>
+>[number];
+
+/** Só provedores de equipe (defesa além do filtro do repositório), com o último estado. */
+function eligibleChannels(
+  rows: readonly ChannelRow[],
+): TeamTargetsResponse['channels'] {
+  return rows.flatMap(({ provider, connectionEvents, ...rest }) =>
+    isTeamProvider(provider)
+      ? [
+          {
+            ...rest,
+            provider,
+            connectionState: toConnectionState(connectionEvents[0]?.state),
+          },
+        ]
+      : [],
+  );
+}
+
+/** Colunas de snapshot do envio; null = todos os turnos ou alvo pessoa. */
+function shiftColumns(shift: TeamShiftSnapshot | null) {
+  return {
+    shiftId: shift?.id ?? null,
+    shiftName: shift?.name ?? null,
+    shiftStartTime: shift?.startTime ?? null,
+    shiftEndTime: shift?.endTime ?? null,
+  };
 }
 
 function isSkipped(r: NewTeamRecipient): r is NewTeamRecipient & {
@@ -289,6 +523,8 @@ const STATUS_KEY: Record<
   SENT: 'sent',
   FAILED: 'failed',
   SKIPPED: 'skipped',
+  SCHEDULED: 'scheduled',
+  CANCELLED: 'cancelled',
 };
 
 const zeroCounts = (): TeamDispatchCounts => ({
@@ -296,6 +532,8 @@ const zeroCounts = (): TeamDispatchCounts => ({
   sent: 0,
   failed: 0,
   skipped: 0,
+  scheduled: 0,
+  cancelled: 0,
 });
 
 function countsByDispatch(
@@ -334,7 +572,7 @@ function recipientsByDispatch(
     list.push({
       userId: r.userId,
       name: r.userName,
-      shift: r.shift,
+      shiftName: r.shiftName,
       status: r.status,
       reason: reasonOf(r),
     });
@@ -347,6 +585,31 @@ function reasonOf(r: TeamRecipientRow): string | null {
   if (r.status === 'FAILED') return r.errorCode;
   if (r.status === 'SKIPPED') return r.skipReason;
   return null;
+}
+
+/** Snapshot gravado no envio; incompleto (todos os turnos, alvo pessoa) → null. */
+export function shiftSnapshotOf(
+  row: Pick<
+    TeamDispatchRow,
+    'shiftId' | 'shiftName' | 'shiftStartTime' | 'shiftEndTime'
+  >,
+): TeamShiftSnapshot | null {
+  const { shiftId, shiftName, shiftStartTime, shiftEndTime } = row;
+  if (!shiftId || !shiftName || !shiftStartTime || !shiftEndTime) return null;
+  return {
+    id: shiftId,
+    name: shiftName,
+    startTime: shiftStartTime,
+    endTime: shiftEndTime,
+  };
+}
+
+/** Foto da escala → escalados não marcados e de folga, fora dos destinatários. */
+function rosterOf(row: TeamDispatchRow, recipients: TeamRecipientItem[]) {
+  const recipientIds = new Set(
+    recipients.flatMap((r) => (r.userId ? [r.userId] : [])),
+  );
+  return rosterGroups(parseRosterSnapshot(row.roster), recipientIds);
 }
 
 function toListItem(
@@ -362,10 +625,15 @@ function toListItem(
       type: row.targetType === 'USER' ? 'user' : 'sector',
       id: row.targetId,
       label: row.targetLabel,
-      shift: row.shift,
+      shift: shiftSnapshotOf(row),
     },
     channel: row.channel,
     counts: counts ?? zeroCounts(),
     recipients,
+    rosterDate: row.rosterDate ? fromDbDate(row.rosterDate) : null,
+    ...rosterOf(row, recipients),
+    state: row.state,
+    scheduledFor: row.scheduledFor?.toISOString() ?? null,
+    firedAt: row.firedAt?.toISOString() ?? null,
   };
 }

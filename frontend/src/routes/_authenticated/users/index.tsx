@@ -25,7 +25,8 @@ import { TemporaryPasswordModal } from '@/features/users/components/temporary-pa
 import { UserPermissionsDialog } from '@/features/users/components/user-permissions-dialog';
 import { SendWhatsappDialog } from '@/features/team-whatsapp/components/send-whatsapp-dialog';
 import { formatPhoneBR } from '@/lib/format-phone';
-import { shiftLabel } from '@/lib/work-shift';
+import { useShifts } from '@/features/shifts/api';
+import { NO_SHIFT_LABEL } from '@/features/shifts/labels';
 import { ROLE_LABEL } from '@/features/users/role';
 import type { UserSummary } from '@/features/users/schemas';
 
@@ -108,11 +109,12 @@ function UsersHeader({ onInvite }: { onInvite: () => void }) {
 }
 
 function UsersTable({ users, selfId, dialogs }: { users: UserSummary[]; selfId?: string; dialogs: UserDialogState }) {
+  const shiftNames = new Map((useShifts().data ?? []).map((shift) => [shift.id, shift.name]));
   return (
     <div className="rounded-md border" style={{ borderColor: 'var(--border)' }}>
       <Table>
-        <TableHeader><TableRow><TableHead>Nome</TableHead><TableHead>Email</TableHead><TableHead>Telefone</TableHead><TableHead>Setor</TableHead><TableHead>Turno</TableHead><TableHead>Perfil</TableHead><TableHead>Acesso</TableHead><TableHead className="w-10" /></TableRow></TableHeader>
-        <TableBody>{users.map((user) => <UserRow key={user.id} user={user} isSelf={user.id === selfId} dialogs={dialogs} />)}</TableBody>
+        <TableHeader><TableRow><TableHead>Nome</TableHead><TableHead>Email</TableHead><TableHead>Telefone</TableHead><TableHead>Setor</TableHead><TableHead>Turno</TableHead><TableHead>Função</TableHead><TableHead>Perfil</TableHead><TableHead>Acesso</TableHead><TableHead className="w-10" /></TableRow></TableHeader>
+        <TableBody>{users.map((user) => <UserRow key={user.id} user={user} shiftNames={shiftNames} isSelf={user.id === selfId} dialogs={dialogs} />)}</TableBody>
       </Table>
     </div>
   );
@@ -124,14 +126,21 @@ function whatsappHint(user: UserSummary): string | undefined {
   return user.isActive ? undefined : 'Usuário inativo';
 }
 
-function UserRow({ user, isSelf, dialogs }: { user: UserSummary; isSelf: boolean; dialogs: UserDialogState }) {
+/** Nome do turno (mesmo inativo); "Sem turno" quando não há; traço enquanto a lista carrega. */
+function shiftCellText(user: UserSummary, shiftNames: ReadonlyMap<string, string>): string {
+  if (!user.shiftId) return NO_SHIFT_LABEL;
+  return shiftNames.get(user.shiftId) ?? '—';
+}
+
+function UserRow({ user, shiftNames, isSelf, dialogs }: { user: UserSummary; shiftNames: ReadonlyMap<string, string>; isSelf: boolean; dialogs: UserDialogState }) {
   return (
     <TableRow>
       <TableCell className="font-medium">{user.name ?? '—'}</TableCell>
       <TableCell className="text-sm" style={{ color: 'var(--foreground-muted)' }}>{user.email}</TableCell>
       <TableCell className="text-sm">{formatPhoneBR(user.phoneE164)}</TableCell>
       <TableCell>{user.sector?.name ?? 'Sem setor'}</TableCell>
-      <TableCell>{shiftLabel(user.shift)}</TableCell>
+      <TableCell>{shiftCellText(user, shiftNames)}</TableCell>
+      <TableCell>{user.jobTitle ?? '—'}</TableCell>
       <TableCell><Badge variant={user.role === 'ADMIN' ? 'default' : 'secondary'}>{ROLE_LABEL[user.role]}</Badge></TableCell>
       <TableCell><Badge variant={user.isActive ? 'default' : 'outline'}>{user.isActive ? 'Ativo' : 'Inativo'}</Badge></TableCell>
       <TableCell>

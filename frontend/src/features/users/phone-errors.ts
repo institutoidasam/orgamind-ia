@@ -1,4 +1,4 @@
-import { HTTPError } from 'ky';
+import { readApiErrorBody } from '@/lib/api-error';
 
 const PHONE_ERROR_MESSAGES: Record<string, string> = {
   'user.phone_taken': 'Este telefone já está em uso por outro usuário.',
@@ -7,11 +7,7 @@ const PHONE_ERROR_MESSAGES: Record<string, string> = {
 
 /** Mensagem para o campo Telefone quando a API recusa o número; null = erro não é de telefone. */
 export async function userPhoneFieldError(err: unknown): Promise<string | null> {
-  if (!(err instanceof HTTPError)) return null;
-  const body = (await err.response
-    .clone()
-    .json()
-    .catch(() => null)) as { code?: string } | null;
+  const body = await readApiErrorBody(err);
   return (body?.code && PHONE_ERROR_MESSAGES[body.code]) || null;
 }
 

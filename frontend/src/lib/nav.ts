@@ -12,6 +12,8 @@ import {
   QrCode,
   ShieldCheck,
   Settings,
+  Clock,
+  CalendarDays,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -77,9 +79,11 @@ export const NAV: NavItem[] = [
   { to: '/caixa-de-entrada', label: 'Caixa de entrada', icon: MessageSquare, section: 'ops', roles: ALL_INTERNAL_ROLES },
   { to: '/nova-comunicacao', label: 'Nova comunicação', icon: Send, section: 'ops', roles: WRITE_INTERNAL_ROLES },
   { to: '/whatsapp-equipe', label: 'WhatsApp da equipe', icon: MessageCircle, section: 'ops', roles: WRITE_INTERNAL_ROLES },
+  { to: '/escala', label: 'Escala', icon: CalendarDays, section: 'ops', roles: WRITE_INTERNAL_ROLES },
   { to: '/demandas', label: 'Demandas', icon: FileText, section: 'sys', roles: ALL_INTERNAL_ROLES },
   { to: '/comunicados', label: 'Comunicados', icon: MessageSquare, section: 'sys', roles: ALL_INTERNAL_ROLES },
   { to: '/setores', label: 'Setores', icon: Users, section: 'admin', roles: ['ADMIN'] },
+  { to: '/turnos', label: 'Turnos', icon: Clock, section: 'admin', roles: ['ADMIN'] },
   { to: '/users', label: 'Usuários', icon: UserCog, section: 'admin', roles: ['ADMIN'] },
   { to: '/connect', label: 'Números e canais', icon: Wifi, section: 'admin', roles: ['ADMIN'] },
 

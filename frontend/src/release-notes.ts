@@ -31,6 +31,26 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.10.21.1',
+    date: '2026-10-21',
+    title: 'Escala da equipe, turnos com horário e envio agendado',
+    items: [
+      {
+        text: 'Cadastre os turnos com nome e horário. Confira os horários de "1º turno" (06:00–14:00) e "2º turno" (14:00–22:00), que vieram do cadastro anterior.',
+        where: '/turnos',
+      },
+      {
+        text: 'Monte a escala de cada pessoa com os modelos Semanal, Rodízio semanal ou 12x36 e marque folga, férias, troca de turno ou outro setor.',
+        where: '/escala',
+      },
+      {
+        text: 'No WhatsApp da equipe, escolha a data e veja quem está escalado, de folga e sem telefone. Agende o envio para o início do turno e cancele se precisar.',
+        where: '/whatsapp-equipe',
+      },
+      { text: 'Usuários ganham o campo Função.', where: '/users' },
+    ],
+  },
+  {
     version: '2026.10.21',
     date: '2026-10-21',
     title: 'Turnos no WhatsApp da equipe',

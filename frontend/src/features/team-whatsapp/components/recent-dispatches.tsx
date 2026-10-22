@@ -1,29 +1,64 @@
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
-import { shiftLabel } from '@/lib/work-shift';
-import { recipientStatusLabel } from '../error-messages';
+import { OFF_REASON_LABEL, recipientStatusLabel } from '../error-messages';
 import type { DispatchList } from '../schemas';
 
 type Item = DispatchList['items'][number];
 
-function countsText({ queued, sent, failed, skipped }: Item['counts']): string {
-  return `Enfileirados ${queued} · Enviados ${sent} · Falhas ${failed} · Pulados ${skipped}`;
+function countsText({ queued, sent, failed, skipped, scheduled, cancelled }: Item['counts']): string {
+  const base = `Enfileirados ${queued} · Enviados ${sent} · Falhas ${failed} · Pulados ${skipped}`;
+  return [base, scheduled > 0 && `Agendados ${scheduled}`, cancelled > 0 && `Cancelados ${cancelled}`]
+    .filter(Boolean)
+    .join(' · ');
 }
 
-function RecipientsDetails({ recipients }: { recipients: Item['recipients'] }) {
-  if (recipients.length === 0) return null;
+const STATE_LABEL = { SCHEDULED: 'Agendado', CANCELLED: 'Cancelado' } as const;
+
+function StateBadge({ state }: { state: Item['state'] }) {
+  if (state === 'DISPATCHED') return null;
+  return <p className="font-medium">{STATE_LABEL[state]}</p>;
+}
+
+const joinParts = (parts: (string | null)[]): string => parts.filter(Boolean).join(' · ');
+
+/** Uma linha do grupo, sem telefone: nome · função · turno ou motivo da folga. */
+function personText(p: Item['unselected'][number]): string {
+  return joinParts([p.name, p.jobTitle, p.shiftName, p.reason && OFF_REASON_LABEL[p.reason]]);
+}
+
+function Group({ title, lines }: { title: string; lines: { key: string; text: string }[] }) {
+  if (lines.length === 0) return null;
+  return (
+    <div className="mt-1">
+      <p className="font-medium">{title}</p>
+      <ul aria-label={title} className="list-disc pl-4">
+        {lines.map((l) => <li key={l.key}>{l.text}</li>)}
+      </ul>
+    </div>
+  );
+}
+
+const personLines = (people: Item['unselected']) =>
+  people.map((p, index) => ({ key: `${index}:${p.userId ?? p.name}`, text: personText(p) }));
+
+function recipientLines(recipients: Item['recipients']) {
+  // userId nulo (usuário apagado) pode repetir o nome, então o índice entra na chave.
+  return recipients.map((r, index) => ({
+    key: `${index}:${r.userId ?? r.name}`,
+    text: `${joinParts([r.name, r.shiftName])} — ${recipientStatusLabel(r)}`,
+  }));
+}
+
+/** Três grupos da foto da escala: Destinatários (com resultado), Escalados não marcados, De folga. */
+function RecipientsDetails({ item }: { item: Item }) {
+  if (item.recipients.length + item.unselected.length + item.off.length === 0) return null;
   return (
     <details className="mt-1">
       <summary className="cursor-pointer">Ver destinatários</summary>
-      <ul className="mt-1 list-disc pl-4">
-        {recipients.map((r, index) => (
-          // userId nulo (usuário apagado) pode repetir o nome, então o índice entra na chave.
-          <li key={`${index}:${r.userId ?? r.name}`}>
-            {`${r.name} · ${shiftLabel(r.shift)} — ${recipientStatusLabel(r)}`}
-          </li>
-        ))}
-      </ul>
+      <Group title="Destinatários" lines={recipientLines(item.recipients)} />
+      <Group title="Escalados não marcados" lines={personLines(item.unselected)} />
+      <Group title="De folga" lines={personLines(item.off)} />
     </details>
   );
 }
@@ -36,8 +71,9 @@ function DispatchRow({ item }: { item: Item }) {
       <TableCell>{item.target.label}</TableCell>
       <TableCell>{item.channel?.name ?? 'canal removido'}</TableCell>
       <TableCell className="text-sm">
+        <StateBadge state={item.state} />
         {countsText(item.counts)}
-        <RecipientsDetails recipients={item.recipients} />
+        <RecipientsDetails item={item} />
       </TableCell>
     </TableRow>
   );

@@ -29,14 +29,15 @@ const fullUser = (over: Partial<UserSummary> = {}): UserSummary => ({
   mustChangePassword: false,
   lastLoginAt: null,
   phoneE164: '+5592991234567',
-  shift: 'FIRST',
+  shiftId: 'shift_first',
+  jobTitle: null,
   createdAt: new Date('2026-10-01T12:00:00Z'),
   updatedAt: new Date('2026-10-01T12:00:00Z'),
   createdById: null,
   createdBy: null,
   ...over,
 });
-const invite = (extra: { shift?: 'FIRST' | 'SECOND' | null } = {}) =>
+const invite = (extra: { shiftId?: string | null } = {}) =>
   svc.createUser(
     { email: 'a@idasam.org', role: 'ADMIN', phone: '92991234567', ...extra },
     'admin',
@@ -60,55 +61,83 @@ beforeEach(() => {
   phones.resolveContactId.mockResolvedValue('c1');
 });
 
-describe('UsersService — turno no cadastro e na edição', () => {
-  it('cadastro grava o turno informado e null quando ausente', async () => {
-    await invite({ shift: 'SECOND' });
+const ACTIVE = { id: 'shift_first', isActive: true };
+const invalidShift = { status: 422, code: 'users.invalid_shift' };
+
+describe('UsersService — turno (shiftId) no cadastro e na edição', () => {
+  it('POST e PATCH com shiftId de turno ativo gravam shift_first; POST sem turno não liga', async () => {
+    repo.findShiftForAssignment.mockResolvedValue(ACTIVE);
+    await invite({ shiftId: 'shift_first' });
     await invite();
-    expect(repo.create.mock.calls[0][0]).toMatchObject({ shift: 'SECOND' });
-    expect(repo.create.mock.calls[1][0]).toMatchObject({ shift: null });
+    await svc.updateUser('u1', { shiftId: 'shift_first' }, 'admin');
+    const connect = { workShift: { connect: { id: 'shift_first' } } };
+    expect(repo.create.mock.calls[0][0]).toMatchObject(connect);
+    expect(repo.create.mock.calls[1][0]).not.toHaveProperty('workShift');
+    expect(patchData()).toEqual(connect);
+    expect(repo.findShiftForAssignment.mock.calls).toEqual([
+      ['shift_first'],
+      ['shift_first'],
+    ]);
   });
 
-  it('PATCH sem shift não envia shift ao repositório (R5)', async () => {
+  it.each([
+    ['inexistente', null],
+    ['inativo', { id: 'shift_old', isActive: false }],
+  ])('shiftId %s → 422 users.invalid_shift sem gravar', async (_, found) => {
+    repo.findShiftForAssignment.mockResolvedValue(found);
+    await expect(invite({ shiftId: 'shift_old' })).rejects.toMatchObject(
+      invalidShift,
+    );
+    await expect(
+      svc.updateUser('u1', { shiftId: 'shift_old' }, 'admin'),
+    ).rejects.toMatchObject(invalidShift);
+    expect(repo.create.mock.calls).toEqual([]);
+    expect(repo.updateWithLastAdminGuard.mock.calls).toEqual([]);
+  });
+
+  it('PATCH sem shiftId não envia shiftId ao repositório', async () => {
     await svc.updateUser('u1', { name: 'Ana Maria' }, 'admin');
     expect(patchData()).toMatchObject({ name: 'Ana Maria' });
-    expect(patchData()).not.toHaveProperty('shift');
+    expect(patchData()).not.toHaveProperty('workShift');
+    expect(patchData()).not.toHaveProperty('shiftId');
   });
 
-  it('PATCH shift null limpa e não revoga sessão (R5)', async () => {
-    await svc.updateUser('u1', { shift: null }, 'admin');
-    expect(patchData()).toEqual({ shift: null });
+  it('PATCH shiftId null limpa e não revoga sessão', async () => {
+    await svc.updateUser('u1', { shiftId: null }, 'admin');
+    expect(patchData()).toEqual({ workShift: { disconnect: true } });
+    expect(repo.findShiftForAssignment.mock.calls).toEqual([]);
     expect(refresh.revokeAllForUser.mock.calls).toEqual([]);
   });
 });
 
-describe('Contrato de usuário — turno', () => {
-  it('listUsers devolve shift e passa no contrato', async () => {
+describe('Contrato de usuário — shiftId', () => {
+  it('listUsers devolve shiftId e passa no contrato', async () => {
     repo.findMany.mockResolvedValue({
       data: [
-        fullUser({ shift: null }),
-        fullUser({ id: 'u2', shift: 'SECOND' }),
+        fullUser({ shiftId: null }),
+        fullUser({ id: 'u2', shiftId: 'shift_second' }),
       ],
       total: 2,
     });
     const res = await svc.listUsers(1, 20);
     const wire = userListResponseSchema.parse(JSON.parse(JSON.stringify(res)));
-    expect(wire.data.map((u) => u.shift)).toEqual([null, 'SECOND']);
+    expect(wire.data.map((u) => u.shiftId)).toEqual([null, 'shift_second']);
   });
 
-  it('createUserSchema mantém o turno informado e rejeita turno desconhecido', () => {
+  it('createUserSchema mantém shiftId, aceita null e rejeita vazio', () => {
     const base = { email: 'a@idasam.org', phone: '92991234567' };
-    expect(createUserSchema.parse({ ...base, shift: 'FIRST' }).shift).toBe(
-      'FIRST',
-    );
-    expect(
-      createUserSchema.safeParse({ ...base, shift: 'THIRD' }).success,
-    ).toBe(false);
+    const parse = (shiftId: unknown) =>
+      createUserSchema.safeParse({ ...base, shiftId });
+    expect(parse('shift_first').data?.shiftId).toBe('shift_first');
+    expect(parse(null).data?.shiftId).toBeNull();
+    expect(parse('').success).toBe(false);
   });
 
   it.each([
-    [{ shift: null }, true],
-    [{ shift: 'SECOND' }, true],
-    [{ shift: 'THIRD' }, false],
+    [{ shiftId: null }, true],
+    [{ shiftId: 'shift_second' }, true],
+    [{ shiftId: '' }, false],
+    [{ shift: 'FIRST' }, false],
   ])('updateUserSchema %o → válido=%s', (body, ok) => {
     expect(updateUserSchema.safeParse(body).success).toBe(ok);
   });

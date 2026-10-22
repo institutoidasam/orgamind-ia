@@ -35,6 +35,10 @@ import { ExcelImportProcessor } from './modules/excel-import/excel-import.proces
 import { BotsModule } from './modules/bots/bots.module';
 import { BotReplyProcessor } from './modules/bots/bot-reply.processor';
 import { TeamWhatsappSendProcessor } from './modules/team-whatsapp/team-whatsapp-send.processor';
+import { TeamWhatsappSchedulerProcessor } from './modules/team-whatsapp/team-whatsapp-scheduler.processor';
+import { TeamWhatsappScheduleService } from './modules/team-whatsapp/team-whatsapp-schedule.service';
+import { TeamWhatsappRepository } from './modules/team-whatsapp/team-whatsapp.repository';
+import { StaffScheduleRepository } from './modules/staff-schedule/staff-schedule.repository';
 import { ConsentModule } from './modules/consent/consent.module';
 import { OrganizationModule } from './modules/organization/organization.module';
 import { serializeErrorForLog } from './shared/logging/pino-error-serializer';
@@ -119,6 +123,15 @@ import { serializeErrorForLog } from './shared/logging/pino-error-serializer';
     // TEAM_WHATSAPP_SEND consumer — SÓ aqui, como os demais. ChatService vem do
     // ChatModule, ConsentService do ConsentModule (@Global), REDIS_CLIENT do RedisModule.
     TeamWhatsappSendProcessor,
+    // TEAM_WHATSAPP_SCHEDULER (T9) — tick do envio agendado, SÓ aqui. O worker
+    // não importa TeamWhatsappModule nem StaffScheduleModule (trariam as rotas
+    // HTTP): registra só o serviço do agendado e os repositórios que ele usa.
+    // PrismaService, AuditService (@Global) e a fila TEAM_WHATSAPP_SEND
+    // (QueueModule, @Global) já estão em escopo.
+    TeamWhatsappSchedulerProcessor,
+    TeamWhatsappScheduleService,
+    TeamWhatsappRepository,
+    StaffScheduleRepository,
   ],
 })
 export class WorkerModule {}

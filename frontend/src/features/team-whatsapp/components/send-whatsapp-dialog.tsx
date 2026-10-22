@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { HTTPError } from 'ky';
 import { toast } from 'sonner';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -10,10 +9,13 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import { formatDayMonth } from '@/lib/civil-date';
 import { formatPhoneBR } from '@/lib/format-phone';
 import { useCreateTeamDispatch, useTeamTargets } from '../api';
 import { channelAvailability } from '../channel-availability';
-import { PACING_HINT, SKIP_REASON_LABEL, TARGETS_ERROR_MESSAGE, teamErrorMessage } from '../error-messages';
+import {
+  apiErrorCode, PACING_HINT, SKIP_REASON_LABEL, TARGETS_ERROR_MESSAGE, teamErrorMessage,
+} from '../error-messages';
 import type { CreateDispatchInput, DispatchResult, RecipientPreview, SendTarget, TeamChannel } from '../schemas';
 
 const MAX_TEXT = 2000;
@@ -22,14 +24,19 @@ type Props = { open: boolean; onOpenChange: (open: boolean) => void; target: Sen
 
 type SectorTarget = Extract<SendTarget, { type: 'sector' }>;
 
-/** Corpo do POST: "todos os turnos" não manda `shift`; "todos do turno" não manda `userIds`. */
+/**
+ * Corpo do POST: sempre leva a data conferida; "todos os turnos" não manda `shiftId`,
+ * "todos da lista" não manda `userIds`, e `includeOff` só vai quando marcado.
+ */
 function requestTarget(target: SendTarget): CreateDispatchInput['target'] {
   if (target.type === 'user') return { type: 'user', userId: target.userId };
   return {
     type: 'sector',
     sectorId: target.sectorId,
-    ...(target.shift ? { shift: target.shift } : {}),
+    date: target.date,
+    ...(target.shiftId ? { shiftId: target.shiftId } : {}),
     ...(target.userIds ? { userIds: target.userIds } : {}),
+    ...(target.includeOff ? { includeOff: true } : {}),
   };
 }
 
@@ -53,16 +60,26 @@ function SectorPeople({ target }: { target: SectorTarget }) {
   );
 }
 
-async function errorCode(err: unknown): Promise<string | undefined> {
-  if (!(err instanceof HTTPError)) return undefined;
-  const body = (await err.response.clone().json().catch(() => null)) as { code?: string } | null;
-  return body?.code;
+type When = 'now' | 'shift_start';
+
+const SHIFT_PASSED_TEXT = 'O início deste turno já passou';
+
+/** "No início do turno" só existe com turno específico; o início vem do servidor (GC5). */
+function shiftStartOf(target: SendTarget): NonNullable<SectorTarget['shiftStart']> | null {
+  return target.type === 'sector' && target.shiftId ? (target.shiftStart ?? null) : null;
 }
 
-function notifyQueued(result: DispatchResult) {
+const hasStarted = (startsAt: string) => Date.parse(startsAt) <= Date.now();
+
+function notifyDone(result: DispatchResult, target: SendTarget) {
   const skipped = result.skipped.map((s) => `${s.name}: ${SKIP_REASON_LABEL[s.reason]}`);
-  toast.success(`Mensagem enfileirada para ${result.queued} pessoa(s)`, {
-    description: [PACING_HINT, ...skipped].join('\n'),
+  const sector = target.type === 'sector' ? target : null;
+  const scheduled = result.scheduled > 0 && sector?.shiftStart;
+  const title = scheduled && sector
+    ? `Agendado para ${formatDayMonth(sector.date)} às ${sector.shiftStart?.startTime}`
+    : `Mensagem enfileirada para ${result.queued} pessoa(s)`;
+  toast.success(title, {
+    description: [...(scheduled ? [] : [PACING_HINT]), ...skipped].join('\n'),
     // sonner não preserva '\n' por padrão; escopo local, sem mexer no Toaster global.
     classNames: { description: 'whitespace-pre-line' },
   });
@@ -107,19 +124,23 @@ function useSendForm({ target, onOpenChange }: Pick<Props, 'target' | 'onOpenCha
   const [picked, setPicked] = useState('');
   const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [mode, setMode] = useState<When>('now');
   const channelId = resolveChannelId(usable, picked);
   const canSend = channelsStatus === 'ready' && !!channelId && text.trim() !== '' && !send.isPending;
 
-  async function submit() {
+  async function submit(when: When) {
     setError(null);
+    setMode(when);
     try {
-      notifyQueued(await send.mutateAsync({ channelId, text, target: requestTarget(target) }));
+      const body = { channelId, text, target: requestTarget(target) };
+      const result = await send.mutateAsync(when === 'shift_start' ? { ...body, when } : body);
+      notifyDone(result, target);
       onOpenChange(false);
     } catch (err) {
-      setError(teamErrorMessage(await errorCode(err)));
+      setError(teamErrorMessage(await apiErrorCode(err)));
     }
   }
-  return { channels, hasUsable: usable.length > 0, channelsStatus, channelId, setPicked, text, setText, error, canSend, pending: send.isPending, submit };
+  return { channels, hasUsable: usable.length > 0, channelsStatus, channelId, setPicked, text, setText, error, canSend, pending: send.isPending, mode, submit };
 }
 
 type ChannelSelectProps = {
@@ -155,6 +176,29 @@ function ChannelSelect({ channels, hasUsable, status, value, onChange }: Channel
   );
 }
 
+type FooterProps = { form: ReturnType<typeof useSendForm>; target: SendTarget; onClose: () => void };
+
+function DialogActions({ form, target, onClose }: FooterProps) {
+  const start = shiftStartOf(target);
+  const passed = start !== null && hasStarted(start.startsAt);
+  return (
+    <>
+      {passed && <p className="w-full text-sm text-muted-foreground">{SHIFT_PASSED_TEXT}</p>}
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>Cancelar</Button>
+        {start && (
+          <Button variant="secondary" disabled={!form.canSend || passed} onClick={() => form.submit('shift_start')}>
+            {form.pending && form.mode === 'shift_start' ? 'Agendando...' : 'No início do turno'}
+          </Button>
+        )}
+        <Button disabled={!form.canSend} onClick={() => form.submit('now')}>
+          {form.pending && form.mode === 'now' ? 'Enviando...' : 'Enviar agora'}
+        </Button>
+      </DialogFooter>
+    </>
+  );
+}
+
 export function SendWhatsappDialog({ open, onOpenChange, target }: Props) {
   const form = useSendForm({ target, onOpenChange });
   return (
@@ -177,10 +221,7 @@ export function SendWhatsappDialog({ open, onOpenChange, target }: Props) {
           </div>
           {form.error && <p role="alert" className="text-sm text-destructive">{form.error}</p>}
         </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancelar</Button>
-          <Button disabled={!form.canSend} onClick={form.submit}>{form.pending ? 'Enviando...' : 'Enviar'}</Button>
-        </DialogFooter>
+        <DialogActions form={form} target={target} onClose={() => onOpenChange(false)} />
       </DialogContent>
     </Dialog>
   );

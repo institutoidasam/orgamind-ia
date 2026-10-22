@@ -3,15 +3,20 @@ import { createFileRoute } from '@tanstack/react-router';
 import { HTTPError } from 'ky';
 import { QueryErrorFallback } from '@/components/query-error-fallback';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useTeamDispatches, useTeamTargets } from '@/features/team-whatsapp/api';
+import {
+  useScheduledDispatches, useTeamDispatches, useTeamRoster, useTeamTargets,
+} from '@/features/team-whatsapp/api';
+import { InProgressNotice } from '@/features/team-whatsapp/components/in-progress-notice';
 import { RecentDispatches } from '@/features/team-whatsapp/components/recent-dispatches';
+import { ScheduledDispatches } from '@/features/team-whatsapp/components/scheduled-dispatches';
 import { SendWhatsappDialog } from '@/features/team-whatsapp/components/send-whatsapp-dialog';
 import { MemberSelection } from '@/features/team-whatsapp/components/member-selection';
 import { SectorShiftPicker } from '@/features/team-whatsapp/components/sector-shift-picker';
 import {
-  buildSectorTarget, selectedIdsIn, toggleAllEnabled, visibleMembers, type ShiftChoice,
+  buildSectorTarget, eligibleMembers, noScheduleCount, offMembers, selectedIdsIn, toggleAllEnabled,
 } from '@/features/team-whatsapp/member-filter';
-import type { SendTarget, TeamSector } from '@/features/team-whatsapp/schemas';
+import type { SendTarget, TeamRoster, TeamTargets } from '@/features/team-whatsapp/schemas';
+import { useSendFilters } from '@/features/team-whatsapp/use-send-filters';
 
 const route = createFileRoute('/_authenticated/whatsapp-equipe/')({
   component: TeamWhatsappPage,
@@ -42,7 +47,8 @@ function TeamWhatsappPage() {
       {targets.isError && <TargetsError error={targets.error} onRetry={targets.refetch} />}
       {targets.data && (
         <>
-          <SendSection sectors={targets.data.sectors} onSend={setTarget} />
+          <SendSection targets={targets.data} onSend={setTarget} />
+          <ScheduledSection />
           <RecentSection />
         </>
       )}
@@ -55,41 +61,97 @@ function TeamWhatsappPage() {
 
 const NO_SECTORS_TEXT = 'Nenhum setor ativo para envio. Cadastre setores em Setores.';
 
-function SendSection({ sectors, onSend }: { sectors: TeamSector[]; onSend: (target: SendTarget) => void }) {
-  const [pickedSectorId, setPickedSectorId] = useState<string | null>(null);
-  const [choice, setChoice] = useState<ShiftChoice | null>(null);
-  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
-  if (sectors.length === 0) {
+type Filters = ReturnType<typeof useSendFilters>;
+type SendProps = { targets: TeamTargets; onSend: (target: SendTarget) => void };
+
+function SendSection({ targets, onSend }: SendProps) {
+  const filters = useSendFilters(targets.today, targets.sectors);
+  if (targets.sectors.length === 0) {
     return <p className="rounded-md border p-6 text-sm text-muted-foreground">{NO_SECTORS_TEXT}</p>;
   }
-  const sectorId = pickedSectorId ?? (sectors.length === 1 ? sectors[0].id : null);
-  const sector = sectors.find((s) => s.id === sectorId) ?? null;
-  const visible = sector && choice ? visibleMembers(sector, choice) : [];
-  // Trocar setor ou turno limpa a seleção (D4).
-  const pickSector = (id: string) => { setPickedSectorId(id); setSelected(new Set()); };
-  const pickChoice = (c: ShiftChoice) => { setChoice(c); setSelected(new Set()); };
-  const toggle = (id: string) => setSelected((prev) => {
-    const next = new Set(prev);
-    if (!next.delete(id)) next.add(id);
-    return next;
-  });
+  const { sectorId, choice, date } = filters;
+  const { inProgress } = targets;
+  const ready = sectorId !== null && choice !== null && date !== '';
   return (
     <section className="space-y-4">
-      <SectorShiftPicker sectors={sectors} sectorId={sectorId} choice={choice} onSectorChange={pickSector} onChoiceChange={pickChoice} />
-      {sector && choice ? (
-        <MemberSelection
-          sector={sector}
-          choice={choice}
-          selected={selected}
-          onToggle={toggle}
-          onToggleAll={() => setSelected(toggleAllEnabled(visible, selected))}
-          onSendAll={() => onSend(buildSectorTarget(sector, choice, visible, null))}
-          onSendSelected={() => onSend(buildSectorTarget(sector, choice, visible, selectedIdsIn(visible, selected)))}
+      {inProgress && (
+        <InProgressNotice
+          inProgress={inProgress}
+          current={{ date, choice }}
+          onView={() => filters.viewShift(inProgress.date, inProgress.shift.id)}
         />
+      )}
+      <SectorShiftPicker
+        sectors={targets.sectors} shifts={targets.shifts} sectorId={sectorId} date={date} choice={choice}
+        onSectorChange={filters.pickSector} onDateChange={filters.pickDate} onChoiceChange={filters.pickChoice}
+      />
+      {ready ? (
+        <RosterSection targets={targets} filters={filters} picked={{ sectorId, date, choice }} onSend={onSend} />
       ) : (
-        <p className="rounded-md border p-6 text-sm text-muted-foreground">Escolha o setor e o turno</p>
+        <p className="rounded-md border p-6 text-sm text-muted-foreground">Escolha o setor, a data e o turno</p>
       )}
     </section>
+  );
+}
+
+type RosterSectionProps = {
+  targets: TeamTargets;
+  filters: Filters;
+  picked: { sectorId: string; date: string; choice: string };
+  onSend: (target: SendTarget) => void;
+};
+
+function RosterSection({ targets, filters, picked, onSend }: RosterSectionProps) {
+  const roster = useTeamRoster({ sectorId: picked.sectorId, date: picked.date });
+  if (roster.isLoading) return <Skeleton className="h-40 w-full" />;
+  if (roster.isError) return <QueryErrorFallback error={roster.error} onRetry={roster.refetch} />;
+  if (!roster.data) return null;
+  return <RosterList roster={roster.data} targets={targets} filters={filters} choice={picked.choice} onSend={onSend} />;
+}
+
+type RosterListProps = {
+  roster: TeamRoster;
+  targets: TeamTargets;
+  filters: Filters;
+  choice: string;
+  onSend: (target: SendTarget) => void;
+};
+
+/** Anexa o início do turno (ISO do servidor + hora gravada) para o diálogo habilitar o agendamento. */
+function withShiftStart(roster: TeamRoster, targets: TeamTargets, target: SendTarget): SendTarget {
+  if (target.type !== 'sector' || !target.shiftId) return target;
+  const startsAt = roster.shiftStarts.find((s) => s.shiftId === target.shiftId)?.startsAt;
+  const startTime = targets.shifts.find((s) => s.id === target.shiftId)?.startTime;
+  return startsAt && startTime ? { ...target, shiftStart: { startsAt, startTime } } : target;
+}
+
+function RosterList({ roster, targets, filters, choice, onSend }: RosterListProps) {
+  const { includeOff, selected } = filters;
+  const visible = eligibleMembers(roster.members, choice, includeOff);
+  const shiftNames = new Map(targets.shifts.map((s) => [s.id, s.name]));
+  const build = (selectedIds: string[] | null) =>
+    withShiftStart(roster, targets, buildSectorTarget({
+      sectorId: roster.sectorId,
+      sectorName: targets.sectors.find((s) => s.id === roster.sectorId)?.name ?? '',
+      shiftName: shiftNames.get(choice) ?? null,
+      date: roster.date,
+      choice, includeOff, selectedIds, members: roster.members,
+    }));
+  return (
+    <MemberSelection
+      choice={choice}
+      visible={visible}
+      off={offMembers(roster.members)}
+      noSchedule={noScheduleCount(roster.members)}
+      includeOff={includeOff}
+      shiftNames={shiftNames}
+      selected={selected}
+      onToggle={filters.toggle}
+      onToggleOff={filters.toggleOff}
+      onToggleAll={() => filters.setSelected(toggleAllEnabled(visible, selected))}
+      onSendAll={() => onSend(build(null))}
+      onSendSelected={() => onSend(build(selectedIdsIn(visible, selected)))}
+    />
   );
 }
 
@@ -98,6 +160,12 @@ function TargetsError({ error, onRetry }: { error: unknown; onRetry: () => void 
     return <p className="rounded-md border p-6 text-sm text-muted-foreground">{FORBIDDEN_TEXT}</p>;
   }
   return <QueryErrorFallback error={error} onRetry={onRetry} />;
+}
+
+function ScheduledSection() {
+  const scheduled = useScheduledDispatches();
+  if (scheduled.isError) return <QueryErrorFallback error={scheduled.error} onRetry={scheduled.refetch} />;
+  return scheduled.data ? <ScheduledDispatches items={scheduled.data.items} /> : null;
 }
 
 function RecentSection() {

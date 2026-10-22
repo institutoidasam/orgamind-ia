@@ -36,6 +36,7 @@ import {
 import { useCreateTemplate, useUpdateTemplate } from '../api';
 import { type ChannelProvider } from '@/features/whatsapp/api';
 import { PROVIDER_LABEL, useProviderScope } from '@/features/whatsapp/provider-scope';
+import { readApiErrorBody } from '@/lib/api-error';
 
 type Mode =
   | { mode: 'create' }
@@ -290,17 +291,7 @@ export async function mapTemplateSubmitError(
   if (!(err instanceof HTTPError)) {
     return { kind: 'network', toast: 'Erro de rede' };
   }
-  let code: string | undefined;
-  let detail: string | undefined;
-  try {
-    const data = (await err.response.clone().json()) as
-      | { code?: string; title?: string; detail?: string }
-      | undefined;
-    code = data?.code;
-    detail = data?.detail;
-  } catch {
-    // ignore parse failure
-  }
+  const { code, detail } = (await readApiErrorBody(err)) ?? {};
   if (code === 'template.meta_name_conflict') {
     return {
       kind: 'metaNameConflict',

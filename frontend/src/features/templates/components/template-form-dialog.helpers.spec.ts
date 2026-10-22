@@ -471,3 +471,18 @@ describe('mapTemplateSubmitError — ZERNIO', () => {
     expect(out.toast).toContain('Meta');
   });
 });
+
+describe('mapTemplateSubmitError com o corpo em error.data (ky 2)', () => {
+  it('lê code e detail de error.data quando o corpo do Response já foi consumido', async () => {
+    const data = { code: 'template.interactive_config_invalid', detail: 'sections must not be empty' };
+    const err = makeKyError(400, data);
+    await err.response.text();
+    err.data = data;
+    const out = await mapTemplateSubmitError(err);
+    expect(out).toEqual({
+      kind: 'interactiveInvalid',
+      configError: 'sections must not be empty',
+      toast: 'Configuração interativa inválida',
+    });
+  });
+});

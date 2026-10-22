@@ -5,9 +5,16 @@ import { describe, expect, it, vi } from 'vitest';
 import { RolesGuard } from '../auth/roles.guard';
 import { TeamWhatsappController } from './team-whatsapp.controller';
 import type { TeamWhatsappService } from './team-whatsapp.service';
+import type { TeamWhatsappScheduleService } from './team-whatsapp-schedule.service';
 import type { CreateTeamDispatchDto } from './dto/create-team-dispatch.dto';
 
-const HANDLERS = ['targets', 'createDispatch', 'listDispatches'] as const;
+const HANDLERS = [
+  'targets',
+  'createDispatch',
+  'listDispatches',
+  'listScheduled',
+  'cancel',
+] as const;
 type Handler = (typeof HANDLERS)[number];
 // Lido como dado (metadados), não chamado: evita o falso positivo de unbound-method.
 const handlerOf = (name: Handler): object =>
@@ -31,10 +38,15 @@ function controllerWithService() {
       .mockResolvedValue({ dispatchId: 'd1', queued: 1, skipped: [] }),
     listDispatches: vi.fn().mockResolvedValue({ items: [] }),
   };
+  const schedule = {
+    listScheduled: vi.fn().mockResolvedValue({ items: [] }),
+    cancel: vi.fn().mockResolvedValue({ id: 'd1', state: 'CANCELLED' }),
+  };
   const controller = new TeamWhatsappController(
     service as unknown as TeamWhatsappService,
+    schedule as unknown as TeamWhatsappScheduleService,
   );
-  return { service, controller };
+  return { service, schedule, controller };
 }
 
 const req = { user: { sub: 'actor-1' } } as Parameters<
@@ -50,7 +62,7 @@ describe('TeamWhatsappController — metadados', () => {
     ]);
   });
 
-  it('o guard real barra VIEWER nas três rotas', () => {
+  it('o guard real barra VIEWER em todas as rotas', () => {
     const guard = new RolesGuard(new Reflector());
     for (const handler of HANDLERS) {
       expect(() => guard.canActivate(context(handler, 'VIEWER'))).toThrow(
@@ -68,6 +80,12 @@ describe('TeamWhatsappController — metadados', () => {
       Reflect.getMetadata(HTTP_CODE_METADATA, handlerOf('createDispatch')),
     ).toBe(202);
   });
+
+  it('POST de cancelamento responde 200', () => {
+    expect(Reflect.getMetadata(HTTP_CODE_METADATA, handlerOf('cancel'))).toBe(
+      200,
+    );
+  });
 });
 
 describe('TeamWhatsappController — repasse do ator', () => {
@@ -84,5 +102,13 @@ describe('TeamWhatsappController — repasse do ator', () => {
     expect(service.targets).toHaveBeenCalledWith('actor-1');
     expect(service.dispatch).toHaveBeenCalledWith('actor-1', dto);
     expect(service.listDispatches).toHaveBeenCalledWith('actor-1');
+  });
+
+  it('agendados e cancelamento repassam o ator (e o id do envio)', async () => {
+    const { schedule, controller } = controllerWithService();
+    await controller.listScheduled(req);
+    await controller.cancel('d1', req);
+    expect(schedule.listScheduled).toHaveBeenCalledWith('actor-1');
+    expect(schedule.cancel).toHaveBeenCalledWith('actor-1', 'd1');
   });
 });

@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HTTPError } from 'ky';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mutateAsync, toastSuccess, useTeamTargets, mutationState } = vi.hoisted(() => ({
   mutateAsync: vi.fn(),
@@ -20,7 +20,8 @@ import { SendWhatsappDialog } from './send-whatsapp-dialog';
 import type { SendTarget, TeamChannel } from '../schemas';
 
 const sector: SendTarget = {
-  type: 'sector', sectorId: 's1', label: 'Compras · todos os turnos', shift: null, userIds: null,
+  type: 'sector', sectorId: 's1', label: 'Compras · todos os turnos · 21/10', date: '2026-10-21',
+  shiftId: null, includeOff: false, userIds: null,
   recipients: [{ id: 'a', name: 'Ana' }, { id: 'b', name: 'Bia' }, { id: 'c', name: 'Caio' }], leftOut: [],
 };
 const person: SendTarget = { type: 'user', userId: 'u1', label: 'Rui' };
@@ -48,7 +49,7 @@ function setup(
 
 async function submit(user: ReturnType<typeof userEvent.setup>, text = 'Oi equipe') {
   await user.type(screen.getByRole('textbox'), text);
-  await user.click(screen.getByRole('button', { name: 'Enviar' }));
+  await user.click(screen.getByRole('button', { name: 'Enviar agora' }));
 }
 
 function httpError(status: number, code: string) {
@@ -73,7 +74,7 @@ beforeEach(() => {
 describe('SendWhatsappDialog destino e formulário', () => {
   it('mostra o destino do setor com o turno e a pessoa pelo nome', () => {
     setup();
-    expect(screen.getByText('Compras · todos os turnos')).toBeInTheDocument();
+    expect(screen.getByText('Compras · todos os turnos · 21/10')).toBeInTheDocument();
   });
 
   it('mostra só o nome quando o destino é uma pessoa', () => {
@@ -84,9 +85,9 @@ describe('SendWhatsappDialog destino e formulário', () => {
   it('pré-seleciona o único canal e só habilita Enviar com texto', async () => {
     const { user } = setup();
     expect(screen.getByText(/GoZap Principal/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Enviar' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeDisabled();
     await user.type(screen.getByRole('textbox'), 'Oi equipe');
-    expect(screen.getByRole('button', { name: 'Enviar' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeEnabled();
     expect(screen.getByText('9/2000')).toBeInTheDocument();
   });
 
@@ -103,7 +104,7 @@ describe('SendWhatsappDialog situação dos canais', () => {
     const { user } = setup(sector, []);
     await user.type(screen.getByRole('textbox'), 'Oi');
     expect(screen.getByText('Nenhum canal GoZap ou Evolution ativo.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Enviar' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeDisabled();
   });
 
   it('mostra canais inutilizáveis desabilitados com a situação, depois dos utilizáveis', async () => {
@@ -125,7 +126,7 @@ describe('SendWhatsappDialog situação dos canais', () => {
     await user.type(screen.getByRole('textbox'), 'Oi');
     expect(screen.getByText('Carregando canais…')).toBeInTheDocument();
     expect(screen.queryByText(/Nenhum canal/)).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Enviar' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeDisabled();
   });
 
   it('com erro ao carregar os canais mostra mensagem de erro, não "Nenhum canal"', async () => {
@@ -133,7 +134,7 @@ describe('SendWhatsappDialog situação dos canais', () => {
     await user.type(screen.getByRole('textbox'), 'Oi');
     expect(screen.getByRole('alert')).toHaveTextContent('Não foi possível carregar os canais.');
     expect(screen.queryByText(/Nenhum canal/)).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Enviar' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeDisabled();
   });
 });
 
@@ -142,21 +143,21 @@ describe('SendWhatsappDialog auto-seleção, sem canal utilizável e refetch', (
     const { user } = setup(sector, [pending, closed, channel]);
     await user.type(screen.getByRole('textbox'), 'Oi');
     expect(screen.getByRole('combobox', { name: 'Canal' })).toHaveTextContent('GoZap Principal');
-    expect(screen.getByRole('button', { name: 'Enviar' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeEnabled();
   });
 
   it('com dois utilizáveis nada vem escolhido', async () => {
     const { user } = setup(sector, [channel, second]);
     await user.type(screen.getByRole('textbox'), 'Oi');
     expect(screen.getByRole('combobox', { name: 'Canal' })).toHaveTextContent('Escolha o canal');
-    expect(screen.getByRole('button', { name: 'Enviar' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeDisabled();
   });
 
   it('com canais mas nenhum utilizável avisa para reconectar e mantém Enviar desabilitado', async () => {
     const { user } = setup(sector, [pending, closed]);
     await user.type(screen.getByRole('textbox'), 'Oi');
     expect(screen.getByText('Nenhum canal conectado — reconecte em Números e canais.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Enviar' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeDisabled();
   });
 
   it('desabilita Enviar quando o canal escolhido fica inutilizável num refetch', async () => {
@@ -164,12 +165,12 @@ describe('SendWhatsappDialog auto-seleção, sem canal utilizável e refetch', (
     await user.click(screen.getByRole('combobox', { name: 'Canal' }));
     await user.click(screen.getByRole('option', { name: /GoZap Reserva/ }));
     await user.type(screen.getByRole('textbox'), 'Oi');
-    expect(screen.getByRole('button', { name: 'Enviar' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeEnabled();
     useTeamTargets.mockReturnValue({
       data: { channels: [channel, { ...second, connectionState: 'close' as const }], sectors: [] },
     });
     view.rerender(<SendWhatsappDialog open onOpenChange={vi.fn()} target={sector} />);
-    expect(screen.getByRole('button', { name: 'Enviar' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeDisabled();
     expect(screen.getByRole('combobox', { name: 'Canal' })).toHaveTextContent('Escolha o canal');
   });
 });
@@ -183,7 +184,7 @@ describe('SendWhatsappDialog envio', () => {
     const { user, onOpenChange } = setup();
     await submit(user);
     expect(mutateAsync).toHaveBeenCalledWith({
-      channelId: 'ch1', text: 'Oi equipe', target: { type: 'sector', sectorId: 's1' },
+      channelId: 'ch1', text: 'Oi equipe', target: { type: 'sector', sectorId: 's1', date: '2026-10-21' },
     });
     await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
     const [title, opts] = toastSuccess.mock.calls[0];
@@ -216,24 +217,29 @@ describe('SendWhatsappDialog envio', () => {
 
 describe('SendWhatsappDialog: nomes', () => {
   const shiftTarget = (userIds: string[] | null, leftOut: { id: string; name: string }[]): SendTarget => ({
-    type: 'sector', sectorId: 's1', label: 'Produção · 2º turno', shift: 'SECOND', userIds, leftOut,
-    recipients: [{ id: 'joao', name: 'João' }, { id: 'maria', name: 'Maria' }],
+    type: 'sector', sectorId: 's1', label: 'Produção · Noite · 21/10', date: '2026-10-21', shiftId: 'noite',
+    includeOff: false, userIds, leftOut, recipients: [{ id: 'joao', name: 'João' }, { id: 'maria', name: 'Maria' }],
   });
+  const withOff: SendTarget = { ...shiftTarget(null, []), shiftId: null, includeOff: true };
 
   it.each([
-    ['todos do turno', shiftTarget(null, [{ id: 'pedro', name: 'Pedro' }]), { shift: 'SECOND' }, true],
-    ['selecionados', shiftTarget(['joao', 'maria'], []), { shift: 'SECOND', userIds: ['joao', 'maria'] }, false],
-  ])('%s: lista quem recebe e quem fica de fora, e manda só shift/userIds', async (_name, target, extra, hasLeftOut) => {
+    ['todos do turno', shiftTarget(null, [{ id: 'pedro', name: 'Pedro' }]), { shiftId: 'noite' }, true],
+    ['selecionados', shiftTarget(['joao', 'maria'], []), { shiftId: 'noite', userIds: ['joao', 'maria'] }, false],
+    ['todos os turnos com folga', withOff, { includeOff: true }, false],
+  ])('%s: lista quem recebe e quem fica de fora, e manda date/shiftId/includeOff, sem shift', async (_name, target, extra, hasLeftOut) => {
     mutateAsync.mockResolvedValue({ dispatchId: 'd1', queued: 2, skipped: [] });
     const { user } = setup(target);
-    expect(screen.getByText('Produção · 2º turno')).toBeInTheDocument();
+    expect(screen.getByText('Produção · Noite · 21/10')).toBeInTheDocument();
     expect(within(screen.getByRole('list', { name: 'Vão receber (2)' })).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['João', 'Maria']);
     expect(screen.queryByText('Ficam de fora (sem telefone)') !== null).toBe(hasLeftOut);
     if (hasLeftOut) {
       expect(within(screen.getByRole('list', { name: 'Ficam de fora (sem telefone)' })).getByText('Pedro')).toBeInTheDocument();
     }
     await submit(user);
-    expect(mutateAsync).toHaveBeenCalledWith({ channelId: 'ch1', text: 'Oi equipe', target: { type: 'sector', sectorId: 's1', ...extra } });
+    expect(mutateAsync).toHaveBeenCalledWith({
+      channelId: 'ch1', text: 'Oi equipe', target: { type: 'sector', sectorId: 's1', date: '2026-10-21', ...extra },
+    });
+    expect(mutateAsync.mock.calls[0][0].target).not.toHaveProperty('shift');
   });
 
   it('seleção inválida (422) mostra que a lista mudou e não fecha', async () => {
@@ -242,5 +248,44 @@ describe('SendWhatsappDialog: nomes', () => {
     await submit(user);
     expect(await screen.findByRole('alert')).toHaveTextContent('A lista de pessoas mudou. Atualize a página e confira de novo.');
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
+  });
+});
+
+describe('SendWhatsappDialog: agendar no início do turno', () => {
+  const STARTS_AT = '2026-10-22T02:00:00.000Z';
+  const scheduledTarget: SendTarget = {
+    ...(sector as Extract<SendTarget, { type: 'sector' }>),
+    label: 'Produção · Noite · 21/10', shiftId: 'noite', shiftStart: { startsAt: STARTS_AT, startTime: '22:00' },
+  };
+
+  afterEach(() => vi.useRealTimers());
+
+  function setNow(iso: string) {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(iso));
+  }
+
+  it('No início do turno não aparece em Todos os turnos', () => {
+    setup({ ...scheduledTarget, shiftId: null });
+    expect(screen.queryByRole('button', { name: 'No início do turno' })).not.toBeInTheDocument();
+  });
+
+  it('fica desabilitado com o motivo quando o início do turno já passou', async () => {
+    setNow(STARTS_AT);
+    const { user } = setup(scheduledTarget);
+    await user.type(screen.getByRole('textbox'), 'Oi');
+    expect(screen.getByRole('button', { name: 'No início do turno' })).toBeDisabled();
+    expect(screen.getByText('O início deste turno já passou')).toBeInTheDocument();
+  });
+
+  it('agenda com when shift_start e avisa a data e a hora gravadas', async () => {
+    setNow('2026-10-21T15:00:00Z');
+    mutateAsync.mockResolvedValue({ dispatchId: 'd1', queued: 0, scheduled: 2, scheduledFor: STARTS_AT, skipped: [] });
+    const { user, onOpenChange } = setup(scheduledTarget);
+    await user.type(screen.getByRole('textbox'), 'Oi equipe');
+    await user.click(screen.getByRole('button', { name: 'No início do turno' }));
+    expect(mutateAsync.mock.calls[0][0]).toMatchObject({ when: 'shift_start', target: { shiftId: 'noite' } });
+    expect(toastSuccess.mock.calls[0][0]).toBe('Agendado para 21/10 às 22:00');
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 });

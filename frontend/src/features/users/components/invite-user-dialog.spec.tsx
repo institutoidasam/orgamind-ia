@@ -10,6 +10,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { HTTPError } from "ky";
+import { toast } from "sonner";
 import { InviteUserDialog } from "./invite-user-dialog";
 
 // jsdom lacks the APIs the Radix Select primitive relies on.
@@ -36,6 +37,14 @@ vi.mock("../api", () => ({
 vi.mock("@/features/internal-admin/api", () => ({
   useSectors: () => ({
     data: { items: [{ id: "sector-1", name: "Engenharia" }] },
+  }),
+}));
+vi.mock("@/features/shifts/api", () => ({
+  useShifts: () => ({
+    data: [
+      { id: "sh1", name: "Manhã", startTime: "06:00", endTime: "14:00", isActive: true, sortOrder: 0, crossesMidnight: false, inUse: [] },
+      { id: "sh2", name: "Tarde", startTime: "14:00", endTime: "22:00", isActive: true, sortOrder: 1, crossesMidnight: false, inUse: [] },
+    ],
   }),
 }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
@@ -185,9 +194,41 @@ describe("InviteUserDialog shift", () => {
     fireEvent.click(screen.getByRole("combobox", { name: "Setor principal" }));
     fireEvent.click(await screen.findByRole("option", { name: "Engenharia" }));
     fireEvent.click(screen.getByRole("combobox", { name: "Turno" }));
-    fireEvent.click(await screen.findByRole("option", { name: "2º turno" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Tarde" }));
     fireEvent.click(submitButton());
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
-    expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ shift: "SECOND" }));
+    expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ shiftId: "sh2" }));
+  });
+
+  describe("job title and invalid shift", () => {
+    async function fillAdminWithJobTitle(jobTitle: string) {
+      await userEvent.type(emailInput(), "admin@x.com");
+      await userEvent.type(phoneInput(), PHONE);
+      fireEvent.change(screen.getByLabelText("Função (opcional)"), { target: { value: jobTitle } });
+      fireEvent.click(screen.getByRole("combobox", { name: "Perfil" }));
+      fireEvent.click(await screen.findByRole("option", { name: "Administrador" }));
+      fireEvent.click(submitButton());
+    }
+
+    it("sends the job title typed in Função", async () => {
+      wrap(dialog(true));
+      await fillAdminWithJobTitle("Operador de empilhadeira");
+      await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+      expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ jobTitle: "Operador de empilhadeira" }));
+    });
+
+    it("blocks a job title with 81 characters", async () => {
+      wrap(dialog(true));
+      await fillAdminWithJobTitle("x".repeat(81));
+      expect(await screen.findByText("Use até 80 caracteres")).toBeTruthy();
+      expect(mutateAsync).not.toHaveBeenCalled();
+    });
+
+    it("shows 422 users.invalid_shift as a stale-list message", async () => {
+      rejectOnce("users.invalid_shift", 422);
+      wrap(dialog(true));
+      await fillAdminWithJobTitle("");
+      await waitFor(() => expect(toast.error).toHaveBeenCalledWith("Turno inválido. Atualize a página."));
+    });
   });
 });

@@ -6,9 +6,11 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useSectors } from "@/features/internal-admin/api";
+import { useShifts } from "@/features/shifts/api";
 import { useInviteUser } from "../api";
 import { reportUserSubmitError } from "../submit-error";
 import { inviteUserSchema, type InviteUserOutput } from "../schemas";
+import { JobTitleField } from "./job-title-field";
 import { PhoneField } from "./phone-field";
 import { RoleSelect, SectorSelect } from "./role-sector-selects";
 import { ShiftSelect } from "./shift-select";
@@ -16,7 +18,7 @@ import { TemporaryPasswordModal } from "./temporary-password-modal";
 
 type Props = { open: boolean; onOpenChange: (open: boolean) => void };
 type Form = UseFormReturn<InviteUserOutput>;
-const EMPTY_INVITE: InviteUserOutput = { email: "", name: "", phone: "", role: "OPERATOR", sectorId: null, shift: null };
+const EMPTY_INVITE: InviteUserOutput = { email: "", name: "", phone: "", role: "OPERATOR", sectorId: null, shiftId: null, jobTitle: "" };
 
 export function InviteUserDialog({ open, onOpenChange }: Props) {
   const [tmpPwd, setTmpPwd] = useState<string | null>(null);
@@ -27,11 +29,12 @@ export function InviteUserDialog({ open, onOpenChange }: Props) {
 function useInviteForm(open: boolean, onOpenChange: Props["onOpenChange"], setTmpPwd: (password: string) => void) {
   const invite = useInviteUser();
   const sectors = useSectors(true);
+  const shifts = useShifts();
   const form = useForm<InviteUserOutput>({ resolver: zodResolver(inviteUserSchema) as never, defaultValues: EMPTY_INVITE });
   useEffect(() => { if (open) form.reset(EMPTY_INVITE); }, [open, form]);
   const submit = async (data: InviteUserOutput) => {
     try {
-      const result = await invite.mutateAsync({ ...data, shift: data.shift ?? null });
+      const result = await invite.mutateAsync({ ...data, shiftId: data.shiftId ?? null, jobTitle: data.jobTitle || undefined });
       setTmpPwd(result.temporaryPassword);
       form.reset(EMPTY_INVITE);
       onOpenChange(false);
@@ -39,7 +42,7 @@ function useInviteForm(open: boolean, onOpenChange: Props["onOpenChange"], setTm
       await reportUserSubmitError(form, error);
     }
   };
-  return { form, pending: invite.isPending, role: useWatch({ control: form.control, name: "role" }), sectorId: useWatch({ control: form.control, name: "sectorId" }), shift: useWatch({ control: form.control, name: "shift" }), sectors: sectors.data?.items ?? [], submit };
+  return { form, pending: invite.isPending, role: useWatch({ control: form.control, name: "role" }), sectorId: useWatch({ control: form.control, name: "sectorId" }), shiftId: useWatch({ control: form.control, name: "shiftId" }), sectors: sectors.data?.items ?? [], shifts: shifts.data ?? [], submit };
 }
 
 function InviteForm({ state, onCancel }: { state: State; onCancel: () => void }) {
@@ -52,7 +55,7 @@ function InviteIdentity({ form }: { form: Form }) {
 
 function InviteAssignment({ state }: { state: State }) {
   const { form } = state;
-  return <><RoleSelect value={state.role ?? "OPERATOR"} onChange={(value) => form.setValue("role", value)} /><div className="space-y-1"><SectorSelect value={state.sectorId ?? null} onChange={(value) => form.setValue("sectorId", value)} sectors={state.sectors} /><p className="text-xs text-muted-foreground">Administradores podem ficar sem setor.</p>{form.formState.errors.sectorId && <p className="text-xs text-destructive">{form.formState.errors.sectorId.message}</p>}</div><ShiftSelect value={state.shift ?? null} onChange={(value) => form.setValue("shift", value)} /></>;
+  return <><RoleSelect value={state.role ?? "OPERATOR"} onChange={(value) => form.setValue("role", value)} /><div className="space-y-1"><SectorSelect value={state.sectorId ?? null} onChange={(value) => form.setValue("sectorId", value)} sectors={state.sectors} /><p className="text-xs text-muted-foreground">Administradores podem ficar sem setor.</p>{form.formState.errors.sectorId && <p className="text-xs text-destructive">{form.formState.errors.sectorId.message}</p>}</div><ShiftSelect value={state.shiftId ?? null} onChange={(value) => form.setValue("shiftId", value)} shifts={state.shifts} /><JobTitleField id="invite-job-title" registration={form.register("jobTitle")} error={form.formState.errors.jobTitle?.message} /></>;
 }
 
 type State = ReturnType<typeof useInviteForm>;

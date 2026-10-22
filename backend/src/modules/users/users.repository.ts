@@ -18,7 +18,8 @@ const USER_SUMMARY_SELECT = {
   lastLoginAt: true,
   // Telefone sim; `contactId` NÃO entra no summary nem no contrato público.
   phoneE164: true,
-  shift: true,
+  shiftId: true,
+  jobTitle: true,
   createdAt: true,
   updatedAt: true,
   createdById: true,
@@ -166,6 +167,16 @@ export class UsersRepository {
 
   findActiveSector(id: string) {
     return this.prisma.sector.findFirst({ where: { id, isActive: true } });
+  }
+
+  /** Turno para atribuir a um usuário; o serviço recusa inexistente ou inativo. */
+  findShiftForAssignment(
+    id: string,
+  ): Promise<{ id: string; isActive: boolean } | null> {
+    return this.prisma.shift.findUnique({
+      where: { id },
+      select: { id: true, isActive: true },
+    });
   }
 
   private async runSerializable<T>(

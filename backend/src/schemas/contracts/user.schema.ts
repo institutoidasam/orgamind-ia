@@ -1,9 +1,5 @@
 import { z } from 'zod';
 
-// Turno fixo do usuário; null = sem turno. Mesmos literais do enum Prisma WorkShift.
-export const workShiftSchema = z.enum(['FIRST', 'SECOND']);
-export type WorkShift = z.infer<typeof workShiftSchema>;
-
 export const userSummarySchema = z.object({
   id: z.string(),
   email: z.string().email(),
@@ -22,8 +18,10 @@ export const userSummarySchema = z.object({
   lastLoginAt: z.string().nullable(),
   // E.164 do WhatsApp do usuário; null em usuários anteriores ao campo.
   phoneE164: z.string().nullable(),
-  // Turno fixo; null = sem turno (usuários anteriores ao campo).
-  shift: workShiftSchema.nullable(),
+  // Turno do cadastro (id de Shift); null = sem turno.
+  shiftId: z.string().nullable(),
+  // Função exibida na escala; null = sem função.
+  jobTitle: z.string().nullable(),
   createdAt: z.string(),
   createdBy: z.object({ email: z.string() }).nullable(),
 });

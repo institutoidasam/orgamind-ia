@@ -388,6 +388,32 @@ describe('ContactFormDialog — error ladder', () => {
   });
 });
 
+describe('ContactFormDialog — erro do ky 2 (corpo em error.data)', () => {
+  /** HTTPError como o ky 2 lança: corpo já consumido (clone lança), ProblemDetails em `data`. */
+  function consumedBodyError(data: unknown): HTTPError {
+    const err = Object.create(HTTPError.prototype) as HTTPError;
+    const response = {
+      clone: () => {
+        throw new TypeError('Body has already been used');
+      },
+    };
+    return Object.assign(err, { name: 'HTTPError', data, response });
+  }
+
+  it('pinta o telefone duplicado no campo lendo error.data, sem toast', async () => {
+    createMutateAsync.mockRejectedValue(
+      consumedBodyError({ code: 'contact.phone_conflict', status: 409 }),
+    );
+    render(<ContactFormDialog open onOpenChange={() => {}} />);
+    const phone = screen.getByLabelText('Telefone *');
+    fireEvent.input(phone, { target: { value: '+5592912345678' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Criar contato' }));
+
+    expect(await screen.findByText('Já existe um contato com esse telefone')).toBeInTheDocument();
+    expect(toastError).not.toHaveBeenCalled();
+  });
+});
+
 describe('ContactFormDialog — pending state', () => {
   it('disables both buttons and shows "Criando…" while a create is pending', () => {
     createPending.mockReturnValue(true);

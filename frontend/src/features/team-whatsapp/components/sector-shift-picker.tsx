@@ -1,26 +1,24 @@
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { SHIFT_LABEL } from '@/lib/work-shift';
-import type { ShiftChoice } from '../member-filter';
-import type { TeamSector } from '../schemas';
-
-const CHOICES: { value: ShiftChoice; label: string }[] = [
-  { value: 'FIRST', label: SHIFT_LABEL.FIRST },
-  { value: 'SECOND', label: SHIFT_LABEL.SECOND },
-  { value: 'ALL', label: 'Todos os turnos' },
-];
+import { ALL_SHIFTS, type ShiftChoice } from '../member-filter';
+import type { TeamSector, TeamTargets } from '../schemas';
 
 type Props = {
   sectors: TeamSector[];
+  shifts: TeamTargets['shifts'];
   sectorId: string | null;
+  date: string;
   choice: ShiftChoice | null;
   onSectorChange: (id: string) => void;
+  onDateChange: (date: string) => void;
   onChoiceChange: (choice: ShiftChoice) => void;
 };
 
-export function SectorShiftPicker({ sectors, sectorId, choice, onSectorChange, onChoiceChange }: Props) {
+export function SectorShiftPicker(props: Props) {
+  const { sectors, shifts, sectorId, date, choice, onSectorChange, onDateChange, onChoiceChange } = props;
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
+    <div className="grid gap-3 sm:grid-cols-3">
       <div className="space-y-1">
         <Label>Setor</Label>
         <Select value={sectorId ?? ''} onValueChange={onSectorChange}>
@@ -31,11 +29,16 @@ export function SectorShiftPicker({ sectors, sectorId, choice, onSectorChange, o
         </Select>
       </div>
       <div className="space-y-1">
+        <Label htmlFor="team-whatsapp-date">Data</Label>
+        <Input id="team-whatsapp-date" type="date" value={date} onChange={(e) => onDateChange(e.target.value)} />
+      </div>
+      <div className="space-y-1">
         <Label>Turno</Label>
-        <Select value={choice ?? ''} onValueChange={(v) => onChoiceChange(v as ShiftChoice)}>
+        <Select value={choice ?? ''} onValueChange={onChoiceChange}>
           <SelectTrigger aria-label="Turno"><SelectValue placeholder="Escolha o turno" /></SelectTrigger>
           <SelectContent>
-            {CHOICES.map((c) => <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>)}
+            {shifts.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+            <SelectItem value={ALL_SHIFTS}>Todos os turnos</SelectItem>
           </SelectContent>
         </Select>
       </div>

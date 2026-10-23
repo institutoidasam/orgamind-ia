@@ -7,6 +7,7 @@ import {
   afterEach,
   beforeEach,
   vi,
+  type MockInstance,
 } from 'vitest';
 import { setupServer } from 'msw/node';
 import { http, HttpResponse } from 'msw';
@@ -70,7 +71,104 @@ function webhookHandler() {
   );
 }
 
-const server = setupServer();
+/**
+ * Token-sentinela das instâncias da conta. `GET /instance/all` devolve o token
+ * de TODAS as instâncias (inclusive as do Picoa, que divide a conta com o GBR)
+ * — nada dele pode sair em mensagem, resposta ou log.
+ */
+const LISTED_TOKEN = 'sentinela-da-lista-de-instancias';
+
+/**
+ * `GET /instance/all` — a vaga do plano é conferida antes de todo `POST
+ * /instance/create`. O handler padrão do servidor é a conta VAZIA (vaga
+ * livre), para que os testes de criação que não tratam de vaga sigam iguais.
+ */
+function instanceAllHandler(
+  instances: Array<Record<string, string>>,
+  onCall: (admintoken: string | null) => void = () => undefined,
+) {
+  return http.get(`${BASE}/instance/all`, ({ request }) => {
+    onCall(request.headers.get('admintoken'));
+    return HttpResponse.json({ success: true, instances });
+  });
+}
+
+/** `POST /instance/create` que conta as chamadas — prova se a vaga barrou a criação. */
+function countingCreateHandler(counter: { calls: number }) {
+  return http.post(`${BASE}/instance/create`, () => {
+    counter.calls++;
+    return HttpResponse.json(
+      {
+        success: true,
+        token: 'inst_tok',
+        instance: { id: 'gz9', status: 'disconnected' },
+      },
+      { status: 201 },
+    );
+  });
+}
+
+/** Junta tudo o que o Logger da classe recebeu, para procurar segredo. */
+function loggedText(spies: MockInstance[]) {
+  return spies.map((s) => JSON.stringify(s.mock.calls)).join('\n');
+}
+
+/**
+ * Espia (e silencia) todos os níveis do Logger em cada teste do `describe`
+ * que a chamar. Ordem fixa: `spies[1]` é o `warn`.
+ */
+function spyOnLoggerLevels(): MockInstance[] {
+  const spies: MockInstance[] = [];
+  beforeEach(() => {
+    for (const level of ['log', 'warn', 'error', 'debug'] as const) {
+      spies.push(
+        vi.spyOn(Logger.prototype, level).mockImplementation(() => undefined),
+      );
+    }
+  });
+  afterEach(() => spies.splice(0).forEach((s) => s.mockRestore()));
+  return spies;
+}
+
+/** O segredo não aparece no erro (nem na mensagem) nem em nada logado. */
+function expectSecretKept(secret: string, err: Error, spies: MockInstance[]) {
+  expect(JSON.stringify({ ...err, message: err.message })).not.toContain(
+    secret,
+  );
+  expect(loggedText(spies)).not.toContain(secret);
+}
+
+/** A recusa de uma promessa, já tipada — falha o teste se ela resolver. */
+async function rejectionOf(p: Promise<unknown>): Promise<Error> {
+  try {
+    await p;
+  } catch (e) {
+    return e as Error;
+  }
+  throw new Error('a promessa deveria ter sido recusada');
+}
+
+/**
+ * Dublês só do caminho de criação, para os blocos de vaga/segredo ficarem
+ * fora do `describe` gigante do service: sem canal ativo de mesmo nome e com
+ * a gravação da row respondendo.
+ */
+function createHarness() {
+  const repo = mockDeep<WhatsappInstancesRepository>();
+  repo.findActiveGozapChannelByName.mockResolvedValue(null);
+  repo.createGozapChannel.mockResolvedValue(makeChannel());
+  const build = (env: Record<string, string | boolean | undefined> = {}) =>
+    new GozapInstancesService(
+      makeConfig(env),
+      repo,
+      mockDeep<AuditService>(),
+      mockDeep<WhatsappProvidersRepository>(),
+      mockDeep<ReconnectReplayService>(),
+    );
+  return { repo, build };
+}
+
+const server = setupServer(instanceAllHandler([]));
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
@@ -1251,7 +1349,7 @@ describe('GozapInstancesService', () => {
         response: { status: 500, data: { error: 'boom' } },
       };
       const summary = describeHttpError(withTokenInHeaders);
-      expect(summary).toBe('HTTP 500');
+      expect(summary).toBe('HTTP 500: boom');
       expect(summary).not.toContain('PLAINTEXT_INSTANCE_TOKEN');
 
       const networkError = {
@@ -1333,5 +1431,242 @@ describe('GozapInstancesService', () => {
 
       warnSpy.mockRestore();
     });
+  });
+});
+
+// Fix 23/10/2026: a conta GoZap (plano Básico, 1 instância) é dividida com o
+// Picoa. Criar além do limite deu 502 no GoZap e já derrubou a instância que
+// estava no ar — por isso a vaga é conferida ANTES do POST /instance/create.
+describe('createChannel: conta GoZap cheia recusa antes do create', () => {
+  const create = { calls: 0 };
+  let h: ReturnType<typeof createHarness>;
+  beforeEach(() => {
+    create.calls = 0;
+    h = createHarness();
+    server.use(countingCreateHandler(create));
+  });
+
+  it('1 de 1 → 409 com nome e status de cada instância, SEM chamar o create', async () => {
+    let admintoken: string | null = null;
+    const robo = { id: 'i1', name: 'robo', status: 'disconnected' };
+    server.use(
+      instanceAllHandler([{ ...robo, token: LISTED_TOKEN }], (t) => {
+        admintoken = t;
+      }),
+    );
+
+    await expect(
+      h.build().createChannel({ name: 'Canal GoZap' }),
+    ).rejects.toMatchObject({
+      code: 'gozap.instance_limit_reached',
+      status: 409,
+      message:
+        'A conta GoZap já usa 1 de 1 instância(s) do plano: robo (desconectada). Para conectar um número novo, remova uma conexão que não é mais usada ou aumente o plano do GoZap.',
+    });
+    expect(admintoken).toBe('admtok');
+    expect(create.calls).toBe(0);
+    expect(h.repo.createGozapChannel.mock.calls).toEqual([]);
+  });
+
+  it('traduz o status de cada instância (valor desconhecido sai como veio)', async () => {
+    server.use(
+      instanceAllHandler([
+        { name: 'loja', status: 'connected' },
+        { name: 'balcao', status: 'connecting' },
+        { name: 'robo', status: 'hibernated' },
+      ]),
+    );
+
+    await expect(
+      h.build({ GOZAP_MAX_INSTANCES: '3' }).createChannel({ name: 'Canal' }),
+    ).rejects.toThrow(
+      'já usa 3 de 3 instância(s) do plano: loja (conectada), balcao (conectando), robo (hibernated).',
+    );
+    expect(create.calls).toBe(0);
+  });
+});
+
+describe('createChannel: com vaga no plano, cria a instância', () => {
+  it.each([
+    ['conta vazia, limite padrão 1', [], {}],
+    [
+      '1 instância com GOZAP_MAX_INSTANCES=2',
+      [{ name: 'robo' }],
+      {
+        GOZAP_MAX_INSTANCES: '2',
+      },
+    ],
+  ])('%s → chama o create', async (_label, instances, env) => {
+    const create = { calls: 0 };
+    const h = createHarness();
+    server.use(
+      instanceAllHandler(instances),
+      countingCreateHandler(create),
+      webhookHandler(),
+    );
+
+    await expect(
+      h.build(env).createChannel({ name: 'Canal GoZap' }),
+    ).resolves.toBeDefined();
+    expect(create.calls).toBe(1);
+  });
+});
+
+describe('createChannel: falha ao consultar as vagas fecha a porta', () => {
+  it.each([
+    ['HTTP 500', () => HttpResponse.json({ error: 'boom' }, { status: 500 })],
+    ['200 sem a lista', () => HttpResponse.json({ success: false })],
+    ['200 com instances objeto', () => HttpResponse.json({ instances: {} })],
+    ['200 com instances null', () => HttpResponse.json({ instances: null })],
+    ['erro de rede', () => HttpResponse.error()],
+  ])(
+    'GET /instance/all com %s → 502 sem chamar o create',
+    async (_l, reply) => {
+      const create = { calls: 0 };
+      const h = createHarness();
+      server.use(
+        http.get(`${BASE}/instance/all`, reply),
+        countingCreateHandler(create),
+      );
+
+      await expect(
+        h.build().createChannel({ name: 'Canal GoZap' }),
+      ).rejects.toMatchObject({
+        code: 'gozap.capacity_check_failed',
+        status: 502,
+        message:
+          'Não foi possível consultar as vagas da conta GoZap. Tente de novo em alguns minutos.',
+      });
+      expect(create.calls).toBe(0);
+      expect(h.repo.createGozapChannel.mock.calls).toEqual([]);
+    },
+  );
+});
+
+describe('createChannel: nenhum token vaza na recusa nem no log', () => {
+  const spies = spyOnLoggerLevels();
+
+  it('conta cheia: o token das instâncias listadas não sai na mensagem nem no log', async () => {
+    server.use(
+      instanceAllHandler([
+        { name: 'robo', status: 'connected', token: LISTED_TOKEN },
+      ]),
+    );
+    const err = await rejectionOf(
+      createHarness().build().createChannel({ name: 'X' }),
+    );
+
+    expect(err).toMatchObject({ code: 'gozap.instance_limit_reached' });
+    expectSecretKept(LISTED_TOKEN, err, spies);
+  });
+
+  it('create recusado: o motivo do GoZap vai na mensagem e no warn, sem o admin token', async () => {
+    const motivo = 'limite de instancias do plano atingido';
+    server.use(
+      http.post(`${BASE}/instance/create`, () =>
+        HttpResponse.json({ error: motivo }, { status: 502 }),
+      ),
+    );
+    const err = await rejectionOf(
+      createHarness()
+        .build({ GOZAP_ADMIN_TOKEN: 'admin-sentinela' })
+        .createChannel({ name: 'Loja' }),
+    );
+
+    expect(err).toMatchObject({ code: 'gozap.creation_failed', status: 502 });
+    expect(err.message).toContain(`HTTP 502: ${motivo}`);
+    expect(spies[1]).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelName: 'Loja',
+        err: `HTTP 502: ${motivo}`,
+      }),
+      expect.any(String),
+    );
+    expect(loggedText(spies)).not.toContain('admin-sentinela');
+    expect(err.message).not.toContain('admin-sentinela');
+  });
+});
+
+describe('segredo ecoado pelo GoZap não vai para a mensagem nem para o log', () => {
+  const spies = spyOnLoggerLevels();
+
+  it('GET /instance/all 200 malformado com token no corpo → 502 sem a sentinela', async () => {
+    server.use(
+      http.get(`${BASE}/instance/all`, () =>
+        HttpResponse.json({
+          token: LISTED_TOKEN,
+          instances: { robo: { name: 'robo', token: LISTED_TOKEN } },
+        }),
+      ),
+    );
+    const err = await rejectionOf(
+      createHarness().build().createChannel({ name: 'X' }),
+    );
+
+    expect(err).toMatchObject({ code: 'gozap.capacity_check_failed' });
+    expectSecretKept(LISTED_TOKEN, err, spies);
+  });
+
+  it('POST /webhook ecoa o GOZAP_WEBHOOK_TOKEN no data.error → o warn sai mascarado', async () => {
+    const secret = 'webhook-sentinela';
+    server.use(
+      countingCreateHandler({ calls: 0 }),
+      http.post(`${BASE}/webhook`, () =>
+        HttpResponse.json(
+          { error: `token ${secret} recusado` },
+          { status: 400 },
+        ),
+      ),
+    );
+
+    await createHarness()
+      .build({ GOZAP_WEBHOOK_TOKEN: secret })
+      .createChannel({ name: 'Loja' });
+
+    expect(spies[1]).toHaveBeenCalledWith(
+      expect.objectContaining({ err: 'HTTP 400: token *** recusado' }),
+      expect.any(String),
+    );
+    expect(loggedText(spies)).not.toContain(secret);
+  });
+});
+
+describe('describeHttpError: o motivo do GoZap entra, o segredo não', () => {
+  const httpErr = (data: unknown, headers: Record<string, string> = {}) => ({
+    isAxiosError: true,
+    message: 'Request failed',
+    config: { headers },
+    response: { status: 502, data },
+  });
+
+  it.each([
+    [{ error: 'sem vaga' }, 'HTTP 502: sem vaga'],
+    [{ message: 'plano cheio' }, 'HTTP 502: plano cheio'],
+    [{ error: { nested: true } }, 'HTTP 502'],
+    ['<html>bad gateway</html>', 'HTTP 502'],
+    [{ error: 'x'.repeat(500) }, `HTTP 502: ${'x'.repeat(200)}`],
+  ])('corpo %j → %s', (data, expected) => {
+    expect(describeHttpError(httpErr(data))).toBe(expected);
+  });
+
+  it('mascara token de header ecoado e querystring de URL no texto do GoZap', () => {
+    const summary = describeHttpError(
+      httpErr(
+        {
+          error: `admintoken admin-sentinela invalido; url https://h/x?t=webhook-sentinela`,
+        },
+        { admintoken: 'admin-sentinela' },
+      ),
+    );
+    expect(summary).not.toContain('admin-sentinela');
+    expect(summary).not.toContain('webhook-sentinela');
+    expect(summary).toContain('HTTP 502: admintoken *** invalido');
+  });
+
+  it('mascara os segredos extras passados por quem chama (ex.: o do webhook)', () => {
+    const data = { error: 'eco do whk-sentinela no corpo' };
+    expect(describeHttpError(httpErr(data), ['whk-sentinela', ''])).toBe(
+      'HTTP 502: eco do *** no corpo',
+    );
   });
 });

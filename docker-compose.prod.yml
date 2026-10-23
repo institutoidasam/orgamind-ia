@@ -296,6 +296,10 @@ services:
       # efeito nenhum e o operador acredita ter fechado a porta sem ter fechado
       # — foi o que já aconteceu com GOZAP_WEBHOOK_DEBUG, logo acima.
       GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN: ${GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN:-}
+      # Vagas do plano GoZap (instâncias por conta, contando as de outro
+      # sistema que divida a conta). "Nova conexão GoZap" é recusada antes de
+      # criar quando a conta já está cheia. Padrão 1 (plano Básico).
+      GOZAP_MAX_INSTANCES: ${GOZAP_MAX_INSTANCES:-}
 
       # ── Validação ativa de números (spec B.5) ────────────────────────────
       # Ritmo do `/chat/check` do GoZap, em consultas por minuto. Padrão 40 no
@@ -438,6 +442,9 @@ services:
       # env presente num serviço e ausente no outro produz dois processos com
       # crenças diferentes sobre a mesma porta.
       GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN: ${GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN:-}
+      # Mesma var do serviço api (vagas do plano GoZap): o worker valida o
+      # mesmo schema, e as duas pontas precisam acreditar no mesmo limite.
+      GOZAP_MAX_INSTANCES: ${GOZAP_MAX_INSTANCES:-}
 
       # ── Validação ativa de números (spec B.5) ────────────────────────────
       # Mesmas vars do serviço api, e aqui é onde elas de fato MORDEM: o cron e

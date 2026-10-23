@@ -34,14 +34,14 @@ describe('docker-compose.prod.yml encaminha as envs do webhook do GoZap', () => 
     return (end === -1 ? rest : rest.slice(0, end)).join('\n');
   }
 
-  it.each(['api', 'worker'])(
-    'serviço %s recebe GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN',
-    (service) => {
-      expect(serviceEnvBlock(service)).toMatch(
-        /^\s+GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN:/m,
-      );
-    },
-  );
+  it.each([
+    ['api', 'GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN'],
+    ['worker', 'GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN'],
+    ['api', 'GOZAP_MAX_INSTANCES'],
+    ['worker', 'GOZAP_MAX_INSTANCES'],
+  ])('serviço %s recebe %s', (service, name) => {
+    expect(serviceEnvBlock(service)).toMatch(new RegExp(`^\\s+${name}:`, 'm'));
+  });
 
   it('serviço api recebe o segredo e a flag de debug do webhook do GoZap', () => {
     const env = serviceEnvBlock('api');
@@ -1029,4 +1029,30 @@ describe('validação ativa de números: envs de risco (Fase B)', () => {
         .GOZAP_CHECK_RATE_PER_MIN,
     ).toBe(120);
   });
+});
+
+/**
+ * Vagas do plano GoZap (fix 23/10/2026): o limite de instâncias da conta é
+ * conferido antes de cada `POST /instance/create`. O compose entrega
+ * `${GOZAP_MAX_INSTANCES:-}` como STRING VAZIA quando a var não existe no
+ * painel — '' tem de valer o padrão (1), nunca derrubar o boot.
+ */
+describe('envSchema GOZAP_MAX_INSTANCES', () => {
+  it.each([
+    [undefined, 1],
+    ['', 1],
+    ['3', 3],
+  ])('GOZAP_MAX_INSTANCES=%j → %s', (input, expected) => {
+    const r = envSchema.safeParse({ ...base, GOZAP_MAX_INSTANCES: input });
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.GOZAP_MAX_INSTANCES).toBe(expected);
+  });
+
+  it.each(['0', '-1', '1.5', 'abc'])(
+    'GOZAP_MAX_INSTANCES=%s é recusado no boot',
+    (input) => {
+      const r = envSchema.safeParse({ ...base, GOZAP_MAX_INSTANCES: input });
+      expect(r.success).toBe(false);
+    },
+  );
 });

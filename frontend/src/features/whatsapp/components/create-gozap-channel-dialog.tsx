@@ -35,10 +35,16 @@ type Props = {
  *
  * ⚠️ A conta GoZap de produção é do plano BÁSICO — LIMITE DE 1 INSTÂNCIA.
  * Criar uma segunda instância dá 502 no GoZap e pode derrubar a instância que
- * já funciona (visto em produção). O backend não tem como recusar isso hoje
- * (o limite é do plano contratado, não uma regra do orgamind) — então o aviso e
- * a confirmação explícita (checkbox) são a única trava que existe. Sem
- * marcar a caixa, o botão "Criar canal" fica desabilitado.
+ * já funciona (visto em produção). Desde 23/10/2026 o backend confere a vaga
+ * da conta (`GET /instance/all` × `GOZAP_MAX_INSTANCES`) ANTES de criar e
+ * recusa com `gozap.instance_limit_reached` (409), listando o que ocupa as
+ * vagas — ou com `gozap.capacity_check_failed` (502) quando não consegue
+ * consultar. Essas recusas, como as demais, chegam pela frase PT-BR do
+ * backend (`title`, lido de `HTTPError.data` por `extractApiError` →
+ * `readApiErrorBody`) no alerta inline. O aviso e a confirmação explícita
+ * (checkbox) continuam como segunda trava: o limite configurado pode não
+ * refletir o plano contratado. Sem marcar a caixa, o botão "Criar canal" fica
+ * desabilitado.
  */
 export function CreateGozapChannelDialog({ open, onOpenChange, onCreated }: Props) {
   const [backendError, setBackendError] = useState<string | null>(null);

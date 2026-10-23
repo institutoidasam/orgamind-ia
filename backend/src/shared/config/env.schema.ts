@@ -383,6 +383,19 @@ export const envSchema = z
       z.coerce.number().int().positive().default(40),
     ),
 
+    // Vagas do PLANO contratado no GoZap: quantas instâncias a conta comporta.
+    // `createChannel` lista as instâncias da conta (`GET /instance/all`) e
+    // recusa ANTES do `POST /instance/create` quando já não há vaga — criar
+    // além do limite dá 502 no GoZap e já derrubou em produção a instância que
+    // estava no ar. A conta pode ser dividida com outro sistema (hoje, a do
+    // GBR é a mesma do Picoa), e a contagem inclui as instâncias dele. Padrão
+    // 1 = plano Básico. Mesmo `preprocess` de GOZAP_CHECK_RATE_PER_MIN, pelo
+    // mesmo motivo: o compose entrega `${GOZAP_MAX_INSTANCES:-}` como ''.
+    GOZAP_MAX_INSTANCES: z.preprocess(
+      (v) => (v === '' ? undefined : v),
+      z.coerce.number().int().positive().default(1),
+    ),
+
     // ★ VALIDAÇÃO AUTOMÁTICA DIÁRIA — DESLIGADA POR PADRÃO.
     //
     // O cron `whatsapp.contact-sync.cron` seleciona a base inteira (até 5000

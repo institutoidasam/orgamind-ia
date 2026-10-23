@@ -155,15 +155,6 @@ function readLiveState(data: GozapStatusOrConnectResponse): GozapLiveState {
 }
 
 /**
- * Extrai um resumo do erro HTTP sem nunca ecoar o corpo da resposta (pode
- * conter dados do tenant) NEM o objeto do erro inteiro. Exportada de
- * propósito: é o único formato que qualquer `logger.warn`/`logger.error`
- * desta classe pode receber para representar uma falha HTTP — nunca o
- * AxiosError bruto, cujo `err.config.headers` carrega o token PLAINTEXT da
- * instância (o serializer de erro padrão do pino percorre esse objeto
- * inteiro e escreveria o segredo em claro no log).
- */
-/**
  * `https://user:senha@host:443/api/x?t=SEGREDO` → `https://host`. Usado para
  * relatar uma base de webhook mal configurada sem correr o risco de imprimir o
  * segredo que alguém possa ter colado dentro dela. Nunca lança: o valor
@@ -178,10 +169,34 @@ function safeOrigin(raw: string | null | undefined): string {
   }
 }
 
-export function describeHttpError(err: unknown): string {
-  const e = err as { response?: { status?: number }; message?: string };
-  if (e.response?.status) return `HTTP ${e.response.status}`;
-  return e.message ?? 'erro desconhecido';
+/**
+ * Extrai um resumo do erro HTTP sem nunca ecoar o corpo inteiro da resposta
+ * (pode conter dados do tenant) NEM o objeto do erro inteiro: status e, se o
+ * GoZap mandou, o motivo dele (`HTTP 502: <texto>`, ver `gozapErrorText`).
+ * Exportada de propósito: é o único formato que qualquer
+ * `logger.warn`/`logger.error` desta classe pode receber para representar uma
+ * falha HTTP — nunca o AxiosError bruto, cujo `err.config.headers` carrega o
+ * token PLAINTEXT da instância (o serializer de erro padrão do pino percorre
+ * esse objeto inteiro e escreveria o segredo em claro no log).
+ * `extraSecrets`: segredos que não viajam em header da request (ex.: o
+ * `GOZAP_WEBHOOK_TOKEN`, que vai no corpo do `POST /webhook`) — também
+ * mascarados se o GoZap os ecoar. Na classe, use `describeError`.
+ */
+export function describeHttpError(
+  err: unknown,
+  extraSecrets: ReadonlyArray<string | undefined> = [],
+): string {
+  const e = err as {
+    response?: { status?: number; data?: unknown };
+    config?: { headers?: unknown };
+    message?: string;
+  };
+  if (!e.response?.status) return e.message ?? 'erro desconhecido';
+  const secrets = [...secretHeaderValues(e.config?.headers), ...extraSecrets];
+  const text = gozapErrorText(e.response.data, secrets);
+  return text
+    ? `HTTP ${e.response.status}: ${text}`
+    : `HTTP ${e.response.status}`;
 }
 
 /**
@@ -241,7 +256,8 @@ export class GozapInstancesService {
   }
 
   /**
-   * `POST /instance/create` (header `admintoken`) → cifra o token da
+   * Confere a vaga do plano (`assertPlanHasRoom`) → `POST /instance/create`
+   * (header `admintoken`) → cifra o token da
    * instância → grava a row → arma o webhook (best-effort: uma falha ao
    * armar não pode impedir a criação do canal — o operador ainda consegue
    * conectar via QR e reconfigurar o webhook depois).
@@ -272,21 +288,9 @@ export class GozapInstancesService {
       });
     }
 
-    let data: GozapCreateInstanceResponse;
-    try {
-      const res = await this.http.post<GozapCreateInstanceResponse>(
-        '/instance/create',
-        { name: input.name, connection_mode: 'companion' },
-        { headers: { admintoken: adminToken } },
-      );
-      data = res.data;
-    } catch (err) {
-      throw new DomainError({
-        code: 'gozap.creation_failed',
-        message: `GoZap recusou a criação da instância "${input.name}": ${describeHttpError(err)}`,
-        status: 502,
-      });
-    }
+    await this.assertPlanHasRoom(adminToken);
+
+    const data = await this.postCreateInstance(input.name, adminToken);
 
     // O token vem tanto no topo (`token`) quanto ecoado em `instance.token`
     // pela doc — aceita qualquer um dos dois por robustez.
@@ -317,7 +321,7 @@ export class GozapInstancesService {
       // da chamada que falhou) — logaria o segredo em claro. describeHttpError
       // extrai só o essencial (status/mensagem), nunca a request/response.
       this.logger.warn(
-        { err: describeHttpError(err), channelId: channel.id },
+        { err: this.describeError(err), channelId: channel.id },
         'gozap: falha ao armar o webhook na criação do canal (best-effort)',
       );
     });
@@ -366,7 +370,7 @@ export class GozapInstancesService {
 
     await this.armWebhook(token).catch((err) => {
       this.logger.warn(
-        { err: describeHttpError(err), channelId },
+        { err: this.describeError(err), channelId },
         'gozap: falha ao re-armar o webhook durante o polling (best-effort)',
       );
     });
@@ -386,7 +390,7 @@ export class GozapInstancesService {
       }
     } catch (err) {
       this.logger.warn(
-        { err: describeHttpError(err), channelId },
+        { err: this.describeError(err), channelId },
         'gozap: falha ao consultar /instance/status',
       );
       return this.cachedOrClose(channelId);
@@ -412,7 +416,7 @@ export class GozapInstancesService {
       return { state, qrBase64 };
     } catch (err) {
       this.logger.warn(
-        { err: describeHttpError(err), channelId },
+        { err: this.describeError(err), channelId },
         'gozap: falha ao obter QR (/instance/connect)',
       );
       return this.cachedOrClose(channelId);
@@ -488,7 +492,7 @@ export class GozapInstancesService {
       if (live.state === 'open') {
         void this.replay.replayWaitingFor(channel.id).catch((err: unknown) => {
           this.logger.error(
-            { err: describeHttpError(err), channelId: channel.id },
+            { err: this.describeError(err), channelId: channel.id },
             'gozap: falha ao destravar mensagens em WAITING_INSTANCE após a conexão',
           );
         });
@@ -519,7 +523,7 @@ export class GozapInstancesService {
       }
     } catch (err) {
       this.logger.warn(
-        { err: describeHttpError(err), channelId: channel.id },
+        { err: this.describeError(err), channelId: channel.id },
         'gozap: falha ao persistir o estado ao vivo da sessão (best-effort)',
       );
     }
@@ -554,7 +558,7 @@ export class GozapInstancesService {
 
     await this.armWebhook(token).catch((err) => {
       this.logger.warn(
-        { err: describeHttpError(err), channelId },
+        { err: this.describeError(err), channelId },
         'gozap: falha ao re-armar o webhook durante o reconcile (best-effort)',
       );
     });
@@ -568,7 +572,7 @@ export class GozapInstancesService {
       live = readLiveState(data);
     } catch (err) {
       this.logger.warn(
-        { err: describeHttpError(err), channelId },
+        { err: this.describeError(err), channelId },
         'gozap: falha ao consultar /instance/status no reconcile',
       );
       return null;
@@ -594,7 +598,7 @@ export class GozapInstancesService {
         );
       } catch (err) {
         this.logger.warn(
-          { err: describeHttpError(err), channelId },
+          { err: this.describeError(err), channelId },
           'gozap: falha ao desconectar a instância (best-effort)',
         );
       }
@@ -616,7 +620,7 @@ export class GozapInstancesService {
       })
       .catch((err: unknown) => {
         this.logger.warn(
-          { err: describeHttpError(err), channelId },
+          { err: this.describeError(err), channelId },
           'gozap: falha ao registrar o evento de desconexão (best-effort)',
         );
       });
@@ -637,7 +641,7 @@ export class GozapInstancesService {
         await this.http.delete('/instance', { headers: { token } });
       } catch (err) {
         this.logger.warn(
-          { err: describeHttpError(err), channelId },
+          { err: this.describeError(err), channelId },
           'gozap: falha ao remover a instância no GoZap (best-effort); soft-delete segue',
         );
       }
@@ -808,12 +812,102 @@ export class GozapInstancesService {
    * caminho padrão de uma campanha rodando. Ver OPERATIONS.md.
    */
   private webhookCredentialHeaders():
-    | { headers: Record<string, string> }
-    | Record<string, never> {
+    { headers: Record<string, string> } | Record<string, never> {
     if (this.queryTokenAllowed()) return {};
     const token = this.config.get('GOZAP_WEBHOOK_TOKEN', { infer: true });
     if (!token) return {};
     return { headers: { 'X-Webhook-Token': token } };
+  }
+
+  /**
+   * Vaga do plano ANTES de `POST /instance/create`: a conta é do plano Básico
+   * (`GOZAP_MAX_INSTANCES`, padrão 1) e é dividida com o Picoa. Criar além do
+   * limite dá 502 no GoZap e já derrubou em produção a instância que estava no
+   * ar — então, com a conta cheia, recusa com a lista do que ocupa as vagas.
+   * A contagem é `instances.length`, de qualquer sistema e em qualquer status:
+   * instância desconectada também ocupa vaga do plano.
+   */
+  private async assertPlanHasRoom(adminToken: string): Promise<void> {
+    const instances = await this.listAccountInstances(adminToken);
+    const limit = this.maxInstances();
+    if (instances.length < limit) return;
+    const inUse = instances.map(describeListedInstance).join(', ');
+    throw new DomainError({
+      code: 'gozap.instance_limit_reached',
+      message: `A conta GoZap já usa ${instances.length} de ${limit} instância(s) do plano: ${inUse}. Para conectar um número novo, remova uma conexão que não é mais usada ou aumente o plano do GoZap.`,
+      status: 409,
+    });
+  }
+
+  /**
+   * `GET /instance/all` (header `admintoken`). SEGREDO: o retorno traz o
+   * `token` de TODAS as instâncias da conta, inclusive as do Picoa — o corpo
+   * nunca vai para log nem para erro; quem lê os itens é só
+   * `describeListedInstance`. Falha FECHADA: rede, 4xx/5xx ou corpo sem a
+   * lista `instances` → `gozap.capacity_check_failed`, e o create não roda.
+   */
+  private async listAccountInstances(adminToken: string): Promise<unknown[]> {
+    let instances: unknown;
+    try {
+      const res = await this.http.get<{ instances?: unknown }>(
+        '/instance/all',
+        { headers: { admintoken: adminToken } },
+      );
+      instances = (res.data as { instances?: unknown } | null)?.instances;
+    } catch (err) {
+      this.logger.warn(
+        { err: this.describeError(err) },
+        'gozap: GET /instance/all falhou — criação recusada sem saber a vaga',
+      );
+      throw capacityCheckFailed();
+    }
+    if (!Array.isArray(instances)) {
+      this.logger.warn(
+        'gozap: GET /instance/all sem a lista `instances` — criação recusada sem saber a vaga',
+      );
+      throw capacityCheckFailed();
+    }
+    return instances as unknown[];
+  }
+
+  /** `GOZAP_MAX_INSTANCES` já validado no boot; na dúvida, o mais restrito (1). */
+  private maxInstances(): number {
+    const limit = Number(
+      this.config.get('GOZAP_MAX_INSTANCES', { infer: true }),
+    );
+    return Number.isInteger(limit) && limit >= 1 ? limit : 1;
+  }
+
+  /**
+   * `POST /instance/create` (header `admintoken`). Recusa do GoZap vira
+   * `gozap.creation_failed` com o motivo dele (`describeHttpError`).
+   */
+  private async postCreateInstance(
+    name: string,
+    adminToken: string,
+  ): Promise<GozapCreateInstanceResponse> {
+    try {
+      const res = await this.http.post<GozapCreateInstanceResponse>(
+        '/instance/create',
+        { name, connection_mode: 'companion' },
+        { headers: { admintoken: adminToken } },
+      );
+      return res.data;
+    } catch (err) {
+      // O motivo do GoZap precisa ficar no log (em 23/10 três 502 seguidos
+      // sumiram sem rastro). Só o resumo — NUNCA `{ err }` cru: o header
+      // `admintoken` viaja em `err.config.headers`.
+      const reason = this.describeError(err);
+      this.logger.warn(
+        { err: reason, channelName: name },
+        'gozap: POST /instance/create falhou',
+      );
+      throw new DomainError({
+        code: 'gozap.creation_failed',
+        message: `GoZap recusou a criação da instância "${name}": ${reason}`,
+        status: 502,
+      });
+    }
   }
 
   private async mustFindGozapChannel(channelId: string): Promise<Channel> {
@@ -840,4 +934,93 @@ export class GozapInstancesService {
     }
     return key;
   }
+
+  /**
+   * `describeHttpError` com o segredo do webhook na máscara. O
+   * `GOZAP_WEBHOOK_TOKEN` vai no CORPO do `POST /webhook` (`?t=` da URL ou
+   * o header de entrada), fora dos headers que a máscara já conhece, e o
+   * GoZap pode ecoá-lo no texto do erro. Todo resumo de falha HTTP desta
+   * classe (log ou mensagem) passa por aqui.
+   */
+  private describeError(err: unknown): string {
+    return describeHttpError(err, [
+      this.config.get('GOZAP_WEBHOOK_TOKEN', { infer: true }),
+    ]);
+  }
+}
+
+/** Teto do texto de erro do GoZap que entra no resumo (log e mensagem). */
+const GOZAP_ERROR_TEXT_MAX = 200;
+
+/** Headers em que viaja segredo nas chamadas ao GoZap (instância e admin). */
+const SECRET_HEADER_NAMES = new Set(['token', 'admintoken']);
+
+/** Os valores dos headers secretos da request que falhou (`err.config.headers`). */
+function secretHeaderValues(headers: unknown): string[] {
+  if (typeof headers !== 'object' || headers === null) return [];
+  return Object.entries(headers as Record<string, unknown>)
+    .filter(([name]) => SECRET_HEADER_NAMES.has(name.toLowerCase()))
+    .map(([, value]) => value)
+    .filter((value): value is string => typeof value === 'string' && !!value);
+}
+
+/**
+ * O texto de erro que o GoZap devolve (`error` ou `message`), já sem segredo
+ * e cortado. O texto vem de TERCEIRO e vai para log e para a mensagem ao
+ * operador, então, por precaução, antes do corte: (1) cada segredo conhecido
+ * (headers secretos da própria request e os extras de `describeHttpError`,
+ * como o do webhook) que o GoZap tenha ecoado vira `***`; (2) a querystring
+ * de URL vira `?***` — é onde viaja o segredo do webhook (`?t=`). Mascarar
+ * ANTES de cortar: o corte no meio de um token deixaria um pedaço dele.
+ */
+function gozapErrorText(
+  data: unknown,
+  secrets: ReadonlyArray<string | undefined>,
+): string | null {
+  if (typeof data !== 'object' || data === null) return null;
+  const { error, message } = data as { error?: unknown; message?: unknown };
+  const raw = typeof error === 'string' ? error : message;
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  const masked = secrets
+    .filter((secret): secret is string => !!secret)
+    .reduce((text, secret) => text.split(secret).join('***'), raw.trim())
+    .replace(/(https?:\/\/[^\s?#"']*)\?[^\s"']*/gi, '$1?***');
+  return masked.slice(0, GOZAP_ERROR_TEXT_MAX);
+}
+
+/** `instance.status` do GoZap → como o operador lê na mensagem de vaga. */
+const GOZAP_STATUS_PT: Record<string, string> = {
+  connected: 'conectada',
+  disconnected: 'desconectada',
+  connecting: 'conectando',
+};
+
+/**
+ * `nome (status)` de um item de `GET /instance/all`. SEGREDO: cada item traz
+ * o `token` da instância (de TODAS as instâncias da conta, inclusive as de
+ * outro sistema que a divida). Só `name`, `id` (na falta do nome) e `status`
+ * são lidos aqui; o resto do item nunca sai desta função.
+ */
+function describeListedInstance(item: unknown): string {
+  const i = (typeof item === 'object' && item !== null ? item : {}) as {
+    id?: unknown;
+    name?: unknown;
+    status?: unknown;
+  };
+  const label = [i.name, i.id].find((v) => typeof v === 'string' && v.trim());
+  const status =
+    typeof i.status === 'string'
+      ? (GOZAP_STATUS_PT[i.status] ?? i.status)
+      : 'status desconhecido';
+  return `${(label as string | undefined) ?? 'sem nome'} (${status})`;
+}
+
+/** Falha FECHADA: sem saber se há vaga, o create não é chamado. */
+function capacityCheckFailed(): DomainError {
+  return new DomainError({
+    code: 'gozap.capacity_check_failed',
+    message:
+      'Não foi possível consultar as vagas da conta GoZap. Tente de novo em alguns minutos.',
+    status: 502,
+  });
 }

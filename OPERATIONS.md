@@ -528,13 +528,14 @@ risco na tela. Nada valida sozinho.
 
 ### Variáveis de ambiente (serviços `api` **e** `worker`)
 
-As duas precisam estar nos DOIS serviços. Quem executa de fato é o `worker`; o
+Todas precisam estar nos DOIS serviços. Quem executa a validação é o `worker`; o
 `api` valida o mesmo schema no boot, e uma env presente num serviço e ausente
 no outro produz dois processos com crenças diferentes sobre a mesma coisa.
 
 | Variável | Padrão | O que faz |
 | --- | --- | --- |
 | `GOZAP_CHECK_RATE_PER_MIN` | `40` | Ritmo das consultas, por minuto. 40 é lento **de propósito** (1 a cada 1500 ms). Subir aumenta o risco de perder o canal. |
+| `GOZAP_MAX_INSTANCES` | `1` | Não é da validação: é o número de instâncias que o plano do GoZap permite. Antes de criar uma "Nova conexão GoZap", a `api` conta as instâncias da **conta inteira** — inclusive as desconectadas e as de outro sistema que divida a conta (hoje, o Picoa) — e recusa se já chegou neste número. Depois de aumentar o plano no GoZap, suba este valor em Environment no Dokploy e faça redeploy; senão a recusa continua. |
 | `CONTACT_SYNC_CRON_ENABLED` | `false` | **Validação automática diária — desligada por padrão.** Ligar só com decisão explícita de quem responde pelo número. |
 
 Valores que LIGAM o cron: `true` ou `1`. Qualquer outra coisa (incluindo vazio,

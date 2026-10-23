@@ -31,6 +31,17 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.10.23',
+    date: '2026-10-23',
+    title: 'Aviso de plano cheio ao criar conexão GoZap',
+    items: [
+      {
+        text: 'Ao criar uma "Nova conexão GoZap" com o plano já cheio, o sistema avisa antes de criar e mostra qual conexão está ocupando a vaga. Para liberar, remova uma conexão que não é mais usada ou aumente o plano do GoZap.',
+        where: '/connect',
+      },
+    ],
+  },
+  {
     version: '2026.10.22',
     date: '2026-10-22',
     title: 'Pessoas no setor, níveis e envio para vários setores',

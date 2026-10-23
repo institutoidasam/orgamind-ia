@@ -199,9 +199,18 @@ describe('novidade 2026.10.21.1', () => {
   });
 });
 
+describe('novidade 2026.10.23', () => {
+  it('avisa do plano GoZap cheio na tela Números e canais', () => {
+    const note = RELEASE_NOTES.find((n) => n.version === '2026.10.23');
+    expect(note?.date).toBe('2026-10-23');
+    expect(note?.items.map((i) => i.where)).toEqual(['/connect']);
+    expect(note?.items[0].text).toContain('Nova conexão GoZap');
+  });
+});
+
 describe('novidade 2026.10.22', () => {
-  it('está no topo', () => {
-    expect(RELEASE_NOTES[0].version).toBe('2026.10.22');
+  it('segue registrada', () => {
+    expect(RELEASE_NOTES.some((n) => n.version === '2026.10.22')).toBe(true);
   });
 
   it('where /setores, /niveis, /whatsapp-equipe e /users', () => {

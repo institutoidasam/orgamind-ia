@@ -25,6 +25,7 @@ const FORBIDDEN_TEXT = 'Só o administrador e o gestor do setor veem a escala.';
 const NO_SECTORS_TEXT = 'Nenhum setor disponível para a escala.';
 const PICK_SECTOR_TEXT = 'Escolha o setor para ver a escala.';
 const NO_PEOPLE_TEXT = 'Nenhuma pessoa ativa neste setor.';
+const TRUNCATED_TEXT = 'Mostrando as primeiras 500 pessoas deste setor.';
 
 function SchedulePage() {
   const options = useScheduleOptions();
@@ -99,7 +100,12 @@ function BoardSection({ board, onSelect, onEditSchedule }: BoardSectionProps) {
   if (board.rows.length === 0) {
     return <p className="rounded-md border p-6 text-sm text-muted-foreground">{NO_PEOPLE_TEXT}</p>;
   }
-  return <ScheduleBoardTable board={board} onSelect={onSelect} onEditSchedule={onEditSchedule} />;
+  return (
+    <>
+      {board.truncated && <p role="status" className="text-sm text-muted-foreground">{TRUNCATED_TEXT}</p>}
+      <ScheduleBoardTable board={board} onSelect={onSelect} onEditSchedule={onEditSchedule} />
+    </>
+  );
 }
 
 type SectorFieldProps = { sectors: SectorRef[]; sectorId: string | null; onChange: (id: string) => void };

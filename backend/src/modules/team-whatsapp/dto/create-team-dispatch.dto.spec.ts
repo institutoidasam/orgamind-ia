@@ -20,8 +20,6 @@ describe('createTeamDispatchSchema', () => {
     { ...base, target: { type: 'all' } },
     { ...base, target: { type: 'user' } },
     { ...base, target: { type: 'sector', sectorId: '', date: DATE } },
-    { ...base, channelId: '', target: { type: 'user', userId: 'u' } },
-    { text: 'oi', target: { type: 'user', userId: 'u' } },
   ])('recusa corpo inválido #%#', (body) => {
     expect(createTeamDispatchSchema.safeParse(body).success).toBe(false);
   });
@@ -146,5 +144,65 @@ describe('createTeamDispatchSchema — quando enviar (C7)', () => {
     expect(
       createTeamDispatchSchema.safeParse({ ...base, ...extra }).success,
     ).toBe(ok);
+  });
+});
+
+const D = 'shift_day';
+const N = 'shift_night';
+const turnos = (target: Record<string, unknown>, extra = {}) => ({
+  ...base,
+  ...extra,
+  target: { type: 'sector', sectorIds: ['s'], date: DATE, ...target },
+});
+const many = (n: number) => Array.from({ length: n }, (_, i) => `t${i}`);
+
+describe('createTeamDispatchSchema — vários turnos (C3)', () => {
+  // Sem caminho = aceita; com caminho = recusa (400) naquele campo.
+  it.each<[string, Record<string, unknown>, string | undefined]>([
+    ['shiftIds [D, N] → aceita', turnos({ shiftIds: [D, N] }), undefined],
+    ['20 turnos → aceita', turnos({ shiftIds: many(20) }), undefined],
+    [
+      'shiftId e shiftIds juntos → 400',
+      turnos({ shiftId: D, shiftIds: [N] }),
+      'shiftId',
+    ],
+    [
+      'includeOff com shiftIds → 400',
+      turnos({ shiftIds: [D, N], includeOff: true }),
+      'includeOff',
+    ],
+    [
+      'shift_start com 2 turnos → 400',
+      turnos({ shiftIds: [D, N] }, { when: 'shift_start' }),
+      'when',
+    ],
+    [
+      'shift_start com 1 turno → aceita',
+      turnos({ shiftIds: [D] }, { when: 'shift_start' }),
+      undefined,
+    ],
+    ['21 turnos → 400', turnos({ shiftIds: many(21) }), 'shiftIds'],
+    ['channelId presente → aceita', turnos({}, { channelId: 'c9' }), undefined],
+    [
+      'sem channelId → aceita',
+      { text: 'oi', target: turnos({}).target },
+      undefined,
+    ],
+  ])('%s', (_caso, body, failingPath) => {
+    const result = createTeamDispatchSchema.safeParse(body);
+    expect(result.success).toBe(failingPath === undefined);
+    if (!result.success) {
+      expect(result.error.issues.map((i) => i.path.at(-1))).toContain(
+        failingPath,
+      );
+    }
+  });
+});
+
+describe('createTeamDispatchSchema — apelido shiftId (D9)', () => {
+  it('shiftId sozinho vira shiftIds [shiftId], sem a chave antiga', () => {
+    const { target } = createTeamDispatchSchema.parse(turnos({ shiftId: D }));
+    expect(target).toMatchObject({ shiftIds: [D] });
+    expect(target).not.toHaveProperty('shiftId');
   });
 });

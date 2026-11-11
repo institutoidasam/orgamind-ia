@@ -6,7 +6,6 @@ import {
   type StartedPostgreSqlContainer,
 } from '@testcontainers/postgresql';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { InternalNumbersService } from '../internal-numbers/internal-numbers.service';
 import { InternalSectorsRepository } from './internal-sectors.repository';
 import { InternalSectorsService } from './internal-sectors.service';
 
@@ -43,7 +42,7 @@ describe('Setores BDD (Postgres exclusivo)', () => {
     await postgres?.stop();
   });
 
-  it('ADMIN cria, edita e consulta setor com gestor, membros e números', async () => {
+  it('ADMIN cria, edita e consulta setor com gestor, membros e o número efetivo', async () => {
     const manager = await prisma.user.create({
       data: {
         name: 'Gestora ativa',
@@ -88,13 +87,13 @@ describe('Setores BDD (Postgres exclusivo)', () => {
           isActive: false,
         },
       }),
-      prisma.sectorNumber.create({
+      prisma.channel.create({
         data: {
-          name: 'Recepção Compras',
-          phone: '+5592999990001',
-          provider: 'META',
-          sectorId: created.id,
-          routeToSector: true,
+          name: 'Compras Zap',
+          provider: 'GOZAP',
+          phoneE164: '+5592999990001',
+          isActive: true,
+          sectors: { connect: { id: created.id } },
         },
       }),
     ]);
@@ -109,14 +108,16 @@ describe('Setores BDD (Postgres exclusivo)', () => {
       name: 'Compras estratégicas',
       manager: { id: manager.id, email: manager.email },
       memberCount: 3,
-      numberCount: 1,
+      channel: { name: 'Compras Zap', phoneE164: '+5592999990001' },
     });
+    expect(updated).not.toHaveProperty('numberCount');
     expect(detail).toMatchObject({
       id: created.id,
       description: 'Suprimentos e contratos',
       manager: { id: manager.id },
-      numbers: [{ phone: '+5592999990001', routeToSector: true }],
+      channel: { name: 'Compras Zap', phoneE164: '+5592999990001' },
     });
+    expect(detail).not.toHaveProperty('numbers');
     expect(detail.members).toHaveLength(3);
   });
 
@@ -197,38 +198,30 @@ describe('Setores BDD (Postgres exclusivo)', () => {
     ).rejects.toMatchObject({ status: 409, code: 'sector.manager_invalid' });
   });
 
-  it('mantém uma linha e devolve conflito 409 em creates concorrentes do mesmo E.164', async () => {
+  it('canal inativo ou de outro provedor deixa o setor sem número, sem apagar a associação', async () => {
     const sector = await prisma.sector.findUniqueOrThrow({
       where: { code: 'COM' },
     });
-    const numbers = new InternalNumbersService(prisma as never);
-    const phone = '+5592999990002';
-    const outcomes = await Promise.allSettled([
-      numbers.create({
-        name: 'Linha concorrente A',
-        phone,
-        provider: 'OTHER',
-        sectorId: sector.id,
-        routeToSector: false,
-      }),
-      numbers.create({
-        name: 'Linha concorrente B',
-        phone,
-        provider: 'OTHER',
-        sectorId: sector.id,
-        routeToSector: false,
-      }),
-    ]);
+    const channelId = sector.channelId as string;
 
-    expect(
-      outcomes.filter((outcome) => outcome.status === 'fulfilled'),
-    ).toHaveLength(1);
-    const rejection = outcomes.find((outcome) => outcome.status === 'rejected');
-    expect(rejection).toMatchObject({
-      reason: { status: 409, code: 'internal_number.phone_taken' },
+    await prisma.channel.update({
+      where: { id: channelId },
+      data: { isActive: false },
     });
-    await expect(prisma.sectorNumber.count({ where: { phone } })).resolves.toBe(
-      1,
+    await expect(sectors.get(sector.id)).resolves.toMatchObject({
+      channel: null,
+    });
+
+    await prisma.channel.update({
+      where: { id: channelId },
+      data: { isActive: true, provider: 'TWILIO' },
+    });
+    const listed = await sectors.list(1, 100);
+    expect(listed.items.find((item) => item.id === sector.id)?.channel).toBe(
+      null,
     );
+    await expect(
+      prisma.sector.findUniqueOrThrow({ where: { id: sector.id } }),
+    ).resolves.toMatchObject({ channelId });
   });
 });

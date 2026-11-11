@@ -38,6 +38,7 @@ describe('InstanceRow', () => {
         onRestart={vi.fn()}
         onRemove={vi.fn()}
         onOpenConfig={vi.fn()}
+        onEditSectors={vi.fn()}
       />,
     );
 

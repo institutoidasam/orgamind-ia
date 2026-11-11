@@ -23,11 +23,17 @@ export const teamConnectionStateSchema = z.enum([
   'connecting',
   'close',
 ]);
-// SCHEDULED = aguardando o disparo agendado; CANCELLED = envio cancelado antes.
+// Ordem do ciclo (C4): QUEUED < SENT < DELIVERED < READ < REPLIED; UNCERTAIN =
+// o WhatsApp não confirmou (pode ter saído); SCHEDULED = aguardando o disparo
+// agendado; CANCELLED = envio cancelado antes.
 export const teamRecipientStatusSchema = z.enum([
   'QUEUED',
   'SENT',
+  'DELIVERED',
+  'READ',
+  'REPLIED',
   'FAILED',
+  'UNCERTAIN',
   'SKIPPED',
   'SCHEDULED',
   'CANCELLED',
@@ -64,7 +70,7 @@ export const rosterPersonSchema = z.object({
   sectorName: z.string().nullable().optional(),
   levelName: z.string().nullable().optional(),
 });
-/** Pessoa da foto na lista de envios: setor/nível sempre presentes (null = foto antiga). */
+/** Pessoa da foto no detalhe do envio: setor/nível sempre presentes (null = foto antiga). */
 const listedRosterPersonSchema = rosterPersonSchema.extend({
   sectorName: z.string().nullable(),
   levelName: z.string().nullable(),
@@ -154,8 +160,25 @@ const teamRosterMemberSchema = personSchema.extend({
 });
 
 /**
- * C4: escala dos setores pedidos na data, setores por nome (pt-BR); cada pessoa
- * aparece em um setor só. `startsAt` = início do turno na data (ISO).
+ * C2: número efetivo da área (D2) com o estado ao vivo (D7). `phoneE164` é da
+ * empresa (GC8). `live.state` só `open` libera o envio; `unknown` = não deu para
+ * observar. `checkedAt` = hora da consulta ao provedor (ISO).
+ */
+export const teamSectorChannelSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  phoneE164: z.string().nullable(),
+  provider: z.enum(['GOZAP', 'EVOLUTION']),
+  live: z.object({
+    state: z.enum(['open', 'connecting', 'close', 'unknown']),
+    checkedAt: z.string(),
+  }),
+});
+
+/**
+ * C4/C2: escala dos setores pedidos na data, setores por nome (pt-BR); cada
+ * pessoa aparece em um setor só. `startsAt` = início do turno na data (ISO).
+ * `channel` = número da área (null = área sem número).
  */
 export const teamRosterResponseSchema = z.object({
   date: civilDateSchema,
@@ -164,9 +187,21 @@ export const teamRosterResponseSchema = z.object({
     .object({
       sectorId: z.string(),
       name: z.string(),
+      channel: teamSectorChannelSchema.nullable(),
       members: teamRosterMemberSchema.array(),
     })
     .array(),
+});
+
+/**
+ * C2: por qual número a pessoa recebe hoje. `sector` = onde ela atua hoje
+ * (exceção "Outro setor" da escala, senão o setor do cadastro); null = sem
+ * área, e então `channel` também é null.
+ */
+export const teamPersonRouteResponseSchema = z.object({
+  userId: z.string(),
+  sector: z.object({ id: z.string(), name: z.string() }).nullable(),
+  channel: teamSectorChannelSchema.nullable(),
 });
 
 /**
@@ -187,14 +222,40 @@ export const createTeamDispatchResponseSchema = z.object({
     .array(),
 });
 
+const countSchema = z.number().int().nonnegative();
+
+/** C5: quantos destinatários há em cada situação (uma chave por status). */
 export const teamDispatchCountsSchema = z.object({
-  queued: z.number().int().nonnegative(),
-  sent: z.number().int().nonnegative(),
-  failed: z.number().int().nonnegative(),
-  skipped: z.number().int().nonnegative(),
-  scheduled: z.number().int().nonnegative(),
-  cancelled: z.number().int().nonnegative(),
+  queued: countSchema,
+  sent: countSchema,
+  delivered: countSchema,
+  read: countSchema,
+  replied: countSchema,
+  failed: countSchema,
+  uncertain: countSchema,
+  skipped: countSchema,
+  scheduled: countSchema,
+  cancelled: countSchema,
 });
+
+/**
+ * C5: números usados, pelo snapshot dos destinatários. name/phoneE164 null =
+ * número removido depois do envio. O telefone é do número (empresa), nunca de pessoa.
+ */
+export const teamDispatchChannelsSchema = z
+  .object({
+    name: z.string().nullable(),
+    phoneE164: z.string().nullable(),
+    count: countSchema,
+  })
+  .array();
+
+/** C5: totais da página das listas paginadas (`page`/`pageSize` ecoam a consulta). */
+const pageMetaShape = {
+  total: z.number().int().nonnegative(),
+  page: z.number().int().positive(),
+  pageSize: z.number().int().positive(),
+};
 
 export const teamDispatchListResponseSchema = z.object({
   items: z
@@ -212,25 +273,9 @@ export const teamDispatchListResponseSchema = z.object({
       }),
       // C6: setores do envio por nome (snapshot); [] no alvo pessoa.
       sectors: z.object({ id: z.string(), name: z.string() }).array(),
-      // null = canal removido depois do envio (o front mostra "canal removido").
-      channel: z.object({ id: z.string(), name: z.string() }).nullable(),
+      // D13: o histórico não traz destinatários (vão para o detalhe paginado).
+      channels: teamDispatchChannelsSchema,
       counts: teamDispatchCountsSchema,
-      // Todos os destinatários, por nome, sem telefone. reason = errorCode (FAILED)
-      // ou skipReason (SKIPPED); null nos demais. userId null = usuário apagado.
-      recipients: z
-        .object({
-          userId: z.string().nullable(),
-          name: z.string(),
-          // Nome do turno do destinatário no envio; null = sem turno.
-          shiftName: z.string().nullable(),
-          status: teamRecipientStatusSchema,
-          reason: z.string().nullable(),
-          // C6: setor em que entrou e nível na hora; null = alvo pessoa ou
-          // envio anterior (o backfill preenche só o setor).
-          sectorName: z.string().nullable(),
-          levelName: z.string().nullable(),
-        })
-        .array(),
       // Data da escala do envio; null = envio anterior à foto da escala.
       rosterDate: civilDateSchema.nullable(),
       state: teamDispatchStateSchema,
@@ -238,12 +283,65 @@ export const teamDispatchListResponseSchema = z.object({
       scheduledFor: z.string().nullable(),
       // Hora real do disparo do agendado (ISO); null = imediato ou não disparado.
       firedAt: z.string().nullable(),
-      // Da foto: escalados no filtro que não são destinatários.
-      unselected: listedRosterPersonSchema.array(),
-      // Da foto: de folga que não são destinatários. Sem foto → [] nos dois.
-      off: listedRosterPersonSchema.array(),
     })
     .array(),
+  ...pageMetaShape,
+});
+
+/**
+ * C5: `GET dispatches/:id`, o topo da tela de resultado. `leftOut` vem da foto
+ * da escala: escalados no filtro e de folga que não são destinatários; sem foto
+ * (ou foto antiga) → [] nos dois.
+ */
+export const teamDispatchDetailResponseSchema = z.object({
+  id: z.string(),
+  targetLabel: z.string(),
+  text: z.string(),
+  state: teamDispatchStateSchema,
+  createdAt: z.string(),
+  scheduledFor: z.string().nullable(),
+  firedAt: z.string().nullable(),
+  // null quando o autor foi apagado depois do envio.
+  author: z.object({ id: z.string(), name: z.string().nullable() }).nullable(),
+  sectors: z.object({ id: z.string(), name: z.string() }).array(),
+  counts: teamDispatchCountsSchema,
+  channels: teamDispatchChannelsSchema,
+  leftOut: z.object({
+    unselected: listedRosterPersonSchema.array(),
+    off: listedRosterPersonSchema.array(),
+  }),
+});
+
+/**
+ * C5: `GET dispatches/:id/recipients`, uma página por nome. `reason` = skipReason
+ * ?? errorCode; `channel` = número do snapshot (null = sem número); `repeatable`
+ * é decisão do servidor (`isRepeatable`). Sem telefone de pessoa (GC8).
+ */
+export const teamDispatchRecipientPageSchema = z.object({
+  items: z
+    .object({
+      id: z.string(),
+      userName: z.string(),
+      sectorName: z.string().nullable(),
+      levelName: z.string().nullable(),
+      shiftName: z.string().nullable(),
+      status: teamRecipientStatusSchema,
+      reason: z.string().nullable(),
+      attempts: countSchema,
+      channel: z
+        .object({
+          name: z.string().nullable(),
+          phoneE164: z.string().nullable(),
+        })
+        .nullable(),
+      acceptedAt: z.string().nullable(),
+      deliveredAt: z.string().nullable(),
+      readAt: z.string().nullable(),
+      repliedAt: z.string().nullable(),
+      repeatable: z.boolean(),
+    })
+    .array(),
+  ...pageMetaShape,
 });
 
 /**
@@ -264,6 +362,7 @@ export const teamScheduledListResponseSchema = z.object({
       author: personSchema.nullable(),
     })
     .array(),
+  ...pageMetaShape,
 });
 
 /** C9: resposta do POST /internal/team-whatsapp/dispatches/:id/cancel. */
@@ -272,12 +371,19 @@ export const cancelTeamDispatchResponseSchema = z.object({
   state: z.literal('CANCELLED'),
 });
 
+/** C6: resposta do POST /internal/team-whatsapp/dispatches/:id/retry. */
+export const retryTeamDispatchResponseSchema = z.object({
+  requeued: z.number().int().nonnegative(),
+});
+
 export type TeamShiftSnapshot = z.infer<typeof teamShiftSnapshotSchema>;
 export type TeamRosterPerson = z.infer<typeof rosterPersonSchema>;
 export type TeamTargetsResponse = z.infer<typeof teamTargetsResponseSchema>;
 export type TeamRosterQuery = z.infer<typeof teamRosterQuerySchema>;
 export type TeamRosterResponse = z.infer<typeof teamRosterResponseSchema>;
 export type TeamRosterMember = z.infer<typeof teamRosterMemberSchema>;
+export type TeamSectorChannel = z.infer<typeof teamSectorChannelSchema>;
+export type TeamPersonRoute = z.infer<typeof teamPersonRouteResponseSchema>;
 export type CreateTeamDispatchResponse = z.infer<
   typeof createTeamDispatchResponseSchema
 >;
@@ -285,9 +391,19 @@ export type TeamDispatchCounts = z.infer<typeof teamDispatchCountsSchema>;
 export type TeamDispatchListResponse = z.infer<
   typeof teamDispatchListResponseSchema
 >;
+export type TeamDispatchChannels = z.infer<typeof teamDispatchChannelsSchema>;
+export type TeamDispatchDetail = z.infer<
+  typeof teamDispatchDetailResponseSchema
+>;
+export type TeamDispatchRecipientPage = z.infer<
+  typeof teamDispatchRecipientPageSchema
+>;
 export type TeamScheduledListResponse = z.infer<
   typeof teamScheduledListResponseSchema
 >;
 export type CancelTeamDispatchResponse = z.infer<
   typeof cancelTeamDispatchResponseSchema
+>;
+export type RetryTeamDispatchResponse = z.infer<
+  typeof retryTeamDispatchResponseSchema
 >;

@@ -109,6 +109,29 @@ describe('StaffScheduleRepository.listVisitorIds (Postgres real)', () => {
 
     expect([...ids].sort()).toEqual(expected);
   }, 60_000);
+
+  it('listVisitorIdsBySector agrupa por setor numa consulta e listVisitorIds respeita o take', async () => {
+    const [sector] = await prisma.sector.findMany({
+      where: { name: 'VisProd' },
+    });
+    const otherSector = await createSector('VisZero');
+
+    const bySector = await repo.listVisitorIdsBySector(
+      [sector.id, otherSector.id],
+      '2026-10-19',
+      '2026-10-25',
+    );
+
+    expect(bySector.get(sector.id)).toHaveLength(2);
+    expect(bySector.get(otherSector.id) ?? []).toEqual([]);
+    const taken = await repo.listVisitorIds(
+      sector.id,
+      '2026-10-19',
+      '2026-10-25',
+      1,
+    );
+    expect(taken).toHaveLength(1);
+  }, 60_000);
 });
 
 /** Ciclo CUSTOM de 3 dias gravado fora de ordem + exceções antes, no e depois do período. */
@@ -188,7 +211,7 @@ describe('StaffScheduleRepository — consultas do quadro (Postgres real)', () =
       ...person,
     };
 
-    await expect(repo.listSectorPeople(sector.id)).resolves.toEqual([row]);
+    await expect(repo.listSectorPeople(sector.id, 10)).resolves.toEqual([row]);
     await expect(repo.listPeopleByIds([ana.id])).resolves.toEqual([row]);
     await expect(repo.listSectors([sector.id, old.id])).resolves.toEqual([
       { id: sector.id, name: 'QdrProd' },

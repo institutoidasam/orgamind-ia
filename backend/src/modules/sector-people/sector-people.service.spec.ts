@@ -28,6 +28,13 @@ const SECTORS = [
     isActive: true,
     managerId: MANAGER.id,
     manager: { id: MANAGER.id, name: 'Marta' },
+    channel: {
+      id: 'channel_ope',
+      name: 'Operação Zap',
+      phoneE164: '+5592999990001',
+      provider: 'GOZAP',
+      isActive: true,
+    },
   },
   {
     id: 'sector_it',
@@ -36,6 +43,7 @@ const SECTORS = [
     isActive: true,
     managerId: 'user_other',
     manager: null,
+    channel: null,
   },
 ];
 const [OPERATION, IT] = SECTORS;
@@ -114,6 +122,11 @@ describe('SectorPeopleService — leitura', () => {
       code: 'OPE',
       isActive: true,
       manager: { id: MANAGER.id, name: 'Marta' },
+      channel: {
+        id: 'channel_ope',
+        name: 'Operação Zap',
+        phoneE164: '+5592999990001',
+      },
     });
     expect(result.people.map((p) => p.id)).toEqual(['user_ana']);
     expect(result.options).toEqual({

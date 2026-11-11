@@ -4,7 +4,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { formatPhoneBR } from '@/lib/format-phone';
 import { OFF_REASON_LABEL } from '../error-messages';
-import { ALL_SHIFTS, canReceive, memberName, selectedIdsIn, type ShiftChoice } from '../member-filter';
+import { canReceive, memberName, selectedIdsIn } from '../member-filter';
 import type { RosterMember } from '../schemas';
 
 type ShiftNames = ReadonlyMap<string, string>;
@@ -23,7 +23,8 @@ export type SectorGroup = {
 };
 
 type Props = {
-  choice: ShiftChoice;
+  /** Turnos marcados; vazio = "Todos os turnos", o único caso em que a folga entra. */
+  shiftIds: readonly string[];
   groups: readonly SectorGroup[];
   includeOff: boolean;
   shiftNames: ShiftNames;
@@ -145,13 +146,13 @@ function SectorMembers({ group, multi, shiftNames, includeOff, selected, onToggl
 }
 
 export function MemberSelection(props: Props) {
-  const { choice, groups, includeOff, shiftNames, selected, onToggle } = props;
+  const { shiftIds, groups, includeOff, shiftNames, selected, onToggle } = props;
   const visible = groups.flatMap((g) => g.visible);
   const receiving = visible.filter(canReceive);
   const marked = selectedIdsIn(visible, selected).length;
   return (
     <section className="space-y-3 rounded-md border p-4" style={{ borderColor: 'var(--border)' }}>
-      {choice === ALL_SHIFTS && <IncludeOffToggle checked={includeOff} onChange={props.onToggleOff} />}
+      {shiftIds.length === 0 && <IncludeOffToggle checked={includeOff} onChange={props.onToggleOff} />}
       {groups.map((g) => (
         <SectorMembers
           key={g.sectorId} group={g} multi={groups.length > 1} shiftNames={shiftNames}

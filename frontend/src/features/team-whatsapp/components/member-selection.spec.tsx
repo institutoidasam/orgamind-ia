@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@tanstack/react-router', () => ({
@@ -20,10 +20,10 @@ const group = (sectorId: string, name: string, visible: RosterMember[], empty = 
   sectorId, name, empty, visible, off: [], noSchedule: 0,
 });
 
-function setup(groups: ReturnType<typeof group>[]) {
+function setup(groups: ReturnType<typeof group>[], shiftIds: string[] = ['noite']) {
   render(
     <MemberSelection
-      choice="noite" groups={groups} includeOff={false} shiftNames={new Map()} selected={new Set()}
+      shiftIds={shiftIds} groups={groups} includeOff={false} shiftNames={new Map()} selected={new Set()}
       onToggle={vi.fn()} onToggleOff={vi.fn()} onToggleAll={vi.fn()} onSendAll={vi.fn()} onSendSelected={vi.fn()}
     />,
   );
@@ -49,5 +49,13 @@ describe('MemberSelection', () => {
     setup([group('ti', 'TI', [ana])]);
     expect(screen.queryByRole('heading', { name: 'TI' })).not.toBeInTheDocument();
     expect(screen.getByRole('list', { name: 'Escalados' })).toBeInTheDocument();
+  });
+
+  it('incluir quem está de folga só aparece em Todos os turnos (sem turnos marcados)', () => {
+    setup([group('ti', 'TI', [ana])], []);
+    expect(screen.getByRole('checkbox', { name: 'incluir quem está de folga' })).toBeInTheDocument();
+    cleanup();
+    setup([group('ti', 'TI', [ana])], ['dia', 'noite']);
+    expect(screen.queryByRole('checkbox', { name: 'incluir quem está de folga' })).not.toBeInTheDocument();
   });
 });

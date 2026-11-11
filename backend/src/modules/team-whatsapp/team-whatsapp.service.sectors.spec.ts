@@ -4,11 +4,14 @@ import {
   createTeamDispatchSchema,
   type CreateTeamDispatchInput,
 } from './dto/create-team-dispatch.dto';
+import type { ScheduleExceptionInput } from '../staff-schedule/schedule-resolver';
 import {
   ADMIN,
   MANAGER,
   createHarness,
+  SHIFT_FIRST,
   dayPerson,
+  givenNumber,
   onShift,
   sector,
   type Harness,
@@ -73,7 +76,7 @@ const body = (extra: SectorExtra, when: 'now' | 'shift_start' = 'now') => ({
     type: 'sector' as const,
     sectorIds: ['ti', 'op'],
     date: DATE,
-    shiftId: NOITE.id,
+    shiftIds: [NOITE.id],
     ...extra,
   },
 });
@@ -102,6 +105,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date('2026-10-21T20:00:00Z'));
   h = createHarness();
+  givenNumber(h);
   h.repo.findActor.mockResolvedValue(ADMIN);
   h.repo.findSector.mockImplementation((id) =>
     Promise.resolve(SECTORS.get(id) ?? null),
@@ -205,7 +209,7 @@ describe('recusas', () => {
     h.repo.findActor.mockResolvedValue(OP_MANAGER);
     await rejectsWith(
       send(
-        { sectorIds: ['op', 'ti'], shiftId: 'nope', userIds: ['ana'] },
+        { sectorIds: ['op', 'ti'], shiftIds: ['nope'], userIds: ['ana'] },
         OP_MANAGER.id,
       ),
       'team_whatsapp.forbidden',
@@ -213,7 +217,7 @@ describe('recusas', () => {
     expect(h.repo.listActiveShifts.mock.calls).toHaveLength(0);
     expect(h.levels.listActive.mock.calls).toHaveLength(0);
     expect(h.repo.loadDayPeople.mock.calls).toHaveLength(0);
-    expect(h.repo.findChannel.mock.calls).toHaveLength(0);
+    expect(h.repo.findSectorChannels.mock.calls).toHaveLength(0);
   });
 
   it.each([
@@ -270,5 +274,96 @@ describe('agendar vários setores', () => {
     ]);
     expect(out).toMatchObject({ queued: 0, scheduled: 2 });
     expect(h.queue.addBulk.mock.calls).toHaveLength(0);
+  });
+});
+
+// D9: Dia + Noite no mesmo envio. Lia (TI, Dia) e Ana (TI, Noite); Davi (Operação,
+// Noite); Bruno é do TI, mas na data trabalha em Operação (Dia, "Outro setor"):
+// o repositório o devolve nas duas listas e ele conta uma vez, em Operação.
+const DIA = {
+  id: 'shift_day',
+  name: 'Dia',
+  startTime: '06:00',
+  endTime: '14:00',
+};
+const BORROWED: ScheduleExceptionInput = {
+  id: 'ex-op',
+  kind: 'OTHER_SECTOR',
+  startDate: DATE,
+  endDate: DATE,
+  shiftId: DIA.id,
+  sectorId: 'op',
+};
+const inShift = (id: string, sectorId: string, shift: typeof DIA) =>
+  dayPerson({
+    id,
+    name: id[0].toUpperCase() + id.slice(1),
+    sectorId,
+    sector: { isActive: true },
+    ...onShift(shift),
+  });
+const DIA_NOITE = [
+  inShift('lia', 'ti', DIA),
+  inShift('ana', 'ti', NOITE),
+  inShift('davi', 'op', NOITE),
+  inShift('eva', 'op', SHIFT_FIRST),
+  { ...inShift('bruno', 'ti', NOITE), exceptions: [BORROWED] },
+];
+
+const givenDiaNoite = () => {
+  h.repo.listActiveShifts.mockResolvedValue([DIA, NOITE, SHIFT_FIRST]);
+  h.repo.loadDayPeople.mockResolvedValue(DIA_NOITE);
+};
+const sendBoth = () => send({ shiftIds: [NOITE.id, DIA.id] });
+
+describe('vários turnos no mesmo envio (D9)', () => {
+  beforeEach(givenDiaNoite);
+
+  it('Dia + Noite em dois setores conta cada pessoa uma vez, sem quem é de outro turno', async () => {
+    await sendBoth();
+    expect(recipientsOf()).toEqual([
+      ['davi', 'op', 'Operação', null],
+      ['bruno', 'op', 'Operação', null],
+      ['ana', 'ti', 'TI', null],
+      ['lia', 'ti', 'TI', null],
+    ]);
+  });
+
+  it('rótulo pela ordem dos turnos ativos e, com dois turnos, o envio grava turno null', async () => {
+    await sendBoth();
+    expect(created()).toMatchObject({
+      targetLabel: 'Operação, TI · Dia, Noite · 21/10',
+      shiftId: null,
+      shiftName: null,
+      shiftStartTime: null,
+      shiftEndTime: null,
+    });
+    // Cada destinatário guarda o turno que a pessoa tem no dia.
+    expect(created().recipients.map((r) => [r.userId, r.shiftName])).toEqual([
+      ['davi', 'Noite'],
+      ['bruno', 'Dia'],
+      ['ana', 'Noite'],
+      ['lia', 'Dia'],
+    ]);
+  });
+});
+
+describe('vários turnos: recusas sem efeito (D9)', () => {
+  beforeEach(givenDiaNoite);
+
+  it('seleção só vale dentro dos turnos pedidos (lista conferida = enviada)', async () => {
+    await rejectsWith(
+      send({ shiftIds: [NOITE.id, DIA.id], userIds: ['lia', 'eva'] }),
+      'team_whatsapp.invalid_selection',
+    );
+  });
+
+  it('um turno inativo entre os pedidos → 422 invalid_shift antes de carregar a escala', async () => {
+    await rejectsWith(
+      send({ shiftIds: [NOITE.id, 'shift_old'] }),
+      'team_whatsapp.invalid_shift',
+    );
+    expect(h.repo.loadDayPeople.mock.calls).toHaveLength(0);
+    expect(h.levels.listActive.mock.calls).toHaveLength(0);
   });
 });

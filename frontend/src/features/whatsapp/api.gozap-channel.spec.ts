@@ -11,12 +11,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const postMock = vi.fn();
 const getMock = vi.fn();
 const deleteMock = vi.fn();
+const putMock = vi.fn();
 
 vi.mock('@/lib/api-client', () => ({
   api: {
     post: (...args: unknown[]) => postMock(...args),
     get: (...args: unknown[]) => getMock(...args),
     delete: (...args: unknown[]) => deleteMock(...args),
+    put: (...args: unknown[]) => putMock(...args),
   },
 }));
 
@@ -161,5 +163,34 @@ describe('useDeleteGozapChannel', () => {
     const { useDeleteGozapChannel } = await import('./api');
     await useDeleteGozapChannel().mutateAsync('ch1');
     expect(invalidateQueriesMock).toHaveBeenCalledWith({ queryKey: ['whatsapp', 'providers'] });
+  });
+});
+
+describe('áreas do número', () => {
+  it('useCreateGozapChannel envia sectorIds quando há e invalida os setores', async () => {
+    postMock.mockReturnValue({
+      json: async () => ({ id: 'ch1', name: 'Loja 1', phoneE164: null, isActive: true, isDefault: false, provider: 'GOZAP', sectors: [] }),
+    });
+    const { useCreateGozapChannel } = await import('./api');
+    await useCreateGozapChannel().mutateAsync({ name: 'Loja 1', sectorIds: ['log', 'exp'] });
+
+    expect(postMock).toHaveBeenCalledWith('whatsapp/channels', {
+      json: { provider: 'GOZAP', name: 'Loja 1', sectorIds: ['log', 'exp'] },
+    });
+    expect(invalidateQueriesMock).toHaveBeenCalledWith({ queryKey: ['internal', 'sectors'] });
+  });
+
+  it('useUpdateChannelSectors faz PUT com a lista e invalida conexões e setores', async () => {
+    putMock.mockReturnValue({
+      json: async () => ({ channelId: 'ch1', sectors: [{ id: 'log', name: 'Logística' }], moved: [] }),
+    });
+    const { useUpdateChannelSectors } = await import('./api');
+    const result = await useUpdateChannelSectors().mutateAsync({ channelId: 'ch1', sectorIds: ['log'] });
+
+    expect(putMock).toHaveBeenCalledWith('whatsapp/channels/ch1/sectors', { json: { sectorIds: ['log'] } });
+    expect(result.sectors).toEqual([{ id: 'log', name: 'Logística' }]);
+    for (const queryKey of [['whatsapp', 'providers'], ['whatsapp', 'instances'], ['internal', 'sectors']]) {
+      expect(invalidateQueriesMock).toHaveBeenCalledWith({ queryKey });
+    }
   });
 });

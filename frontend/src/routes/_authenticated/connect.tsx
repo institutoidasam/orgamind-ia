@@ -9,9 +9,9 @@ import { EvolutionSection } from "@/features/whatsapp/components/evolution-secti
 import { GozapSection } from "@/features/whatsapp/components/gozap-section";
 import { CloudProviderSection } from "@/features/whatsapp/components/cloud-provider-section";
 import { WebhookDropsBanner } from "@/features/whatsapp/components/webhook-drops-banner";
+import { SectorsWithoutNumberNotice } from "@/features/whatsapp/components/sectors-without-number-notice";
 import { useAuthStore } from "@/stores/auth.store";
 import { QueryErrorFallback } from "@/components/query-error-fallback";
-import { NumberRegistry } from "@/features/internal-admin/components/number-registry";
 
 const route = createFileRoute("/_authenticated/connect")({
   component: ConnectPage,
@@ -26,7 +26,9 @@ export { route as Route };
  * own section rather than a forced-generic one; TWILIO/ZERNIO/META list their
  * registered channels + a registration form. A provider that isn't configured
  * on this deploy simply has no section — so a single-provider (Evolution-only)
- * deploy renders exactly the old page, with no empty extras.
+ * deploy renders exactly the old page, with no empty extras. No topo, um aviso
+ * único das áreas sem número (D15); associar número a área é por linha, no botão
+ * `Áreas` de cada conexão (só o ADMIN).
  */
 function ConnectPage() {
   const role = useAuthStore((s) =>
@@ -62,7 +64,7 @@ function NoProvidersState() {
 
 function ConnectContent({ role, providers }: { role: "ADMIN" | "OPERATOR"; providers: ProviderGroup[] }) {
   const showHeaders = providers.length > 1;
-  return <div className="mx-auto max-w-[720px] space-y-8">{role === "ADMIN" ? <NumberRegistry /> : null}<WebhookDropsBanner />{providers.map((group) => <ProviderSection key={group.provider} group={group} role={role} showHeader={showHeaders} />)}</div>;
+  return <div className="mx-auto max-w-[720px] space-y-8"><SectorsWithoutNumberNotice /><WebhookDropsBanner />{providers.map((group) => <ProviderSection key={group.provider} group={group} role={role} showHeader={showHeaders} />)}</div>;
 }
 
 function ProviderSection({ group, role, showHeader }: { group: ProviderGroup; role: "ADMIN" | "OPERATOR"; showHeader: boolean }) {

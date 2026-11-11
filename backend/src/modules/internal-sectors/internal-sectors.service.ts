@@ -7,6 +7,7 @@ import type {
 } from '../../schemas/contracts/sector.schema';
 import { InternalSectorsRepository } from './internal-sectors.repository';
 import type { SectorSummaryRecord } from './internal-sectors.repository';
+import { toSectorChannel } from './sector-channel-view';
 
 function toSectorSummary(sector: SectorSummaryRecord) {
   return {
@@ -18,7 +19,7 @@ function toSectorSummary(sector: SectorSummaryRecord) {
     managerId: sector.managerId,
     manager: sector.manager,
     memberCount: sector._count.members,
-    numberCount: sector._count.numbers,
+    channel: toSectorChannel(sector.channel),
     createdAt: sector.createdAt,
     updatedAt: sector.updatedAt,
   };
@@ -37,7 +38,6 @@ export class InternalSectorsService {
     return {
       ...toSectorSummary(sector),
       members: sector.members,
-      numbers: sector.numbers,
     };
   }
   async create(input: CreateSector) {

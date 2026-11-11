@@ -58,3 +58,15 @@ export function canSendToUser(
     actor.managedSectorIds.includes(target.sectorId)
   );
 }
+
+/**
+ * Histórico e tela de resultado (GC5): o ADMIN vê todos os envios e os demais só
+ * os próprios. Quem não vê trata o envio como inexistente (404, nunca 403); o
+ * remetente é exigido antes, por `isTeamSender`.
+ */
+export function canViewDispatch(
+  actor: TeamActor,
+  dispatch: { authorId: string | null },
+): boolean {
+  return actor.role === 'ADMIN' || dispatch.authorId === actor.id;
+}

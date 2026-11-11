@@ -44,12 +44,17 @@ vi.mock('./instances-list', () => ({
       <button onClick={() => onAction({ kind: 'remove', id: 'inst1' })}>remover</button>
       <button onClick={() => onAction({ kind: 'setDefault', id: 'inst1' })}>padrao</button>
       <button onClick={() => onAction({ kind: 'restart', id: 'inst1' })}>reiniciar</button>
+      <button onClick={() => onAction({ kind: 'sectors', id: 'inst1' })}>areas</button>
     </div>
   ),
 }));
 vi.mock('./create-instance-dialog', () => ({ CreateInstanceDialog: () => null }));
 vi.mock('./connect-instance-dialog', () => ({ ConnectInstanceDialog: () => null }));
 vi.mock('./instance-config-drawer', () => ({ InstanceConfigDrawer: () => null }));
+vi.mock('./edit-channel-sectors-dialog', () => ({
+  EditChannelSectorsDialog: (props: { open: boolean; channel: { id: string } | null }) =>
+    props.open ? <div data-testid="sectors-dialog">{props.channel?.id}</div> : null,
+}));
 
 import { EvolutionSection } from './evolution-section';
 
@@ -114,6 +119,19 @@ describe('EvolutionSection — setDefault handling', () => {
 
     await waitFor(() => expect(toastSuccess).toHaveBeenCalledWith('Padrão atualizado'));
     expect(toastError).not.toHaveBeenCalled();
+  });
+});
+
+describe('EvolutionSection — áreas do número', () => {
+  it('a ação de áreas abre o diálogo da instância, só para o ADMIN', () => {
+    const { unmount } = wrap(<EvolutionSection role="OPERATOR" />);
+    fireEvent.click(screen.getByText('areas'));
+    expect(screen.queryByTestId('sectors-dialog')).not.toBeInTheDocument();
+    unmount();
+
+    wrap(<EvolutionSection role="ADMIN" />);
+    fireEvent.click(screen.getByText('areas'));
+    expect(screen.getByTestId('sectors-dialog')).toHaveTextContent('inst1');
   });
 });
 

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { sectorChannelSchema } from '@/features/internal-admin/schemas';
 
 /**
  * Espelho à mão do contrato do back (`backend/src/schemas/contracts/sector-people.schema.ts`).
@@ -28,6 +29,7 @@ export const sectorPeopleResponseSchema = z.object({
     code: z.string(),
     isActive: z.boolean(),
     manager: z.object({ id: z.string(), name: z.string().nullable() }).nullable(),
+    channel: sectorChannelSchema.nullable(),
   }),
   people: sectorPersonSchema.array(),
   options: z.object({

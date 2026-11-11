@@ -16,6 +16,16 @@ import { ConsentAction, ConsentSource } from '@prisma/client';
 import { ZernioCloudAdapter } from '../whatsapp-providers/adapters/zernio-cloud.adapter';
 import { TemplatesService } from '../templates/templates.service';
 
+const TRACK_OCCURRED_AT = new Date('2026-11-10T12:30:00Z');
+const TRACK_MESSAGE = {
+  id: 'm1',
+  status: 'QUEUED',
+  campaignId: null,
+  contactId: null,
+  conversationId: 'c1',
+  instanceId: 'i1',
+};
+
 describe('WebhooksService', () => {
   let service: WebhooksService;
   let prisma: MockProxy<PrismaService>;
@@ -32,6 +42,7 @@ describe('WebhooksService', () => {
   let chatEvents: MockProxy<ChatEventsService>;
   let consent: MockProxy<ConsentService>;
   let templates: MockProxy<TemplatesService>;
+  let tracking: { applyReceipt: ReturnType<typeof vi.fn> };
   const APP_SECRET = 'super-secret-meta-app-secret-1234567890';
 
   beforeEach(() => {
@@ -43,6 +54,7 @@ describe('WebhooksService', () => {
     chatIngest = mockDeep<ChatIngestService>();
     chatEvents = mockDeep<ChatEventsService>();
     consent = mockDeep<ConsentService>();
+    tracking = { applyReceipt: vi.fn().mockResolvedValue(1) };
     // Default: ninguém suprimido. A fonte da verdade do opt-out passou a ser a
     // SuppressionList (via ConsentService), não o boolean Contact.optedOut.
     consent.isSuppressed.mockResolvedValue(false);
@@ -95,6 +107,7 @@ describe('WebhooksService', () => {
       { add: vi.fn() } as never,
       consent,
     );
+    Object.assign(service, { teamTracking: tracking });
   });
 
   afterEach(() => {
@@ -903,6 +916,56 @@ describe('WebhooksService', () => {
       }),
     );
   });
+
+  // T10 — recibos do envio da equipe: o ack da Message chega ao destinatário.
+  // O padrão `expect(mock.método)` do resto do arquivo dispara unbound-method.
+  /* eslint-disable @typescript-eslint/unbound-method */
+  describe('recibos do envio da equipe (T10)', () => {
+    const mocked = (fn: unknown) => fn as ReturnType<typeof vi.fn>;
+
+    function ack(status: 'sent' | 'delivered' | 'read', count = 1) {
+      wa.parseWebhookFor.mockReturnValue([
+        { providerMessageId: 'WA1', status, occurredAt: TRACK_OCCURRED_AT },
+      ]);
+      mocked(prisma.message.findUnique).mockResolvedValue(TRACK_MESSAGE);
+      mocked(prisma.message.updateMany).mockResolvedValue({ count });
+    }
+
+    it.each([
+      ['delivered', 'DELIVERED'],
+      ['read', 'READ'],
+    ] as const)(
+      'count > 0 com %s → applyReceipt com o id da Message',
+      async (event, status) => {
+        ack(event);
+        await service.process({}, 'i1', 'EVOLUTION');
+        expect(tracking.applyReceipt).toHaveBeenCalledWith({
+          messageId: 'm1',
+          status,
+          occurredAt: TRACK_OCCURRED_AT,
+        });
+      },
+    );
+
+    it.each([
+      ['count 0', 'delivered', 0],
+      ['status sent', 'sent', 1],
+    ] as const)('%s → não chama', async (_name, event, count) => {
+      ack(event, count);
+      await service.process({}, 'i1', 'EVOLUTION');
+      expect(tracking.applyReceipt).not.toHaveBeenCalled();
+    });
+
+    it('applyReceipt lança → o webhook segue e publica message.status', async () => {
+      ack('read');
+      tracking.applyReceipt.mockRejectedValue(new Error('db fora'));
+      await service.process({}, 'i1', 'EVOLUTION');
+      expect(chatEvents.publish).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'message.status', status: 'READ' }),
+      );
+    });
+  });
+  /* eslint-enable @typescript-eslint/unbound-method */
 
   // --- STOP-keyword opt-out: whole-message match (bug: prefix match opted out engaged contacts) ---
   it('does NOT opt out a contact whose message merely STARTS with a stop word', async () => {

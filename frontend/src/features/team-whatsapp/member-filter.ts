@@ -1,10 +1,5 @@
 import { formatDayMonth } from '@/lib/civil-date';
-import type { RecipientPreview, RosterMember, SendTarget, TeamLevel } from './schemas';
-
-/** Id do turno escolhido, ou 'ALL' para "Todos os turnos". */
-export type ShiftChoice = string | 'ALL';
-
-export const ALL_SHIFTS: ShiftChoice = 'ALL';
+import type { LeftOutPerson, RecipientPreview, RosterMember, SendTarget, TeamLevel } from './schemas';
 
 export const memberName = (m: RosterMember): string => m.name ?? m.email ?? 'Sem nome';
 
@@ -20,20 +15,20 @@ export function filterByLevel(members: readonly RosterMember[], { levelIds, with
 }
 
 /**
- * Lista da tela, na ordem do back: ativos escalados (WORK) no turno escolhido; em
- * "Todos os turnos", todo WORK, mais quem está de folga se `includeOff`. Quem não tem
- * escala (NONE) nunca entra (D2). `includeOff` é ignorado com turno específico.
+ * Lista da tela, na ordem do back: ativos escalados (WORK) em algum dos turnos escolhidos; sem
+ * turnos (`shiftIds` vazio = "Todos os turnos"), todo WORK, mais quem está de folga se `includeOff`.
+ * Quem não tem escala (NONE) nunca entra (D2). `includeOff` é ignorado com turnos escolhidos.
  */
 export function eligibleMembers(
   members: readonly RosterMember[],
-  choice: ShiftChoice,
+  shiftIds: readonly string[],
   includeOff: boolean,
 ): RosterMember[] {
-  const all = choice === ALL_SHIFTS;
+  const all = shiftIds.length === 0;
   return members.filter(({ isActive, situation }) => {
     if (!isActive) return false;
     if (situation.kind === 'OFF') return all && includeOff;
-    return situation.kind === 'WORK' && (all || situation.shiftId === choice);
+    return situation.kind === 'WORK' && (all || shiftIds.includes(situation.shiftId));
   });
 }
 
@@ -66,6 +61,20 @@ export function toggleAllEnabled(visible: readonly RosterMember[], selected: Rea
 
 const preview = (m: RosterMember): RecipientPreview => ({ id: m.id, name: memberName(m) });
 
+/**
+ * Quem fica de fora da lista conferida, na ordem da lista: sem telefone (`no_phone`) e, quando há
+ * seleção ("só os marcados"), quem tem telefone e não foi marcado (`unselected`). `null` = todos.
+ */
+export function leftOutPeople(
+  members: readonly RosterMember[],
+  selectedIds: readonly string[] | null,
+): LeftOutPerson[] {
+  return members.flatMap((m): LeftOutPerson[] => {
+    if (!canReceive(m)) return [{ name: memberName(m), reason: 'no_phone' }];
+    return selectedIds && !selectedIds.includes(m.id) ? [{ name: memberName(m), reason: 'unselected' }] : [];
+  });
+}
+
 const SEM_NIVEL = 'Sem nível';
 
 /** Até dois nomes por ", "; com mais, os dois primeiros e " +N" ("RH, TI +2"). */
@@ -83,7 +92,8 @@ function levelNames(levels: readonly TeamLevel[], { levelIds, withoutLevel }: Le
 type LabelInput = {
   sectorNames: readonly string[];
   levelNames: readonly string[];
-  shiftName: string | null;
+  /** Nomes dos turnos escolhidos, na ordem dos turnos; vazio = "todos os turnos". */
+  shiftNames: readonly string[];
   date: string;
   selectedCount: number | null;
 };
@@ -94,7 +104,7 @@ function sectorLabel(input: LabelInput): string {
   return [
     namesLabel(sectors),
     ...(input.levelNames.length > 0 ? [namesLabel(input.levelNames)] : []),
-    input.shiftName ?? 'todos os turnos',
+    input.shiftNames.length > 0 ? namesLabel(input.shiftNames) : 'todos os turnos',
     formatDayMonth(input.date),
     ...(input.selectedCount === null ? [] : [`seleção de ${input.selectedCount}`]),
   ].join(' · ');
@@ -106,20 +116,22 @@ type SectorTargetInput = {
   /** Níveis ativos (para os nomes do rótulo). */
   levels: readonly TeamLevel[];
   levelFilter: LevelFilter;
-  /** Nome do turno escolhido; null em "Todos os turnos". */
-  shiftName: string | null;
+  /** Turnos ativos, na ordem de `listActiveShifts` (a do rótulo). */
+  shifts: readonly { id: string; name: string }[];
+  /** Turnos escolhidos; vazio = "Todos os turnos". */
+  shiftIds: readonly string[];
   date: string;
-  choice: ShiftChoice;
   includeOff: boolean;
   /** null = "Enviar para todos"; senão, os marcados. */
   selectedIds: readonly string[] | null;
 };
 
 export function buildSectorTarget(input: SectorTargetInput): SendTarget {
-  const { choice, date, selectedIds, levelFilter } = input;
-  const all = choice === ALL_SHIFTS;
-  const includeOff = all && input.includeOff;
-  const visible = input.sectors.flatMap((s) => eligibleMembers(filterByLevel(s.members, levelFilter), choice, includeOff));
+  const { date, selectedIds, levelFilter } = input;
+  const includeOff = input.shiftIds.length === 0 && input.includeOff;
+  const visible = input.sectors.flatMap((s) => (
+    eligibleMembers(filterByLevel(s.members, levelFilter), input.shiftIds, includeOff)
+  ));
   const chosen = selectedIds ? visible.filter((m) => selectedIds.includes(m.id)) : null;
   return {
     type: 'sector',
@@ -129,15 +141,15 @@ export function buildSectorTarget(input: SectorTargetInput): SendTarget {
     label: sectorLabel({
       sectorNames: input.sectors.map((s) => s.name),
       levelNames: levelNames(input.levels, levelFilter),
-      shiftName: all ? null : input.shiftName,
+      shiftNames: input.shifts.filter((s) => input.shiftIds.includes(s.id)).map((s) => s.name),
       date,
       selectedCount: selectedIds ? selectedIds.length : null,
     }),
     date,
-    shiftId: all ? null : choice,
+    shiftIds: [...input.shiftIds],
     includeOff,
     userIds: selectedIds ? [...selectedIds] : null,
     recipients: (chosen ?? visible.filter(canReceive)).map(preview),
-    leftOut: chosen ? [] : visible.filter((m) => !canReceive(m)).map(preview),
+    leftOut: leftOutPeople(visible, selectedIds),
   };
 }

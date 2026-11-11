@@ -7,6 +7,10 @@ import type {
 } from '../../schemas/contracts/sector-people.schema';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { buildContactListWhere } from '../contacts/contacts.repository';
+import {
+  SECTOR_CHANNEL_SELECT,
+  type SectorChannelRow,
+} from '../team-whatsapp/sector-channel';
 import type {
   PeopleActor,
   PeoplePerson,
@@ -37,6 +41,7 @@ export type SectorDetail = PeopleSector & {
   name: string;
   code: string;
   manager: { id: string; name: string | null } | null;
+  channel: SectorChannelRow | null;
 };
 
 /** Contato do lote "Dos contatos"; `personId` = usuário já ligado a ele. */
@@ -125,6 +130,7 @@ export class SectorPeopleRepository {
         isActive: true,
         managerId: true,
         manager: { select: { id: true, name: true } },
+        channel: { select: SECTOR_CHANNEL_SELECT },
       },
     });
   }

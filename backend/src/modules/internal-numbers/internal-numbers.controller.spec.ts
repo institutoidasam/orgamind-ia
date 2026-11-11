@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ExecutionContext } from '@nestjs/common';
+import { RequestMethod, type ExecutionContext } from '@nestjs/common';
+import { METHOD_METADATA } from '@nestjs/common/constants';
 import { Reflector } from '@nestjs/core';
 import { ROLES_KEY } from '../auth/decorators/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
@@ -11,9 +12,7 @@ function controllerWithService() {
     list: vi
       .fn()
       .mockResolvedValue({ items: [], total: 0, page: 1, pageSize: 25 }),
-    create: vi.fn().mockResolvedValue({ id: 'number-1' }),
     findById: vi.fn().mockResolvedValue({ id: 'number-1' }),
-    update: vi.fn().mockResolvedValue({ id: 'number-1' }),
   };
   return {
     service,
@@ -53,29 +52,32 @@ describe('InternalNumbersController', () => {
     expect(service.list).toHaveBeenCalledWith(2, 50);
   });
 
-  it('forwards structural creation and detail lookup unchanged', async () => {
+  it('forwards detail lookup unchanged', async () => {
     const { controller, service } = controllerWithService();
-    const body = {
-      name: 'Recepção',
-      phone: '+5592999990000',
-      provider: 'META',
-      sectorId: 'sector-1',
-      routeToSector: true,
-    };
 
-    await controller.create(body);
     await controller.findById('number-1');
 
-    expect(service.create).toHaveBeenCalledWith(body);
     expect(service.findById).toHaveBeenCalledWith('number-1');
   });
 
-  it('forwards PATCH without granting connection or channel access', async () => {
-    const { controller, service } = controllerWithService();
-    const body = { channelId: 'channel-1' };
+  it('keeps only the GET routes: POST and PATCH /internal/numbers are retired (D4)', () => {
+    const proto = InternalNumbersController.prototype as unknown as Record<
+      string,
+      unknown
+    >;
+    const routes = Object.getOwnPropertyNames(proto)
+      .filter((name) => name !== 'constructor')
+      .map((name) => ({
+        name,
+        method: Reflect.getMetadata(
+          METHOD_METADATA,
+          proto[name] as object,
+        ) as RequestMethod,
+      }));
 
-    await controller.update('number-1', body);
-
-    expect(service.update).toHaveBeenCalledWith('number-1', body);
+    expect(routes).toEqual([
+      { name: 'list', method: RequestMethod.GET },
+      { name: 'findById', method: RequestMethod.GET },
+    ]);
   });
 });

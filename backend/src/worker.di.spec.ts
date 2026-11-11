@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { getQueueToken } from '@nestjs/bullmq';
+import { TeamWhatsappSendProcessor } from './modules/team-whatsapp/team-whatsapp-send.processor';
 
 /**
  * O `ConfigModule.forRoot()` VALIDA o env no ato do IMPORT do módulo (não no
@@ -122,6 +123,14 @@ describe('WorkerModule — o grafo de DI resolve (sem ciclo)', () => {
       (campaigns as unknown as { broadcastCancelQueue?: unknown })
         .broadcastCancelQueue,
     ).toBeDefined();
+
+    // O processor do envio da equipe recebe o repositório e a porta do estado
+    // ao vivo por PROPRIEDADE (o construtor está no limite de parâmetros). Sem
+    // elas o worker não confere número nem conta tentativa, em silêncio.
+    const sender = moduleRef.get(TeamWhatsappSendProcessor);
+    for (const dep of ['repo', 'liveState']) {
+      expect(Reflect.get(sender, dep) as unknown).toBeDefined();
+    }
 
     await moduleRef.close();
   }, 60_000);

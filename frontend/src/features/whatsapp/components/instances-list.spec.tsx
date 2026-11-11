@@ -1,5 +1,6 @@
 import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, it, expect } from 'vitest';
+import type { ComponentProps } from 'react';
+import { describe, it, expect, vi } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { InstancesList } from './instances-list';
 
@@ -111,5 +112,29 @@ describe('InstancesList', () => {
     expect(screen.getByRole('button', { name: /Reiniciar/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Configurações/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Remover/i })).toBeInTheDocument();
+  });
+});
+
+describe('InstancesList — áreas do número', () => {
+  const withAreas = [
+    { ...instances[0], sectors: [{ id: 'log', name: 'Logística' }, { id: 'exp', name: 'Expedição' }] },
+    { ...instances[1], sectors: [] },
+  ] as unknown as ComponentProps<typeof InstancesList>['instances'];
+
+  it('mostra as áreas de cada número ou "Nenhuma área"', () => {
+    wrap(<InstancesList instances={withAreas} role="OPERATOR" onAction={() => {}} />);
+    expect(screen.getByText('Áreas: Logística, Expedição')).toBeInTheDocument();
+    expect(screen.getByText('Nenhuma área')).toBeInTheDocument();
+  });
+
+  it('só o ADMIN vê o botão "Áreas", que dispara a ação de editar as áreas', () => {
+    const onAction = vi.fn();
+    const { unmount } = wrap(<InstancesList instances={withAreas} role="OPERATOR" onAction={onAction} />);
+    expect(screen.queryByRole('button', { name: 'Áreas' })).not.toBeInTheDocument();
+    unmount();
+
+    wrap(<InstancesList instances={withAreas} role="ADMIN" onAction={onAction} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Áreas' }));
+    expect(onAction).toHaveBeenCalledWith({ kind: 'sectors', id: '1' });
   });
 });

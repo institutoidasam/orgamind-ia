@@ -48,6 +48,12 @@ vi.mock('./remove-gozap-channel-dialog', () => ({
   },
 }));
 
+// O diálogo de áreas tem spec próprio; aqui só se prova a fiação do botão.
+vi.mock('./edit-channel-sectors-dialog', () => ({
+  EditChannelSectorsDialog: (props: { open: boolean; channel: { id: string; name: string } | null }) =>
+    props.open ? <div data-testid="sectors-dialog">{props.channel?.id}</div> : null,
+}));
+
 import { GozapSection } from './gozap-section';
 
 const CHANNELS: ChannelSummary[] = [
@@ -204,5 +210,28 @@ describe('GozapSection — estado de conexão', () => {
     expect(screen.queryByText('Conectado')).not.toBeInTheDocument();
     expect(screen.queryByText('Desconectado')).not.toBeInTheDocument();
     expect(screen.queryByText(/Conectando/)).not.toBeInTheDocument();
+  });
+});
+
+describe('GozapSection — áreas do número', () => {
+  const withAreas: ChannelSummary[] = [
+    { id: 'ch1', name: 'Loja 1', phoneE164: null, isActive: true, isDefault: false, provider: 'GOZAP', sectors: [{ id: 'log', name: 'Logística' }, { id: 'exp', name: 'Expedição' }] },
+    { id: 'ch2', name: 'Loja 2', phoneE164: null, isActive: true, isDefault: false, provider: 'GOZAP', sectors: [] },
+  ];
+
+  it('cada linha mostra as áreas ou "Nenhuma área"', () => {
+    wrap(<GozapSection role="OPERATOR" channels={withAreas} />);
+    expect(screen.getByText('Áreas: Logística, Expedição')).toBeInTheDocument();
+    expect(screen.getByText('Nenhuma área')).toBeInTheDocument();
+  });
+
+  it('só o ADMIN vê o botão "Áreas", que abre o diálogo do número certo', () => {
+    const { unmount } = wrap(<GozapSection role="OPERATOR" channels={withAreas} />);
+    expect(screen.queryByRole('button', { name: 'Áreas' })).not.toBeInTheDocument();
+    unmount();
+
+    wrap(<GozapSection role="ADMIN" channels={withAreas} />);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Áreas' })[0]);
+    expect(screen.getByTestId('sectors-dialog')).toHaveTextContent('ch1');
   });
 });

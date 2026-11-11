@@ -11,6 +11,7 @@ import type {
   TeamScheduledListResponse,
 } from '../../schemas/contracts/team-whatsapp.schema';
 import { fromDbDate } from '../staff-schedule/civil-date';
+import type { PageQuery } from './dto/page-query.dto';
 import {
   canSendToSector,
   isTeamSender,
@@ -117,13 +118,17 @@ export class TeamWhatsappScheduleService {
     return { id: dispatch.id, state: 'CANCELLED' };
   }
 
-  /** ADMIN vê todos os agendados; gestor, os que têm todos os setores entre os seus (C7). */
-  async listScheduled(actorId: string): Promise<TeamScheduledListResponse> {
+  /** Uma página: ADMIN vê todos os agendados; gestor, os que têm todos os setores entre os seus (C7). */
+  async listScheduled(
+    actorId: string,
+    page: PageQuery,
+  ): Promise<TeamScheduledListResponse> {
     const actor = await this.requireSender(actorId);
-    const rows = await this.repo.listScheduled(
+    const { rows, total } = await this.repo.listScheduled(
       actor.role === 'ADMIN' ? null : actor.managedSectorIds,
+      page,
     );
-    return { items: rows.flatMap(toScheduledItem) };
+    return { items: rows.flatMap(toScheduledItem), total, ...page };
   }
 
   private async requireSender(actorId: string): Promise<TeamActor> {

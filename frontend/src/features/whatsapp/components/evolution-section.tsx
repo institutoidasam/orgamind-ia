@@ -6,12 +6,14 @@ import {
   useSetDefaultInstance,
   useRestartInstance,
 } from '../api';
-import { InstancesList } from './instances-list';
+import { InstancesList, type Action } from './instances-list';
 import { CreateInstanceDialog } from './create-instance-dialog';
 import { ConnectInstanceDialog } from './connect-instance-dialog';
 import { InstanceConfigDrawer } from './instance-config-drawer';
+import { EditChannelSectorsDialog } from './edit-channel-sectors-dialog';
 import { QueryErrorFallback } from '@/components/query-error-fallback';
 import { extractApiError } from '@/lib/api-error';
+import type { Instance } from '../schemas';
 
 /**
  * The EVOLUTION provider section of the Canais page — the per-instance QR
@@ -21,21 +23,59 @@ import { extractApiError } from '@/lib/api-error';
  * alongside it. Cloud providers have no QR/restart concept, so those actions
  * live here and nowhere else.
  */
-export function EvolutionSection({ role }: { role: 'ADMIN' | 'OPERATOR' }) {
-  const instances = useInstances();
+function useDialogTargets() {
   const [createOpen, setCreateOpen] = useState(false);
   const [connectId, setConnectId] = useState<string | null>(null);
   const [configId, setConfigId] = useState<string | null>(null);
+  const [sectorsId, setSectorsId] = useState<string | null>(null);
+  /** Abre o diálogo da ação, se ela tem um; `false` para as ações que mutam. */
+  const open = (a: Action) => {
+    if (a.kind === 'create') setCreateOpen(true);
+    else if (a.kind === 'connect') setConnectId(a.id);
+    else if (a.kind === 'config') setConfigId(a.id);
+    else if (a.kind === 'sectors') setSectorsId(a.id);
+    else return false;
+    return true;
+  };
+  return { createOpen, setCreateOpen, connectId, setConnectId, configId, setConfigId, sectorsId, setSectorsId, open };
+}
 
+async function attempt(task: () => Promise<unknown>, success: string) {
+  try {
+    await task();
+    toast.success(success);
+  } catch (err) {
+    const { title, message } = await extractApiError(err);
+    toast.error(title, { description: message });
+  }
+}
+
+function useMutationActions() {
   const del = useDeleteInstance();
   const setDefault = useSetDefaultInstance();
   const restart = useRestartInstance();
+  return async (a: Action) => {
+    if (a.kind === 'remove') await attempt(() => del.mutateAsync(a.id), 'Conexão removida');
+    else if (a.kind === 'setDefault') await attempt(() => setDefault.mutateAsync(a.id), 'Padrão atualizado');
+    else if (a.kind === 'restart') {
+      try {
+        await restart.mutateAsync(a.id);
+        toast.success('Reiniciando…');
+      } catch {
+        toast.error('Falha ao reiniciar');
+      }
+    }
+  };
+}
+
+export function EvolutionSection({ role }: { role: 'ADMIN' | 'OPERATOR' }) {
+  const instances = useInstances();
+  const targets = useDialogTargets();
+  const mutate = useMutationActions();
 
   if (instances.isError) {
     return <QueryErrorFallback error={instances.error} onRetry={() => instances.refetch()} />;
   }
-
-  const configInstance = instances.data?.find((i) => i.id === configId);
 
   return (
     <div className="space-y-4">
@@ -44,61 +84,57 @@ export function EvolutionSection({ role }: { role: 'ADMIN' | 'OPERATOR' }) {
         role={role}
         isInstanceOnline={(i) => i.lastConnectionState === 'open'}
         onAction={async (a) => {
-          if (a.kind === 'create') setCreateOpen(true);
-          if (a.kind === 'connect') setConnectId(a.id);
-          if (a.kind === 'config') setConfigId(a.id);
-          if (a.kind === 'remove') {
-            try {
-              await del.mutateAsync(a.id);
-              toast.success('Conexão removida');
-            } catch (err) {
-              const { title, message } = await extractApiError(err);
-              toast.error(title, { description: message });
-            }
-          }
-          if (a.kind === 'setDefault') {
-            try {
-              await setDefault.mutateAsync(a.id);
-              toast.success('Padrão atualizado');
-            } catch (err) {
-              const { title, message } = await extractApiError(err);
-              toast.error(title, { description: message });
-            }
-          }
-          if (a.kind === 'restart') {
-            try {
-              await restart.mutateAsync(a.id);
-              toast.success('Reiniciando…');
-            } catch {
-              toast.error('Falha ao reiniciar');
-            }
-          }
+          if (!targets.open(a)) await mutate(a);
         }}
       />
-
-      <CreateInstanceDialog
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-        onCreated={() => { void instances.refetch(); }}
+      <EvolutionDialogs
+        instances={instances.data ?? []}
+        targets={targets}
+        isAdmin={role === 'ADMIN'}
+        onChanged={() => { void instances.refetch(); }}
       />
+    </div>
+  );
+}
+
+type DialogsProps = {
+  instances: Instance[];
+  targets: ReturnType<typeof useDialogTargets>;
+  isAdmin: boolean;
+  onChanged: () => void;
+};
+
+function EvolutionDialogs({ instances, targets, isAdmin, onChanged }: DialogsProps) {
+  const find = (id: string | null) => instances.find((i) => i.id === id);
+  const configInstance = find(targets.configId);
+  const sectorsInstance = find(targets.sectorsId) ?? null;
+  return (
+    <>
+      <CreateInstanceDialog open={targets.createOpen} onOpenChange={targets.setCreateOpen} onCreated={onChanged} />
 
       <ConnectInstanceDialog
-        instanceId={connectId}
-        instanceName={
-          instances.data?.find((i) => i.id === connectId)?.name ?? 'conexão'
-        }
-        open={!!connectId}
-        onOpenChange={(open) => { if (!open) setConnectId(null); }}
-        onConnected={() => { void instances.refetch(); }}
+        instanceId={targets.connectId}
+        instanceName={find(targets.connectId)?.name ?? 'conexão'}
+        open={!!targets.connectId}
+        onOpenChange={(open) => { if (!open) targets.setConnectId(null); }}
+        onConnected={onChanged}
       />
 
       {configInstance && (
         <InstanceConfigDrawer
           instance={configInstance}
-          open={!!configId}
-          onOpenChange={(open) => { if (!open) setConfigId(null); }}
+          open={!!targets.configId}
+          onOpenChange={(open) => { if (!open) targets.setConfigId(null); }}
         />
       )}
-    </div>
+
+      {isAdmin && (
+        <EditChannelSectorsDialog
+          channel={sectorsInstance}
+          open={sectorsInstance !== null}
+          onOpenChange={(open) => { if (!open) targets.setSectorsId(null); }}
+        />
+      )}
+    </>
   );
 }

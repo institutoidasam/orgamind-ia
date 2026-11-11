@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { mockDeep, type MockProxy } from 'vitest-mock-extended';
 import { WhatsappInstancesService, EVOLUTION_ADMIN_CLIENT } from './whatsapp-instances.service';
@@ -6,7 +6,227 @@ import { WhatsappInstancesRepository } from './whatsapp-instances.repository';
 import { EvolutionApiAdapter } from '../whatsapp-providers/adapters/evolution-api.adapter';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { AuditService } from '../../shared/audit/audit.service';
+import { SectorChannelService } from '../whatsapp-providers/sector-channel.service';
 import { InstanceCreationFailedError, InstanceNotFoundError } from './errors/instance.errors';
+
+type SectorChannelStub = {
+  assertAssignable: Mock;
+  assign: Mock;
+  sectorsByChannel: Mock;
+};
+
+// Módulo Nest com os dublês de sempre. Default: sem áreas (assertAssignable
+// devolve o que recebeu, nenhum número tem áreas) e a Evolution não conhece estado ao vivo.
+async function buildHarness() {
+  const repo = mockDeep<WhatsappInstancesRepository>();
+  const prisma = mockDeep<PrismaService>();
+  const evolution = mockDeep<EvolutionApiAdapter>();
+  const audit = mockDeep<AuditService>();
+  const sectorChannel: SectorChannelStub = {
+    assertAssignable: vi.fn((ids: string[]) =>
+      Promise.resolve([...new Set(ids)]),
+    ),
+    assign: vi
+      .fn()
+      .mockResolvedValue({ channelId: '', sectors: [], moved: [] }),
+    sectorsByChannel: vi.fn().mockResolvedValue(new Map()),
+  };
+  // Default: Evolution knows no live states → list() falls back to DB state.
+  evolution.listConnectionStates.mockResolvedValue(new Map());
+  const evo = { createInstance: vi.fn(), logout: vi.fn(), restart: vi.fn() };
+  const mod = await Test.createTestingModule({
+    providers: [
+      WhatsappInstancesService,
+      { provide: WhatsappInstancesRepository, useValue: repo },
+      { provide: EVOLUTION_ADMIN_CLIENT, useValue: evo },
+      { provide: PrismaService, useValue: prisma },
+      { provide: EvolutionApiAdapter, useValue: evolution },
+      { provide: AuditService, useValue: audit },
+      { provide: SectorChannelService, useValue: sectorChannel },
+    ],
+  }).compile();
+  const svc = mod.get(WhatsappInstancesService);
+  return { svc, repo, prisma, evolution, audit, sectorChannel, evo };
+}
+type Harness = Awaited<ReturnType<typeof buildHarness>>;
+
+// Número por área (C1): as áreas são conferidas antes de criar a sessão na
+// Evolution e gravadas depois que o canal existe.
+const createdInstance = {
+  id: 'inst1',
+  name: 'Vendas',
+  evolutionInstanceName: 'picoa-vendas-x',
+  apiKey: '',
+  isDefault: false,
+  isActive: true,
+} as never;
+
+async function arrangeCreate(): Promise<Harness> {
+  const h = await buildHarness();
+  h.evo.createInstance.mockResolvedValue({ apiKey: '' });
+  h.repo.findByEvolutionName.mockResolvedValue(null);
+  h.repo.create.mockResolvedValue(createdInstance);
+  return h;
+}
+
+const ASSIGN_FAILURES: [string, Error, string][] = [
+  [
+    'DomainError com código',
+    Object.assign(new Error('Logística não existe (+5511999990000)'), {
+      code: 'channel.sector_invalid',
+    }),
+    'channel.sector_invalid',
+  ],
+  [
+    'erro sem código',
+    new Error('falha com +5511999990000 e Vendas Maria'),
+    'Error',
+  ],
+];
+
+describe('WhatsappInstancesService — número por área (create associa)', () => {
+  let h: Harness;
+  beforeEach(async () => {
+    h = await arrangeCreate();
+  });
+
+  it('create({ name, sectorIds }) confere as áreas antes da Evolution e associa depois do canal', async () => {
+    await h.svc.create({
+      name: 'Vendas',
+      sectorIds: ['s1', 's2'],
+      actorId: 'admin-1',
+    });
+
+    expect(h.sectorChannel.assertAssignable).toHaveBeenCalledWith(['s1', 's2']);
+    expect(
+      h.sectorChannel.assertAssignable.mock.invocationCallOrder[0],
+    ).toBeLessThan(h.evo.createInstance.mock.invocationCallOrder[0]);
+    expect(h.sectorChannel.assign).toHaveBeenCalledWith({
+      channelId: 'inst1',
+      sectorIds: ['s1', 's2'],
+      actorId: 'admin-1',
+    });
+    expect(h.repo.create.mock.invocationCallOrder[0]).toBeLessThan(
+      h.sectorChannel.assign.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('create sem sectorIds não associa nada', async () => {
+    await h.svc.create({ name: 'Vendas', actorId: 'admin-1' });
+
+    expect(h.sectorChannel.assign).not.toHaveBeenCalled();
+  });
+});
+
+describe('WhatsappInstancesService — número por área (falha ao associar)', () => {
+  let h: Harness;
+  beforeEach(async () => {
+    h = await arrangeCreate();
+  });
+
+  // M2: a sessão já existe na Evolution; repetir a criação abriria outra.
+  // Falha ao associar as áreas não pode virar erro nem pular o setDefault.
+  it.each(ASSIGN_FAILURES)(
+    'assign falha depois da criação (%s): devolve o canal com sectors [], mantém o setDefault e loga só id e código',
+    async (_label, failure, reason) => {
+      h.sectorChannel.assign.mockRejectedValue(failure);
+      h.repo.findByIdWithState.mockResolvedValue({
+        ...(createdInstance as object),
+        lastConnectionState: null,
+        warmupStartedAt: null,
+        dailySendLimit: 0,
+      } as never);
+      const warn = vi
+        .spyOn(h.svc['logger'], 'warn')
+        .mockImplementation(() => undefined);
+
+      const result = await h.svc.create({
+        name: 'Vendas',
+        isDefault: true,
+        sectorIds: ['s1'],
+        actorId: 'admin-1',
+      });
+
+      expect(result).toMatchObject({ id: 'inst1', sectors: [] });
+      expect(h.repo.setDefault.mock.calls).toEqual([['inst1']]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const line = String(warn.mock.calls[0][0]);
+      expect(line).toContain('inst1');
+      expect(line).toContain(reason);
+      expect(line).not.toMatch(/\+55|Logística|Vendas|Maria/);
+    },
+  );
+});
+
+describe('WhatsappInstancesService — número por área (create devolve e recusa)', () => {
+  let h: Harness;
+  beforeEach(async () => {
+    h = await arrangeCreate();
+  });
+
+  it('create com áreas devolve as áreas associadas junto do canal', async () => {
+    h.sectorChannel.assign.mockResolvedValue({
+      channelId: 'inst1',
+      sectors: [{ id: 's1', name: 'Logística' }],
+      moved: [],
+    });
+
+    const result = await h.svc.create({
+      name: 'Vendas',
+      sectorIds: ['s1'],
+      actorId: 'admin-1',
+    });
+
+    expect(result).toMatchObject({
+      id: 'inst1',
+      sectors: [{ id: 's1', name: 'Logística' }],
+    });
+  });
+
+  it('área inválida recusa antes de criar a sessão na Evolution', async () => {
+    h.sectorChannel.assertAssignable.mockRejectedValue(
+      new Error('channel.sector_invalid'),
+    );
+
+    await expect(
+      h.svc.create({ name: 'Vendas', sectorIds: ['ruim'], actorId: 'admin-1' }),
+    ).rejects.toThrow('channel.sector_invalid');
+    expect(h.evo.createInstance).not.toHaveBeenCalled();
+  });
+});
+
+describe('WhatsappInstancesService — número por área (list)', () => {
+  let h: Harness;
+  beforeEach(async () => {
+    h = await arrangeCreate();
+  });
+
+  it('list traz as áreas de cada número, por nome', async () => {
+    h.repo.listActiveWithState.mockResolvedValue([
+      { id: 'i1', warmupStartedAt: null, dailySendLimit: 500 },
+      { id: 'i2', warmupStartedAt: null, dailySendLimit: 500 },
+    ] as never);
+    h.sectorChannel.sectorsByChannel.mockResolvedValue(
+      new Map([
+        [
+          'i1',
+          [
+            { id: 'a', name: 'Expedição' },
+            { id: 'b', name: 'Logística' },
+          ],
+        ],
+      ]),
+    );
+
+    const result = await h.svc.list({ activeOnly: true });
+
+    expect(h.sectorChannel.sectorsByChannel).toHaveBeenCalledWith(['i1', 'i2']);
+    expect(result.map((r) => r.sectors.map((x) => x.name))).toEqual([
+      ['Expedição', 'Logística'],
+      [],
+    ]);
+  });
+});
 
 describe('WhatsappInstancesService', () => {
   let svc: WhatsappInstancesService;
@@ -14,32 +234,12 @@ describe('WhatsappInstancesService', () => {
   let prisma: MockProxy<PrismaService>;
   let evolution: MockProxy<EvolutionApiAdapter>;
   let audit: MockProxy<AuditService>;
-  let evo: {
-    createInstance: ReturnType<typeof vi.fn>;
-    logout: ReturnType<typeof vi.fn>;
-    restart: ReturnType<typeof vi.fn>;
-  };
+  let evo: Harness['evo'];
 
   beforeEach(async () => {
-    repo = mockDeep<WhatsappInstancesRepository>();
-    prisma = mockDeep<PrismaService>();
-    evolution = mockDeep<EvolutionApiAdapter>();
-    audit = mockDeep<AuditService>();
-    // Default: Evolution knows no live states → list() falls back to DB state.
-    evolution.listConnectionStates.mockResolvedValue(new Map());
-    evo = { createInstance: vi.fn(), logout: vi.fn(), restart: vi.fn() };
-    const mod = await Test.createTestingModule({
-      providers: [
-        WhatsappInstancesService,
-        { provide: WhatsappInstancesRepository, useValue: repo },
-        { provide: EVOLUTION_ADMIN_CLIENT, useValue: evo },
-        { provide: PrismaService, useValue: prisma },
-        { provide: EvolutionApiAdapter, useValue: evolution },
-        { provide: AuditService, useValue: audit },
-      ],
-    }).compile();
-    svc = mod.get(WhatsappInstancesService);
+    ({ svc, repo, prisma, evolution, audit, evo } = await buildHarness());
   });
+  const createX = () => svc.create({ name: 'X', actorId: 'admin-1' });
 
   it('create generates evolutionInstanceName, calls Evolution, persists row', async () => {
     evo.createInstance.mockResolvedValue({ apiKey: '' });
@@ -49,7 +249,7 @@ describe('WhatsappInstancesService', () => {
       apiKey: '', isDefault: false, isActive: true,
     } as any);
 
-    const result = await svc.create({ name: 'Vendas' });
+    const result = await svc.create({ name: 'Vendas', actorId: 'admin-1' });
 
     expect(evo.createInstance).toHaveBeenCalledWith(
       expect.objectContaining({ instanceName: expect.stringMatching(/^picoa-vendas-/) }),
@@ -74,7 +274,7 @@ describe('WhatsappInstancesService', () => {
       apiKey: '', isDefault: false, isActive: true,
     } as any);
 
-    await svc.create({ name: 'Vendas' });
+    await svc.create({ name: 'Vendas', actorId: 'admin-1' });
 
     const createArg = repo.create.mock.calls[0]?.[0];
     expect(createArg?.apiKey).not.toBe('leaked-secret');
@@ -89,7 +289,7 @@ describe('WhatsappInstancesService', () => {
       apiKey: 'evo-token-123', isDefault: false, isActive: true,
     } as any);
 
-    const result = await svc.create({ name: 'Vendas' });
+    const result = await svc.create({ name: 'Vendas', actorId: 'admin-1' });
 
     expect(result).not.toHaveProperty('apiKey');
   });
@@ -98,7 +298,7 @@ describe('WhatsappInstancesService', () => {
     evo.createInstance.mockRejectedValue(new Error('limit reached'));
     repo.findByEvolutionName.mockResolvedValue(null);
 
-    await expect(svc.create({ name: 'X' })).rejects.toThrow(InstanceCreationFailedError);
+    await expect(createX()).rejects.toThrow(InstanceCreationFailedError);
     expect(repo.create).not.toHaveBeenCalled();
   });
 
@@ -584,7 +784,7 @@ describe('WhatsappInstancesService', () => {
         apiKey: '', isDefault: false, isActive: true,
       } as any);
 
-      await svc.create({ name: 'Vendas' });
+      await svc.create({ name: 'Vendas', actorId: 'admin-1' });
 
       expect(audit.log).toHaveBeenCalledWith(
         'instance.create',
@@ -601,7 +801,7 @@ describe('WhatsappInstancesService', () => {
       evo.createInstance.mockRejectedValue(new Error('limit reached'));
       repo.findByEvolutionName.mockResolvedValue(null);
 
-      await expect(svc.create({ name: 'X' })).rejects.toThrow(InstanceCreationFailedError);
+      await expect(createX()).rejects.toThrow(InstanceCreationFailedError);
       expect(audit.log).not.toHaveBeenCalled();
     });
 

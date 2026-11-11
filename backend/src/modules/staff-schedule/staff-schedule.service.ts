@@ -18,6 +18,8 @@ import {
 
 /** Semana ou mês do quadro, com folga: até 42 datas (6 semanas). */
 const MAX_BOARD_DAYS = 42;
+/** Pessoas por quadro (setor principal + visitantes); acima disso o quadro vem cortado (D13). */
+export const BOARD_PEOPLE_LIMIT = 500;
 const NO_SCHEDULE: ScheduleData = {
   cycle: null,
   schedule: null,
@@ -67,7 +69,7 @@ export class StaffScheduleService {
     const actor = await this.viewer(actorId);
     await this.assertSectorInReach(actor, query.sectorId);
     const dates = periodDates(query.from, query.to);
-    const people = await this.loadPeople(query);
+    const { people, truncated } = await this.loadPeople(query);
     const rows = buildBoardRows({
       actor,
       sectorId: query.sectorId,
@@ -89,6 +91,7 @@ export class StaffScheduleService {
       shifts,
       rows,
       exceptions,
+      truncated,
     };
   }
 
@@ -109,24 +112,34 @@ export class StaffScheduleService {
     if (!sector) throw scheduleForbidden();
   }
 
-  /** Membros ativos do setor principal, depois visitantes do período, com a escala. */
-  private async loadPeople(query: BoardQuery): Promise<BoardPersonInput[]> {
+  /**
+   * Membros ativos do setor principal, depois visitantes do período, com a
+   * escala; no máximo `BOARD_PEOPLE_LIMIT` (pede um a mais para saber se cortou).
+   */
+  private async loadPeople(
+    query: BoardQuery,
+  ): Promise<{ people: BoardPersonInput[]; truncated: boolean }> {
     const { sectorId, from, to } = query;
+    const probe = BOARD_PEOPLE_LIMIT + 1;
     const [members, visitorIds] = await Promise.all([
-      this.repo.listSectorPeople(sectorId),
-      this.repo.listVisitorIds(sectorId, from, to),
+      this.repo.listSectorPeople(sectorId, probe),
+      this.repo.listVisitorIds(sectorId, from, to, probe),
     ]);
     const visitors =
       visitorIds.length > 0 ? await this.repo.listPeopleByIds(visitorIds) : [];
-    const people = [...members, ...visitors];
+    const everyone = [...members, ...visitors];
+    const people = everyone.slice(0, BOARD_PEOPLE_LIMIT);
     const data = await this.repo.loadScheduleData(
       people.map((person) => person.id),
       from,
       to,
     );
-    return people.map((person) => ({
-      ...person,
-      ...(data.get(person.id) ?? NO_SCHEDULE),
-    }));
+    return {
+      truncated: everyone.length > BOARD_PEOPLE_LIMIT,
+      people: people.map((person) => ({
+        ...person,
+        ...(data.get(person.id) ?? NO_SCHEDULE),
+      })),
+    };
   }
 }

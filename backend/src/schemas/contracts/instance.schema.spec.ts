@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { createChannelSchema, channelSummarySchema, providersResponseSchema } from './instance.schema';
+import {
+  createChannelSchema,
+  channelSummarySchema,
+  providersResponseSchema,
+  updateChannelSectorsSchema,
+} from './instance.schema';
 
 describe('createChannelSchema (POST /whatsapp/channels)', () => {
   const valid = {
@@ -280,5 +285,35 @@ describe('channelSummarySchema / providersResponseSchema (GET /whatsapp/provider
         ).toBe(true);
       }
     });
+  });
+});
+
+describe('áreas do número (C1)', () => {
+  const ids = (n: number) => Array.from({ length: n }, (_, i) => `s${i}`);
+
+  it('createChannelSchema aceita sectorIds de 0 a 100 e recusa 101', () => {
+    const base = { provider: 'GOZAP', name: 'Canal GoZap' };
+    expect(
+      createChannelSchema.safeParse({ ...base, sectorIds: [] }).success,
+    ).toBe(true);
+    expect(
+      createChannelSchema.safeParse({ ...base, sectorIds: ids(100) }).success,
+    ).toBe(true);
+    expect(
+      createChannelSchema.safeParse({ ...base, sectorIds: ids(101) }).success,
+    ).toBe(false);
+  });
+
+  it('updateChannelSectorsSchema exige sectorIds (0..100) e recusa campos a mais', () => {
+    expect(
+      updateChannelSectorsSchema.safeParse({ sectorIds: [] }).success,
+    ).toBe(true);
+    expect(
+      updateChannelSectorsSchema.safeParse({ sectorIds: ids(101) }).success,
+    ).toBe(false);
+    expect(updateChannelSectorsSchema.safeParse({}).success).toBe(false);
+    expect(
+      updateChannelSectorsSchema.safeParse({ sectorIds: [], extra: 1 }).success,
+    ).toBe(false);
   });
 });

@@ -38,6 +38,7 @@ import { isTwilioOptOutCode } from '../whatsapp-providers/adapters/twilio-error-
 import { parseZernioTemplateStatusEvent } from '../whatsapp-providers/adapters/zernio-cloud.adapter';
 import { recomputeBroadcastCounters } from '../whatsapp-providers/zernio-broadcast-counters';
 import { TemplatesService } from '../templates/templates.service';
+import { TeamRecipientTrackingService } from '../team-whatsapp/tracking/team-recipient-tracking.service';
 
 // CORREÇÃO consent-crítica (fix/meta-optout-codes): este arquivo TINHA um
 // `META_OPT_OUT_CODES = ['131026', '131047']` próprio que disparava REVOKE
@@ -223,6 +224,12 @@ const CONNECTION_DEDUP_WINDOW_MS = 60_000;
 @Injectable()
 export class WebhooksService {
   private readonly logger = new Logger(WebhooksService.name);
+
+  // T10 — recibos do envio da equipe. Injeção por propriedade (e não no
+  // construtor) para não passar o serviço do teto de parâmetros; o gancho é
+  // best-effort (GC14), então quem monta o serviço à mão pode não definir.
+  @Inject(TeamRecipientTrackingService)
+  private readonly teamTracking?: TeamRecipientTrackingService;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -707,6 +714,35 @@ export class WebhooksService {
     return { ...candidate, providerMessageId: wamid };
   }
 
+  /**
+   * T10 — leva "entregue"/"lido" ao destinatário do envio da equipe que usou
+   * esta Message. Roda só depois de o `updateMany` da Message mudar a linha
+   * (count > 0); os demais status não interessam ao rastreio.
+   *
+   * Best-effort (GC14): uma falha aqui não pode mudar o resultado do webhook
+   * nem fazer o provedor reentregar o evento — o destinatário só fica um passo
+   * atrás. Log sem telefone nem nome (GC8): só o id da Message.
+   */
+  private async trackTeamReceipt(
+    messageId: string,
+    newStatus: string,
+    occurredAt: Date,
+  ): Promise<void> {
+    if (newStatus !== 'DELIVERED' && newStatus !== 'READ') return;
+    try {
+      await this.teamTracking?.applyReceipt({
+        messageId,
+        status: newStatus,
+        occurredAt,
+      });
+    } catch (err: unknown) {
+      this.logger.warn(
+        { err, messageId },
+        'T10: falha levando o recibo ao destinatário do envio da equipe (best-effort)',
+      );
+    }
+  }
+
   private async processStatusUpdates(
     payload: unknown,
     provider?: ChannelProvider,
@@ -855,7 +891,7 @@ export class WebhooksService {
           // our read and this write — nothing changed, so fire no side effects.
           continue;
         }
-
+        await this.trackTeamReceipt(message.id, newStatus, event.occurredAt);
         // Live-update the chat thread tick when this ack belongs to a conversation.
         if (message.conversationId) {
           await this.chatEvents.publish({

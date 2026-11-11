@@ -81,7 +81,11 @@ export const boardRowSchema = z.object({
   days: boardDaySchema.array(),
 });
 
-/** `sectors`/`shifts` = os citados nas linhas e nas exceções (turno pode estar inativo). */
+/**
+ * `sectors`/`shifts` = os citados nas linhas e nas exceções (turno pode estar
+ * inativo). `truncated` = o setor tem mais pessoas que o limite do quadro (500)
+ * e as linhas são só as primeiras (D13).
+ */
 export const staffScheduleBoardSchema = z.object({
   sectorId: z.string(),
   from: civilDateSchema,
@@ -91,6 +95,7 @@ export const staffScheduleBoardSchema = z.object({
   shifts: shiftRefSchema.extend({ isActive: z.boolean() }).array(),
   rows: boardRowSchema.array(),
   exceptions: staffExceptionSchema.array(),
+  truncated: z.boolean(),
 });
 
 /** Período validado no serviço (422 `staff_schedule.invalid_period`), não aqui. */

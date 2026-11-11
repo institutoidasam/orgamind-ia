@@ -1,8 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import type {
-  TeamDispatchRow,
-  TeamRecipientRow,
-} from './team-whatsapp.repository';
+import type { TeamDispatchRow } from './team-whatsapp.repository';
 import {
   teamDispatchListResponseSchema,
   teamTargetsResponseSchema,
@@ -10,11 +7,13 @@ import {
 import {
   ADMIN,
   MANAGER,
-  PHONE,
   SHIFT_SECOND,
   createHarness,
   type Harness,
 } from './team-whatsapp.test-fixtures';
+
+const PAGE = { page: 1, pageSize: 20 };
+const paged = (rows: TeamDispatchRow[]) => ({ rows, total: rows.length });
 
 let h: Harness;
 beforeEach(() => {
@@ -121,13 +120,10 @@ const row = (over: Partial<TeamDispatchRow> = {}): TeamDispatchRow => ({
   shiftStartTime: null,
   shiftEndTime: null,
   rosterDate: null,
-  includeOff: false,
-  roster: null,
   state: 'DISPATCHED',
   scheduledFor: null,
   firedAt: null,
   author: { id: 'm', name: 'Gestor', email: 'gestor@idasam.org' },
-  channel: { id: 'c1', name: 'Canal' },
   sectors: [{ sectorId: 's1', sectorName: 'Financeiro' }],
   ...over,
 });
@@ -135,43 +131,50 @@ const row = (over: Partial<TeamDispatchRow> = {}): TeamDispatchRow => ({
 const ZERO = {
   queued: 0,
   sent: 0,
+  delivered: 0,
+  read: 0,
+  replied: 0,
   failed: 0,
+  uncertain: 0,
   skipped: 0,
   scheduled: 0,
   cancelled: 0,
 };
 
-const recipient = (over: Partial<TeamRecipientRow>): TeamRecipientRow => ({
-  dispatchId: 'd1',
-  userId: 'u1',
-  userName: 'Bia',
-  shiftName: null,
-  status: 'QUEUED',
-  errorCode: null,
-  skipReason: null,
-  sectorName: null,
-  levelName: null,
-  ...over,
-});
-
 describe('TeamWhatsappService.listDispatches — escopo', () => {
-  beforeEach(() => h.repo.listDispatches.mockResolvedValue([]));
+  beforeEach(() => h.repo.listDispatches.mockResolvedValue(paged([])));
 
   it('ADMIN vê todos os envios', async () => {
     h.repo.findActor.mockResolvedValue(ADMIN);
-    await expect(h.service.listDispatches('a')).resolves.toEqual({ items: [] });
-    expect(h.repo.listDispatches.mock.calls).toContainEqual([null]);
+    await expect(h.service.listDispatches('a', PAGE)).resolves.toEqual({
+      items: [],
+      total: 0,
+      ...PAGE,
+    });
+    expect(h.repo.listDispatches.mock.calls).toContainEqual([null, PAGE]);
+  });
+
+  it('repassa a página ao repositório e devolve total, page e pageSize (D13)', async () => {
+    h.repo.findActor.mockResolvedValue(ADMIN);
+    h.repo.listDispatches.mockResolvedValue({ rows: [], total: 41 });
+    const page = { page: 3, pageSize: 10 };
+    await expect(h.service.listDispatches('a', page)).resolves.toEqual({
+      items: [],
+      total: 41,
+      ...page,
+    });
+    expect(h.repo.listDispatches.mock.calls).toContainEqual([null, page]);
   });
 
   it('gestor vê só os próprios', async () => {
     h.repo.findActor.mockResolvedValue(MANAGER);
-    await h.service.listDispatches('m');
-    expect(h.repo.listDispatches.mock.calls).toContainEqual(['m']);
+    await h.service.listDispatches('m', PAGE);
+    expect(h.repo.listDispatches.mock.calls).toContainEqual(['m', PAGE]);
   });
 
   it('quem não é ADMIN nem gestor recebe 403', async () => {
     h.repo.findActor.mockResolvedValue({ ...MANAGER, managedSectorIds: [] });
-    await expect(h.service.listDispatches('x')).rejects.toMatchObject({
+    await expect(h.service.listDispatches('x', PAGE)).rejects.toMatchObject({
       code: 'team_whatsapp.forbidden',
       status: 403,
     });
@@ -179,60 +182,89 @@ describe('TeamWhatsappService.listDispatches — escopo', () => {
   });
 });
 
-describe('TeamWhatsappService.listDispatches — itens', () => {
-  beforeEach(() => h.repo.findActor.mockResolvedValue(ADMIN));
+const FIRST_ITEM = {
+  id: 'd1',
+  createdAt: '2026-10-16T12:00:00.000Z',
+  author: { id: 'm', name: 'Gestor', email: 'gestor@idasam.org' },
+  target: { type: 'sector', id: 's1', label: 'Financeiro', shift: null },
+  sectors: [{ id: 's1', name: 'Financeiro' }],
+  channels: [
+    { name: 'GBR', phoneE164: '+559230001111', count: 20 },
+    { name: null, phoneE164: null, count: 8 },
+  ],
+  counts: {
+    queued: 2,
+    sent: 3,
+    delivered: 4,
+    read: 5,
+    replied: 6,
+    failed: 0,
+    uncertain: 7,
+    skipped: 1,
+    scheduled: 0,
+    cancelled: 0,
+  },
+  rosterDate: null,
+  state: 'DISPATCHED',
+  scheduledFor: null,
+  firedAt: null,
+};
 
-  it('monta contagens com zeros, tipo em minúsculas, canal e autor removidos como null', async () => {
-    h.repo.listDispatches.mockResolvedValue([
+// Dois envios (d1 setor, d2 pessoa sem autor); contagens e números só do d1.
+function primeItems(): void {
+  h.repo.listDispatches.mockResolvedValue(
+    paged([
       row(),
       row({
         id: 'd2',
         targetType: 'USER',
         targetId: 'u1',
         targetLabel: 'Ana',
-        channel: null,
         author: null,
+        sectors: [],
       }),
-    ]);
-    h.repo.countByStatus.mockResolvedValue([
-      { dispatchId: 'd1', status: 'QUEUED', count: 2 },
-      { dispatchId: 'd1', status: 'SKIPPED', count: 1 },
-      { dispatchId: 'd1', status: 'SENT', count: 3 },
-    ]);
-    const out = teamDispatchListResponseSchema.parse(
-      await h.service.listDispatches('a'),
-    );
+    ]),
+  );
+  h.repo.countByStatus.mockResolvedValue([
+    { dispatchId: 'd1', status: 'QUEUED', count: 2 },
+    { dispatchId: 'd1', status: 'SKIPPED', count: 1 },
+    { dispatchId: 'd1', status: 'SENT', count: 3 },
+    { dispatchId: 'd1', status: 'DELIVERED', count: 4 },
+    { dispatchId: 'd1', status: 'READ', count: 5 },
+    { dispatchId: 'd1', status: 'REPLIED', count: 6 },
+    { dispatchId: 'd1', status: 'UNCERTAIN', count: 7 },
+  ]);
+  h.repo.channelsByDispatch.mockResolvedValue([
+    { dispatchId: 'd1', name: 'GBR', phoneE164: '+559230001111', count: 20 },
+    { dispatchId: 'd1', name: null, phoneE164: null, count: 8 },
+  ]);
+}
+
+describe('TeamWhatsappService.listDispatches — itens (C5)', () => {
+  beforeEach(() => h.repo.findActor.mockResolvedValue(ADMIN));
+
+  it('item sem recipients, unselected, off e channel; com channels e counts de 10 chaves', async () => {
+    primeItems();
+    const out = await h.service.listDispatches('a', PAGE);
+    expect(teamDispatchListResponseSchema.safeParse(out).success).toBe(true);
     expect(h.repo.countByStatus.mock.calls).toContainEqual([['d1', 'd2']]);
-    expect(out.items[0]).toEqual({
-      id: 'd1',
-      createdAt: '2026-10-16T12:00:00.000Z',
-      author: { id: 'm', name: 'Gestor', email: 'gestor@idasam.org' },
-      target: { type: 'sector', id: 's1', label: 'Financeiro', shift: null },
-      sectors: [{ id: 's1', name: 'Financeiro' }],
-      channel: { id: 'c1', name: 'Canal' },
-      counts: { ...ZERO, queued: 2, sent: 3, skipped: 1 },
-      recipients: [],
-      rosterDate: null,
-      state: 'DISPATCHED',
-      scheduledFor: null,
-      firedAt: null,
-      unselected: [],
-      off: [],
-    });
+    expect(h.repo.channelsByDispatch.mock.calls).toContainEqual([['d1', 'd2']]);
+    expect(out.items[0]).toEqual(FIRST_ITEM);
     expect(out.items[1]).toMatchObject({
       target: { type: 'user', id: 'u1', label: 'Ana' },
-      channel: null,
+      sectors: [],
+      channels: [],
       author: null,
       counts: ZERO,
     });
+    // Só o telefone do número (empresa) aparece; nenhuma pessoa (GC8).
+    expect(JSON.stringify(out)).toContain('+559230001111');
   });
 });
 
-describe('TeamWhatsappService.listDispatches — agendamento', () => {
-  beforeEach(() => h.repo.findActor.mockResolvedValue(ADMIN));
-
-  it('state/scheduledFor/firedAt e counts scheduled/cancelled', async () => {
-    h.repo.listDispatches.mockResolvedValue([
+function primeScheduledRows(): void {
+  h.repo.listDispatches.mockResolvedValue(
+    paged([
       row({
         state: 'SCHEDULED',
         scheduledFor: new Date('2026-10-22T02:00:00.000Z'),
@@ -243,14 +275,22 @@ describe('TeamWhatsappService.listDispatches — agendamento', () => {
         scheduledFor: new Date('2026-10-21T10:00:00.000Z'),
         firedAt: new Date('2026-10-21T10:00:30.000Z'),
       }),
-    ]);
-    h.repo.countByStatus.mockResolvedValue([
-      { dispatchId: 'd1', status: 'SCHEDULED', count: 2 },
-      { dispatchId: 'd1', status: 'CANCELLED', count: 1 },
-      { dispatchId: 'd2', status: 'SENT', count: 1 },
-    ]);
+    ]),
+  );
+  h.repo.countByStatus.mockResolvedValue([
+    { dispatchId: 'd1', status: 'SCHEDULED', count: 2 },
+    { dispatchId: 'd1', status: 'CANCELLED', count: 1 },
+    { dispatchId: 'd2', status: 'SENT', count: 1 },
+  ]);
+}
+
+describe('TeamWhatsappService.listDispatches — agendamento e turno', () => {
+  beforeEach(() => h.repo.findActor.mockResolvedValue(ADMIN));
+
+  it('state/scheduledFor/firedAt e counts scheduled/cancelled', async () => {
+    primeScheduledRows();
     const out = teamDispatchListResponseSchema.parse(
-      await h.service.listDispatches('a'),
+      await h.service.listDispatches('a', PAGE),
     );
     expect(out.items[0]).toMatchObject({
       state: 'SCHEDULED',
@@ -265,224 +305,24 @@ describe('TeamWhatsappService.listDispatches — agendamento', () => {
       counts: { ...ZERO, sent: 1 },
     });
   });
-});
 
-// Fora de ordem e com os quatro status; Bia teve o usuário apagado (userId null).
-const recipientRows: TeamRecipientRow[] = [
-  recipient({
-    userId: 'u3',
-    userName: 'Caio',
-    status: 'SKIPPED',
-    skipReason: 'NO_PHONE',
-  }),
-  recipient({
-    userId: null,
-    userName: 'Bia',
-    status: 'FAILED',
-    errorCode: 'evolution.session_closed',
-    shiftName: '2º turno',
-  }),
-  recipient({ userName: 'Ana', status: 'SENT', shiftName: '2º turno' }),
-  recipient({ userId: 'u4', userName: 'Davi', shiftName: '1º turno' }),
-];
-const listed = (r: {
-  userId: string | null;
-  name: string;
-  shiftName: string | null;
-  status: TeamRecipientRow['status'];
-  reason: string | null;
-}) => ({
-  userId: r.userId,
-  name: r.name,
-  shiftName: r.shiftName,
-  status: r.status,
-  reason: r.reason,
-  sectorName: null,
-  levelName: null,
-});
-
-describe('TeamWhatsappService.listDispatches — destinatários', () => {
-  beforeEach(() => h.repo.findActor.mockResolvedValue(ADMIN));
-
-  it('recipients[].shiftName, por nome, e nenhuma chave de telefone', async () => {
-    h.repo.listDispatches.mockResolvedValue([row(), row({ id: 'd2' })]);
-    h.repo.listRecipients.mockResolvedValue(recipientRows);
-    const res = await h.service.listDispatches('a');
-    const out = teamDispatchListResponseSchema.parse(res);
-    expect(h.repo.listRecipients.mock.calls).toEqual([[['d1', 'd2']]]);
-    expect(out.items[0].recipients).toEqual([
-      listed({
-        userId: 'u1',
-        name: 'Ana',
-        shiftName: '2º turno',
-        status: 'SENT',
-        reason: null,
-      }),
-      listed({
-        userId: null,
-        name: 'Bia',
-        shiftName: '2º turno',
-        status: 'FAILED',
-        reason: 'evolution.session_closed',
-      }),
-      listed({
-        userId: 'u3',
-        name: 'Caio',
-        shiftName: null,
-        status: 'SKIPPED',
-        reason: 'NO_PHONE',
-      }),
-      listed({
-        userId: 'u4',
-        name: 'Davi',
-        shiftName: '1º turno',
-        status: 'QUEUED',
-        reason: null,
-      }),
-    ]);
-    expect(out.items[1].recipients).toEqual([]);
-    expect(res.items[0]).not.toHaveProperty('issues');
-    expect(JSON.stringify(res)).not.toContain('+55');
-    // Nenhuma chave de telefone (o valor NO_PHONE do motivo é permitido).
-    expect(JSON.stringify(res)).not.toMatch(/"\w*phone\w*":/i);
-  });
-});
-
-describe('TeamWhatsappService.listDispatches — snapshot do turno', () => {
-  beforeEach(() => h.repo.findActor.mockResolvedValue(ADMIN));
-
-  it('target.shift vem do snapshot gravado; todos os turnos → null', async () => {
-    h.repo.listDispatches.mockResolvedValue([
-      row({
-        shiftId: 'shift_second',
-        shiftName: '2º turno',
-        shiftStartTime: '14:00',
-        shiftEndTime: '22:00',
-      }),
-      row({ id: 'd2' }),
-    ]);
+  it('target.shift vem do snapshot gravado (todos os turnos → null) e rosterDate em YYYY-MM-DD', async () => {
+    h.repo.listDispatches.mockResolvedValue(
+      paged([
+        row({
+          shiftId: 'shift_second',
+          shiftName: '2º turno',
+          shiftStartTime: '14:00',
+          shiftEndTime: '22:00',
+          rosterDate: new Date('2026-10-21T00:00:00.000Z'),
+        }),
+        row({ id: 'd2' }),
+      ]),
+    );
     const out = teamDispatchListResponseSchema.parse(
-      await h.service.listDispatches('a'),
+      await h.service.listDispatches('a', PAGE),
     );
     expect(out.items.map((i) => i.target.shift)).toEqual([SHIFT_SECOND, null]);
-  });
-});
-
-// Pessoa da foto da escala (C8); `over` sobrescreve qualquer campo.
-const person = (name: string, over: Record<string, unknown> = {}) => ({
-  userId: `id-${name}`,
-  name,
-  jobTitle: null,
-  shiftName: '2º turno',
-  reason: null,
-  ...over,
-});
-const dayOff = { shiftName: null, reason: 'DAY_OFF' };
-// Foto anterior à T7 não tem setor nem nível da pessoa: a lista devolve null.
-const oldPhoto = (p: object) => ({ ...p, sectorName: null, levelName: null });
-
-describe('TeamWhatsappService.listDispatches — foto da escala: grupos', () => {
-  beforeEach(() => h.repo.findActor.mockResolvedValue(ADMIN));
-
-  it('unselected = foto.working − destinatários; off = foto.off − destinatários', async () => {
-    const working = [
-      person('Ana'),
-      person('Caio'),
-      person('Ex', { userId: null }),
-    ];
-    const off = [
-      person('Davi', dayOff),
-      person('Eva', { ...dayOff, reason: 'VACATION' }),
-    ];
-    h.repo.listDispatches.mockResolvedValue([
-      row({ roster: { working, off } }),
-    ]);
-    h.repo.listRecipients.mockResolvedValue([
-      recipient({ userId: 'id-Ana', userName: 'Ana' }),
-      recipient({ userId: 'id-Davi', userName: 'Davi' }),
-    ]);
-    const out = teamDispatchListResponseSchema.parse(
-      await h.service.listDispatches('a'),
-    );
-    expect(out.items[0].unselected).toEqual(
-      [working[1], working[2]].map(oldPhoto),
-    );
-    expect(out.items[0].off).toEqual([off[1]].map(oldPhoto));
-  });
-
-  it.each([
-    ['sem foto', null],
-    ['working fora do formato', { working: 'x', off: [] }],
-    ['sem off', { working: [person('Ana')] }],
-    ['pessoa sem nome', { working: [person('Ana', { name: 1 })], off: [] }],
-    ['lista em vez de objeto', [person('Ana')]],
-  ])(
-    'envio sem foto ou com foto fora do formato → unselected e off vazios: %s',
-    async (_label, roster) => {
-      h.repo.listDispatches.mockResolvedValue([row({ roster })]);
-      const out = teamDispatchListResponseSchema.parse(
-        await h.service.listDispatches('a'),
-      );
-      expect(out.items[0]).toMatchObject({ unselected: [], off: [] });
-    },
-  );
-});
-
-describe('TeamWhatsappService.listDispatches — foto da escala: data e telefone', () => {
-  beforeEach(() => h.repo.findActor.mockResolvedValue(ADMIN));
-
-  it("rosterDate em 'YYYY-MM-DD'", async () => {
-    h.repo.listDispatches.mockResolvedValue([
-      row({ rosterDate: new Date('2026-10-21T00:00:00.000Z') }),
-      row({ id: 'd2' }),
-    ]);
-    const out = teamDispatchListResponseSchema.parse(
-      await h.service.listDispatches('a'),
-    );
     expect(out.items.map((i) => i.rosterDate)).toEqual(['2026-10-21', null]);
-  });
-
-  it('nenhuma chave de telefone em unselected/off', async () => {
-    const withPhone = { phoneE164: PHONE, contact: { phoneE164: PHONE } };
-    const roster = {
-      working: [person('Caio', withPhone)],
-      off: [person('Eva', { ...dayOff, ...withPhone })],
-    };
-    h.repo.listDispatches.mockResolvedValue([row({ roster })]);
-    const res = await h.service.listDispatches('a');
-    expect(res.items[0].unselected.map((p) => p.name)).toEqual(['Caio']);
-    expect(res.items[0].off.map((p) => p.name)).toEqual(['Eva']);
-    expect(JSON.stringify(res)).not.toContain('+55');
-    expect(JSON.stringify(res)).not.toMatch(/"\w*phone\w*":/i);
-  });
-});
-
-// C6: setores do envio e snapshot de setor/nível do destinatário.
-describe('TeamWhatsappService.listDispatches — setores do envio', () => {
-  beforeEach(() => h.repo.findActor.mockResolvedValue(ADMIN));
-
-  it('item traz sectors [{ id, name }] e recipients com sectorName; foto antiga → sectorName/levelName null', async () => {
-    const roster = { working: [person('Caio')], off: [person('Eva', dayOff)] };
-    h.repo.listDispatches.mockResolvedValue([
-      row({ roster }),
-      row({ id: 'd2', targetType: 'USER', targetId: 'u9', sectors: [] }),
-    ]);
-    h.repo.listRecipients.mockResolvedValue([
-      recipient({ userName: 'Ana', sectorName: 'Financeiro' }),
-    ]);
-    const out = teamDispatchListResponseSchema.parse(
-      await h.service.listDispatches('a'),
-    );
-    expect(out.items[0].sectors).toEqual([{ id: 's1', name: 'Financeiro' }]);
-    expect(out.items[0].recipients).toEqual([
-      expect.objectContaining({
-        name: 'Ana',
-        sectorName: 'Financeiro',
-        levelName: null,
-      }),
-    ]);
-    expect(out.items[0].unselected).toEqual([oldPhoto(person('Caio'))]);
-    expect(out.items[0].off).toEqual([oldPhoto(person('Eva', dayOff))]);
-    expect(out.items[1].sectors).toEqual([]);
   });
 });

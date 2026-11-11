@@ -11,13 +11,22 @@ const sector = {
   manager: null,
   createdAt: new Date(),
   updatedAt: new Date(),
-  _count: { members: 2, numbers: 1 },
+  channel: null,
+  _count: { members: 2 },
+};
+
+const channelRow = {
+  id: 'ch1',
+  name: 'Compras Zap',
+  phoneE164: '+5592999990001',
+  provider: 'GOZAP',
+  isActive: true,
 };
 
 describe('InternalSectorsService', () => {
   it('returns only active non-viewer members for eligible sector recipients', async () => {
     const repo = {
-      find: vi.fn().mockResolvedValue({ ...sector, members: [], numbers: [] }),
+      find: vi.fn().mockResolvedValue({ ...sector, members: [] }),
       findMembers: vi
         .fn()
         .mockResolvedValue([{ id: 'u1', role: 'OPERATOR', isActive: true }]),
@@ -37,12 +46,12 @@ describe('InternalSectorsService', () => {
     const service = new InternalSectorsService(repo as never);
     await expect(
       service.create({ name: 'Compras', code: 'COM' }),
-    ).resolves.toMatchObject({ id: 's1', memberCount: 2, numberCount: 1 });
+    ).resolves.toMatchObject({ id: 's1', memberCount: 2, channel: null });
   });
 
   it('disconnects the manager on an explicit null update', async () => {
     const repo = {
-      find: vi.fn().mockResolvedValue({ ...sector, members: [], numbers: [] }),
+      find: vi.fn().mockResolvedValue({ ...sector, members: [] }),
       findValidManager: vi.fn(),
       update: vi.fn().mockResolvedValue(sector),
     };
@@ -68,4 +77,36 @@ describe('InternalSectorsService', () => {
       failure,
     );
   });
+});
+
+describe('InternalSectorsService — número efetivo do setor (C1)', () => {
+  it.each([
+    [
+      'canal GOZAP ativo',
+      channelRow,
+      { id: 'ch1', name: 'Compras Zap', phoneE164: '+5592999990001' },
+    ],
+    ['canal inativo', { ...channelRow, isActive: false }, null],
+    ['canal TWILIO', { ...channelRow, provider: 'TWILIO' }, null],
+    ['sem canal', null, null],
+  ])(
+    'setor com %s responde channel efetivo, sem numbers/numberCount',
+    async (_label, channel, expected) => {
+      const repo = {
+        list: vi.fn().mockResolvedValue([[{ ...sector, channel }], 1]),
+        find: vi.fn().mockResolvedValue({ ...sector, channel, members: [] }),
+      };
+      const service = new InternalSectorsService(repo as never);
+
+      const listed = await service.list(1, 25);
+      const detail = await service.get('s1');
+
+      expect(listed.items[0].channel).toEqual(expected);
+      expect(detail.channel).toEqual(expected);
+      for (const response of [listed.items[0], detail]) {
+        expect(response).not.toHaveProperty('numberCount');
+        expect(response).not.toHaveProperty('numbers');
+      }
+    },
+  );
 });

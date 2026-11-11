@@ -9,6 +9,14 @@ const strictBoolean = z
   .union([z.boolean(), z.enum(['true', 'false'])])
   .transform((value) => value === true || value === 'true');
 
+/** C1: número efetivo da área, sem o provedor (o front só mostra nome e telefone). */
+export const sectorChannelSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  phoneE164: z.string().nullable(),
+});
+export type SectorChannel = z.infer<typeof sectorChannelSchema>;
+
 export const sectorInputSchema = z.object({
   name: z.string().trim().min(1).max(120),
   code,

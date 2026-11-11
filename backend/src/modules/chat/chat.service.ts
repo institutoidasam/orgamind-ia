@@ -211,6 +211,8 @@ export class ChatService {
    * humana). NÃO chama o provedor nem publica: o processor grava o messageId no
    * destinatário ANTES do envio, para a retentativa reaproveitar esta linha.
    * Sem guard de janela: só GOZAP/EVOLUTION chegam aqui (TEAM_PROVIDERS), ambos sem janela.
+   * Devolve também o `contactId` que a Message recebeu: o processor o grava no
+   * destinatário, e o "respondeu" casa por canal + contato (D11).
    */
   async prepareTeamMessage(args: {
     instanceId: string;
@@ -218,7 +220,7 @@ export class ChatService {
     phoneE164: string;
     text: string;
     authorUserId: string | null;
-  }): Promise<{ messageId: string }> {
+  }): Promise<{ messageId: string; contactId: string | null }> {
     const resolved = await resolveConversationForOutbound(this.prisma, {
       instanceId: args.instanceId,
       contactId: args.contactId,
@@ -237,7 +239,7 @@ export class ChatService {
       ...NO_QUOTE,
     });
     await this.repo.setBotPaused(resolved.id);
-    return { messageId };
+    return { messageId, contactId: conv.contactId };
   }
 
   /**

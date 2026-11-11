@@ -15,6 +15,7 @@ import { ConnectionReconcilerService } from './connection-reconciler.service';
 import { ParkedMessagesSweeperProcessor } from './parked-messages-sweeper.processor';
 import { EvolutionApiAdapter } from '../whatsapp-providers/adapters/evolution-api.adapter';
 import { WhatsappProvidersRepository } from '../whatsapp-providers/whatsapp-providers.repository';
+import { SectorChannelService } from '../whatsapp-providers/sector-channel.service';
 import { QUEUE_NAMES } from '../queue/queue.constants';
 import { configuredProviderGroups, type Env } from '../../shared/config/env.schema';
 
@@ -88,6 +89,10 @@ const evolutionAdminProvider: Provider = {
     ConnectionReconcilerService,
     EvolutionApiAdapter,
     WhatsappProvidersRepository,
+    // Declarado aqui (como o adapter e o repositório acima) e não importado de
+    // WhatsappProvidersModule: esse módulo já importa este, e o ciclo não vale
+    // por um serviço que só depende de Prisma e Audit.
+    SectorChannelService,
     evolutionAdminProvider,
   ],
   exports: [

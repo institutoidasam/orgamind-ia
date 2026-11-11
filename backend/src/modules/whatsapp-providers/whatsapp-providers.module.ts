@@ -32,6 +32,8 @@ import { ZernioCloudAdapter } from './adapters/zernio-cloud.adapter';
 import { GozapCloudAdapter } from './adapters/gozap-cloud.adapter';
 import { GozapInstancesService } from './gozap-instances.service';
 import { GozapConnectionReconcilerProcessor } from './gozap-connection-reconciler.processor';
+import { ChannelLiveStateService } from './channel-live-state.service';
+import { SectorChannelService } from './sector-channel.service';
 import { WhatsappInstancesModule } from '../whatsapp-instances/whatsapp-instances.module';
 import { ZernioBroadcastClient } from './zernio-broadcast.client';
 import {
@@ -272,6 +274,12 @@ const legacyProvider: Provider = {
     // são registrados no WorkerModule, exatamente como o ZernioTierSyncProcessor
     // — ver a nota lá.
     ZernioBroadcastClient,
+    // Número por área (C1): associa áreas ao número, valida antes de criar a
+    // conexão e lista as áreas de cada número. Só depende de Prisma e Audit.
+    SectorChannelService,
+    // Estado ao vivo do número (GOZAP/EVOLUTION), com cache de 15 s por canal.
+    // Consome GozapInstancesService e EvolutionApiAdapter, já providers daqui.
+    ChannelLiveStateService,
   ],
   exports: [
     WhatsappProvidersService,
@@ -290,6 +298,9 @@ const legacyProvider: Provider = {
     // ZB — exportado para o WorkerModule, onde vivem os serviços de broadcast
     // (que precisam do CampaignsRepository e por isso não podem morar aqui).
     ZernioBroadcastClient,
+    SectorChannelService,
+    // Prévia, POST de envio e processor do team-whatsapp consomem a porta.
+    ChannelLiveStateService,
   ],
 })
 export class WhatsappProvidersModule {}

@@ -17,6 +17,13 @@ import { StaffScheduleRepository } from '../staff-schedule/staff-schedule.reposi
 import type { TeamWhatsappSendJob } from '../queue/queue.constants';
 import { TeamWhatsappRepository } from './team-whatsapp.repository';
 import { TeamWhatsappScheduleService } from './team-whatsapp-schedule.service';
+import { TeamWhatsappSendProcessor } from './team-whatsapp-send.processor';
+
+// O processor só usa o pacing para segurar o canal depois do envio (dorme 10–45 s).
+vi.mock('../campaigns/pacing.helper', () => ({
+  acquirePacingLock: vi.fn().mockResolvedValue({ acquired: true }),
+  releasePacingLock: vi.fn().mockResolvedValue(undefined),
+}));
 
 // Disparo agendado (T9) contra Postgres real: o claim por `updateMany`
 // condicional decide sozinho entre dois disparos e entre disparo e cancelamento.
@@ -35,6 +42,7 @@ const audit = { log: vi.fn() };
 
 let postgres: StartedPostgreSqlContainer;
 let prisma: PrismaClient;
+let repo: TeamWhatsappRepository;
 let service: TeamWhatsappScheduleService;
 
 beforeAll(async () => {
@@ -50,7 +58,7 @@ beforeAll(async () => {
     { stdio: 'inherit', env: { ...process.env, DATABASE_URL: url } },
   );
   prisma = new PrismaClient({ datasources: { db: { url } } });
-  const repo = new TeamWhatsappRepository(
+  repo = new TeamWhatsappRepository(
     prisma as never,
     new StaffScheduleRepository(prisma as never),
   );
@@ -356,5 +364,129 @@ describe('condições na hora — pessoas', () => {
         { dispatchId: d.id, queued: 1, skipped: 2, failed: 0 },
       ],
     ]);
+  });
+});
+
+describe('condições na hora — número de cada destinatário (D3/D7)', () => {
+  it('destinatário com canal inativo → FAILED channel_unavailable; o outro → QUEUED', async () => {
+    const d = await seedScheduled({
+      prisma,
+      scheduledFor: DUE,
+      recipients: [{ name: 'Ana' }, { name: 'Bia' }],
+    });
+    const inactive = await prisma.channel.create({
+      data: { name: `Inativo ${d.id}`, provider: 'GOZAP', isActive: false },
+    });
+    // Envio com dois números: `dispatch.channelId` nulo, cada pessoa no seu.
+    await prisma.teamWhatsappDispatch.update({
+      where: { id: d.id },
+      data: { channelId: null },
+    });
+    await Promise.all(
+      [d.channelId, inactive.id].map((channelId, i) =>
+        prisma.teamWhatsappRecipient.update({
+          where: { id: d.recipientIds[i] },
+          data: { channelId },
+        }),
+      ),
+    );
+    await expect(service.fireOne(d.id, NOW)).resolves.toBe('fired');
+    expect(await recipientsOf(d.id)).toEqual([
+      { status: 'QUEUED', skipReason: null, errorCode: null },
+      {
+        status: 'FAILED',
+        skipReason: null,
+        errorCode: 'team_whatsapp.channel_unavailable',
+      },
+    ]);
+    expect(jobsSent()).toEqual(jobsFor([d.recipientIds[0]]));
+  });
+});
+
+// Um agendado de uma pessoa com telefone, já na fila (QUEUED, com o canal); devolve o id do destinatário.
+async function seedQueuedRecipient(): Promise<string> {
+  const d = await seedScheduled({
+    prisma,
+    scheduledFor: DUE,
+    recipients: [{ name: 'Ana' }],
+  });
+  const [recipientId] = d.recipientIds;
+  await prisma.user.update({
+    where: { id: d.userIds[0] },
+    data: { phoneE164: '+5592991234567' },
+  });
+  await prisma.teamWhatsappRecipient.update({
+    where: { id: recipientId },
+    data: { status: 'QUEUED', channelId: d.channelId },
+  });
+  return recipientId;
+}
+
+// Roda o processor; o recibo READ chega enquanto o provedor ainda responde ao envio.
+async function processWithReceiptRace(
+  recipientId: string,
+  accepted: Date,
+  read: Date,
+): Promise<void> {
+  const chat = {
+    prepareTeamMessage: vi
+      .fn()
+      .mockResolvedValue({ messageId: 'msg-race', contactId: null }),
+    isRedispatchableFailure: vi.fn().mockReturnValue(true),
+    // O webhook de recibo chega enquanto o provedor responde ao processor.
+    sendTeamMessage: vi.fn().mockImplementation(async () => {
+      await prisma.teamWhatsappRecipient.updateMany({
+        where: { messageId: 'msg-race' },
+        data: { status: 'READ', acceptedAt: accepted, readAt: read },
+      });
+      return {
+        messageId: 'msg-race',
+        sent: true,
+        errorCode: null,
+        retryable: false,
+      };
+    }),
+  };
+  const proc = new TeamWhatsappSendProcessor(
+    prisma as never,
+    chat as never,
+    { isSuppressed: vi.fn().mockResolvedValue(false) } as never,
+    { del: vi.fn() } as never,
+  );
+  Object.assign(proc, {
+    repo,
+    liveState: { check: vi.fn().mockResolvedValue({ state: 'open' }) },
+  });
+  await proc.process({
+    data: { recipientId },
+    attemptsMade: 0,
+    opts: { attempts: 3 },
+  } as never);
+}
+
+describe('processor × recibo que chega antes do SENT', () => {
+  it('recibo READ gravado durante o envio: o finish não rebaixa nem sobrescreve o acceptedAt', async () => {
+    const recipientId = await seedQueuedRecipient();
+    const accepted = new Date('2026-10-21T12:00:05.000Z');
+    const read = new Date('2026-10-21T12:00:09.000Z');
+    await processWithReceiptRace(recipientId, accepted, read);
+    expect(
+      await prisma.teamWhatsappRecipient.findUniqueOrThrow({
+        where: { id: recipientId },
+        select: {
+          status: true,
+          acceptedAt: true,
+          readAt: true,
+          attempts: true,
+          messageId: true,
+        },
+      }),
+    ).toEqual({
+      status: 'READ',
+      acceptedAt: accepted,
+      readAt: read,
+      attempts: 1,
+      messageId: 'msg-race',
+    });
   });
 });

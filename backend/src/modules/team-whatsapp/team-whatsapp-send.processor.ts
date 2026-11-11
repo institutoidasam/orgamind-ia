@@ -17,7 +17,20 @@ import {
   QUEUE_NAMES,
   type TeamWhatsappSendJob,
 } from '../queue/queue.constants';
+import { ChannelLiveStateService } from '../whatsapp-providers/channel-live-state.service';
 import { isTeamProvider } from './team-whatsapp.policy';
+import { TeamWhatsappRepository } from './team-whatsapp.repository';
+import { INDETERMINATE_CODE, failureStatus } from './team-whatsapp.outcome';
+
+const CHANNEL_DISCONNECTED = 'team_whatsapp.channel_disconnected';
+const CHANNEL_UNVERIFIED = 'team_whatsapp.channel_unverified';
+
+const channelSelect = {
+  id: true,
+  provider: true,
+  isActive: true,
+  evolutionInstanceName: true,
+} satisfies Prisma.ChannelSelect;
 
 const recipientSelect = {
   id: true,
@@ -29,12 +42,14 @@ const recipientSelect = {
       contact: { select: { id: true, phoneE164: true } },
     },
   },
+  // D3: o número do envio é o do destinatário; o do envio é só a reserva da linha legada.
+  channel: { select: channelSelect },
   dispatch: {
     select: {
       id: true,
       authorId: true,
       text: true,
-      channel: { select: { id: true, provider: true, isActive: true } },
+      channel: { select: channelSelect },
     },
   },
 } satisfies Prisma.TeamWhatsappRecipientSelect;
@@ -42,13 +57,18 @@ const recipientSelect = {
 type LoadedRecipient = Prisma.TeamWhatsappRecipientGetPayload<{
   select: typeof recipientSelect;
 }>;
-type SendChannel = NonNullable<LoadedRecipient['dispatch']['channel']>;
+type SendChannel = NonNullable<LoadedRecipient['channel']>;
 type Ready = { phone: string; channel: SendChannel };
 
 /** Transição terminal do destinatário (gravada só se ele ainda está QUEUED). */
+type FailedData = {
+  status: 'FAILED' | 'UNCERTAIN';
+  errorCode: string;
+  messageId?: string;
+};
 type FinishData =
-  | { status: 'SENT'; messageId?: string }
-  | { status: 'FAILED'; errorCode: string; messageId?: string }
+  | { status: 'SENT'; messageId?: string; acceptedAt: Date }
+  | FailedData
   | { status: 'SKIPPED'; skipReason: 'NO_PHONE' | 'SUPPRESSED' };
 
 /** Telefone de envio: o do contato vinculado, senão o do usuário (spec §1). */
@@ -57,8 +77,8 @@ function sendPhoneOf(user: LoadedRecipient['user']): string | null {
 }
 
 const INDETERMINATE: FinishData = {
-  status: 'FAILED',
-  errorCode: 'team_whatsapp.indeterminate',
+  status: 'UNCERTAIN',
+  errorCode: INDETERMINATE_CODE,
 };
 const DELIVERED_STATUSES = new Set(['SENT', 'DELIVERED', 'READ']);
 
@@ -101,6 +121,13 @@ function forQueue(err: unknown): unknown {
 @Processor(QUEUE_NAMES.TEAM_WHATSAPP_SEND, { concurrency: 2 })
 export class TeamWhatsappSendProcessor extends WorkerHost {
   private readonly logger = new Logger(TeamWhatsappSendProcessor.name);
+
+  // Injetados por propriedade: o construtor já tem 4 dependências, o limite de
+  // parâmetros do GC2. Resolvidos pelo Nest antes do primeiro job.
+  @Inject(TeamWhatsappRepository)
+  private readonly repo!: TeamWhatsappRepository;
+  @Inject(ChannelLiveStateService)
+  private readonly liveState!: ChannelLiveStateService;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -162,7 +189,12 @@ export class TeamWhatsappSendProcessor extends WorkerHost {
     if (paced) await this.waitPacing(job, token, ready.channel.id);
     let sent = false;
     try {
+      // Depois do pacing e antes de qualquer Message: só `open` segue (D7).
+      const blocked = await this.liveBlock(job, ready.channel);
+      if (blocked) return await this.finishFailed(r, blocked);
       const messageId = r.messageId ?? (await this.prepare(r, ready));
+      // D6: a tentativa é a chamada ao provedor, contada imediatamente antes dela.
+      await this.repo.countAttempt(r.id);
       const res = await this.chat.sendTeamMessage({
         messageId,
         text: r.dispatch.text,
@@ -187,6 +219,39 @@ export class TeamWhatsappSendProcessor extends WorkerHost {
     await this.redis.del(pacingLockKey(instanceId)).catch(() => undefined);
   }
 
+  /**
+   * Conferência do número no provedor (D7). `open` → `null`; `close`/`connecting`
+   * → FAILED repetível; `unknown` → a fila reconfere e, na última tentativa,
+   * FAILED repetível. Em todos os casos nada saiu e nenhuma tentativa é contada.
+   */
+  private async liveBlock(
+    job: Job<TeamWhatsappSendJob>,
+    channel: SendChannel,
+  ): Promise<FailedData | null> {
+    const { state } = await this.liveState.check(channel);
+    if (state === 'open') return null;
+    if (state !== 'unknown')
+      return { status: 'FAILED', errorCode: CHANNEL_DISCONNECTED };
+    if (!this.isLastAttempt(job))
+      throw new TeamSendJobError(CHANNEL_UNVERIFIED);
+    return { status: 'FAILED', errorCode: CHANNEL_UNVERIFIED };
+  }
+
+  private async finishFailed(
+    r: LoadedRecipient,
+    data: FailedData,
+  ): Promise<void> {
+    await this.finish(r.id, data);
+    this.logger.warn(
+      {
+        recipientId: r.id,
+        dispatchId: r.dispatch.id,
+        errorCode: data.errorCode,
+      },
+      'team whatsapp send failed',
+    );
+  }
+
   private load(id: string): Promise<LoadedRecipient | null> {
     return this.prisma.teamWhatsappRecipient.findUnique({
       where: { id },
@@ -202,7 +267,7 @@ export class TeamWhatsappSendProcessor extends WorkerHost {
     if (!phone) return { data: { status: 'SKIPPED', skipReason: 'NO_PHONE' } };
     if (await this.consent.isSuppressed(phone))
       return { data: { status: 'SKIPPED', skipReason: 'SUPPRESSED' } };
-    const channel = r.dispatch.channel;
+    const channel = r.channel ?? r.dispatch.channel;
     if (!channel?.isActive || !isTeamProvider(channel.provider)) {
       return {
         data: { status: 'FAILED', errorCode: 'team_whatsapp.channel_invalid' },
@@ -213,7 +278,7 @@ export class TeamWhatsappSendProcessor extends WorkerHost {
 
   /** Fase 1: cria a Message QUEUED e grava o id no destinatário ANTES do provedor. */
   private async prepare(r: LoadedRecipient, ready: Ready): Promise<string> {
-    const { messageId } = await this.chat.prepareTeamMessage({
+    const { messageId, contactId } = await this.chat.prepareTeamMessage({
       instanceId: ready.channel.id,
       contactId: r.user?.contact?.id ?? null,
       phoneE164: ready.phone,
@@ -222,7 +287,7 @@ export class TeamWhatsappSendProcessor extends WorkerHost {
     });
     const { count } = await this.prisma.teamWhatsappRecipient.updateMany({
       where: { id: r.id, status: 'QUEUED', messageId: null },
-      data: { messageId },
+      data: { messageId, contactId },
     });
     // count 0 = outra execução já gravou a SUA Message (ou fechou o destinatário):
     // enviar esta duplicaria. A Message recém-criada fica QUEUED, sem envio.
@@ -241,7 +306,7 @@ export class TeamWhatsappSendProcessor extends WorkerHost {
   private async priorOutcome(messageId: string): Promise<FinishData | null> {
     const msg = await this.prisma.message.findUnique({
       where: { id: messageId },
-      select: { status: true, errorCode: true },
+      select: { status: true, errorCode: true, sentAt: true },
     });
     if (!msg)
       return { status: 'FAILED', errorCode: 'team_whatsapp.message_missing' };
@@ -250,7 +315,8 @@ export class TeamWhatsappSendProcessor extends WorkerHost {
       return this.chat.isRedispatchableFailure(msg.errorCode)
         ? null
         : INDETERMINATE;
-    if (DELIVERED_STATUSES.has(msg.status)) return { status: 'SENT' };
+    if (DELIVERED_STATUSES.has(msg.status))
+      return { status: 'SENT', acceptedAt: msg.sentAt ?? new Date() };
     // SENDING = pode ter saído; CANCELLED/WAITING_INSTANCE/RECEIVED/SKIPPED_* não são deste fluxo.
     return INDETERMINATE;
   }
@@ -282,7 +348,11 @@ export class TeamWhatsappSendProcessor extends WorkerHost {
     res: TeamSendResult,
   ): Promise<void> {
     if (res.sent)
-      return this.finish(r.id, { status: 'SENT', messageId: res.messageId });
+      return this.finish(r.id, {
+        status: 'SENT',
+        messageId: res.messageId,
+        acceptedAt: new Date(),
+      });
     if (res.retryable && !this.isLastAttempt(job)) {
       // Relança para a fila retentar: a Message ficou FAILED com código redispatchável.
       throw new TeamSendJobError(
@@ -290,15 +360,13 @@ export class TeamWhatsappSendProcessor extends WorkerHost {
       );
     }
     const errorCode = res.errorCode ?? 'team_whatsapp.send_failed';
-    await this.finish(r.id, {
-      status: 'FAILED',
+    await this.finishFailed(r, {
+      status: failureStatus(errorCode, (c) =>
+        this.chat.isRedispatchableFailure(c),
+      ),
       errorCode,
       messageId: res.messageId,
     });
-    this.logger.warn(
-      { recipientId: r.id, dispatchId: r.dispatch.id, errorCode },
-      'team whatsapp send failed',
-    );
   }
 
   private async waitPacing(
@@ -313,7 +381,12 @@ export class TeamWhatsappSendProcessor extends WorkerHost {
     throw new DelayedError();
   }
 
-  /** Transição condicional (só sai de QUEUED): reexecução nunca sobrescreve um desfecho. */
+  /**
+   * Transição condicional (só sai de QUEUED): reexecução nunca sobrescreve um
+   * desfecho, e um recibo (DELIVERED/READ) ou a resposta que chegou pelo webhook
+   * antes deste SENT não é rebaixado: a linha já não casa com `status: QUEUED`,
+   * e o `acceptedAt` do SENT vai no mesmo `updateMany`, então não o sobrescreve.
+   */
   private async finish(id: string, data: FinishData): Promise<void> {
     await this.prisma.teamWhatsappRecipient.updateMany({
       where: { id, status: 'QUEUED' },

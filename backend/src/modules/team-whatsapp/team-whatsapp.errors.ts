@@ -20,19 +20,38 @@ export function noRecipients(): DomainError {
   });
 }
 
-export function channelInvalid(): DomainError {
-  return new DomainError({
-    code: 'team_whatsapp.channel_invalid',
-    message: 'Canal inválido para recado da equipe',
-    status: 422,
-  });
-}
-
+/** Número da área fechado (`close`/`connecting`) na hora do envio imediato (D7): nada é criado. */
 export function channelDisconnected(): ConflictError {
   return new ConflictError(
     'Canal desconectado',
     'team_whatsapp.channel_disconnected',
   );
+}
+
+/** A porta não soube dizer o estado do número (D7): só `open` libera, então nada é criado. */
+export function channelUnverified(): ConflictError {
+  return new ConflictError(
+    'Não foi possível conferir o número. Tente de novo',
+    'team_whatsapp.channel_unverified',
+  );
+}
+
+/** Área do envio sem número efetivo (D2): trava o envio inteiro (GC7); nada é criado. */
+export function sectorWithoutNumber(): DomainError {
+  return new DomainError({
+    code: 'team_whatsapp.sector_without_number',
+    message: 'Há área sem número neste envio',
+    status: 422,
+  });
+}
+
+/** Alvo pessoa sem área na data (D8): sem área não há número; nada é criado. */
+export function noSector(): DomainError {
+  return new DomainError({
+    code: 'team_whatsapp.no_sector',
+    message: 'Esta pessoa não tem área',
+    status: 422,
+  });
 }
 
 /** `shiftId` do alvo setor inexistente ou inativo: nada é criado. */
@@ -58,6 +77,15 @@ export function invalidLevel(): DomainError {
   return new DomainError({
     code: 'team_whatsapp.invalid_level',
     message: 'Nível inválido',
+    status: 422,
+  });
+}
+
+/** Lista do dia com mais de `DAY_PEOPLE_LIMIT` pessoas: nunca corta em silêncio (D13). */
+export function tooManyPeople(): DomainError {
+  return new DomainError({
+    code: 'team_whatsapp.too_many_people',
+    message: 'Os setores escolhidos têm pessoas demais',
     status: 422,
   });
 }

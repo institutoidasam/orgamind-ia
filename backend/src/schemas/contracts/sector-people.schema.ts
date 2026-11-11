@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { levelRefSchema } from './level.schema';
+import { sectorChannelSchema } from './sector.schema';
 
 const idNameSchema = z.object({ id: z.string(), name: z.string() });
 
@@ -36,6 +37,8 @@ export const sectorPeopleResponseSchema = z.object({
     manager: z
       .object({ id: z.string(), name: z.string().nullable() })
       .nullable(),
+    // C1: número efetivo da área (D2); null = "Sem número".
+    channel: sectorChannelSchema.nullable(),
   }),
   // Ativos com `sectorId` = este, nome asc pt-BR.
   people: sectorPersonSchema.array(),

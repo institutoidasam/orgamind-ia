@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createTeamDispatchSchema } from './dto/create-team-dispatch.dto';
 import {
   ADMIN,
   SHIFT_FIRST,
   SHIFT_SECOND,
   createHarness,
   dayPerson,
+  givenNumber,
+  numberRow,
   onShift,
   sector,
   type Harness,
@@ -14,7 +17,8 @@ import {
 // literal abaixo foi copiado da chamada real de `createDispatch` antes da T7;
 // daqui em diante só se acrescentam chaves (nenhuma chave antiga muda).
 // T7 acrescentou `sectors` e o snapshot de setor/nível nos destinatários;
-// T8b, setor/nível na foto e a entrada `sectorIds: [id]` (C5).
+// T8b, setor/nível na foto e a entrada `sectorIds: [id]` (C5); a T8 do número
+// por área, o canal e o snapshot do número em cada destinatário.
 // Noite de 21/10 começa às 22:00 de Manaus = 2026-10-22T02:00Z.
 const NOITE = {
   id: 'shift_night',
@@ -60,6 +64,8 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date('2026-10-21T20:00:00Z'));
   h = createHarness();
+  // O setor tem como número o canal que o corpo antigo mandava: o literal não muda.
+  givenNumber(h);
   h.repo.findActor.mockResolvedValue(ADMIN);
   h.repo.findSector.mockResolvedValue(sector({ id: PROD, name: 'Produção' }));
   h.repo.listActiveShifts.mockResolvedValue([SHIFT_FIRST, SHIFT_SECOND, NOITE]);
@@ -124,6 +130,12 @@ const PROD_SNAPSHOT = {
   sectorName: 'Produção',
   levelName: null,
 };
+// T8 (D3): o número da área vai para cada destinatário (inclusive o pulado).
+const PROD_NUMBER = {
+  channelId: 'c1',
+  channelName: numberRow().name,
+  channelPhoneE164: numberRow().phoneE164,
+};
 const recipientsOf = (pending: 'QUEUED' | 'SCHEDULED') => [
   {
     userId: 'bia',
@@ -133,6 +145,7 @@ const recipientsOf = (pending: 'QUEUED' | 'SCHEDULED') => [
     status: 'SKIPPED',
     skipReason: 'NO_PHONE',
     ...PROD_SNAPSHOT,
+    ...PROD_NUMBER,
   },
   {
     userId: 'joao',
@@ -142,10 +155,15 @@ const recipientsOf = (pending: 'QUEUED' | 'SCHEDULED') => [
     status: pending,
     skipReason: null,
     ...PROD_SNAPSHOT,
+    ...PROD_NUMBER,
   },
 ];
 
-describe('um setor sem nível = hoje', () => {
+// D9: `shiftId` (apelido) e `shiftIds: [id]` chegam ao mesmo envio de hoje.
+describe.each([
+  ['shiftId', { shiftId: NOITE.id }],
+  ['shiftIds [id]', { shiftIds: [NOITE.id] }],
+])('um setor sem nível = hoje (%s)', (_forma, shift) => {
   it.each([
     ['now', 'QUEUED', {}],
     [
@@ -159,17 +177,15 @@ describe('um setor sem nível = hoje', () => {
   ] as const)(
     'createDispatch recebe o mesmo de hoje (%s)',
     async (when, pending, extra) => {
-      await h.service.dispatch(ADMIN.id, {
-        channelId: 'c1',
-        text: 'Oi',
-        when,
-        target: {
-          type: 'sector',
-          sectorIds: [PROD],
-          date: DATE,
-          shiftId: NOITE.id,
-        },
-      });
+      await h.service.dispatch(
+        ADMIN.id,
+        createTeamDispatchSchema.parse({
+          channelId: 'c1',
+          text: 'Oi',
+          when,
+          target: { type: 'sector', sectorIds: [PROD], date: DATE, ...shift },
+        }),
+      );
       expect(h.repo.createDispatch.mock.calls).toHaveLength(1);
       const created = h.repo.createDispatch.mock.calls[0][0];
       expect(created).toMatchObject({

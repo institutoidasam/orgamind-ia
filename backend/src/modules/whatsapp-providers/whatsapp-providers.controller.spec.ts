@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 import { mockDeep, MockProxy } from 'vitest-mock-extended';
 import { WhatsappProvidersController } from './whatsapp-providers.controller';
 import type { WhatsappProvidersService } from './whatsapp-providers.service';
@@ -14,6 +14,12 @@ import { WhatsappProvidersRepository } from './whatsapp-providers.repository';
 import type { CreateChannelDto } from './dto/create-channel.dto';
 import { PROVIDER_TRAITS } from '../../schemas/contracts/channel-provider.schema';
 import { makeProfile } from './ports/provider-profile';
+import { RolesGuard } from '../auth/roles.guard';
+import { Reflector } from '@nestjs/core';
+import type { ExecutionContext } from '@nestjs/common';
+
+// O usuário que o JwtStrategy deixa em req.user (sub = id do ADMIN que chama).
+const ADMIN_REQ = { user: { sub: 'admin-1', role: 'ADMIN' } } as never;
 
 /**
  * The controller is a thin HTTP surface: each endpoint dispatches to one
@@ -31,6 +37,11 @@ describe('WhatsappProvidersController', () => {
   let health: MockProxy<ChannelHealthService>;
   let gozapInstances: MockProxy<GozapInstancesService>;
   let providersRepo: MockProxy<WhatsappProvidersRepository>;
+  let sectorChannel: {
+    assertAssignable: Mock;
+    assign: Mock;
+    sectorsByChannel: Mock;
+  };
   let controller: WhatsappProvidersController;
 
   beforeEach(() => {
@@ -86,6 +97,14 @@ describe('WhatsappProvidersController', () => {
     // Default: nenhum canal tem evento de conexão — connectionState fica
     // null. Os testes de conexão sobrescrevem.
     providersRepo.lastStateByInstanceIds.mockResolvedValue(new Map());
+    // Default: nenhum canal tem áreas; assertAssignable devolve os ids únicos.
+    sectorChannel = {
+      assertAssignable: vi.fn((ids: string[]) =>
+        Promise.resolve([...new Set(ids)]),
+      ),
+      assign: vi.fn(),
+      sectorsByChannel: vi.fn().mockResolvedValue(new Map()),
+    };
     controller = new WhatsappProvidersController(
       svc as unknown as WhatsappProvidersService,
       instancesRepo,
@@ -96,6 +115,8 @@ describe('WhatsappProvidersController', () => {
       gozapInstances,
       providersRepo,
     );
+    // O SectorChannelService entra por propriedade (@Inject), não pelo construtor.
+    Object.assign(controller, { sectorChannel });
   });
 
   // ZB — o endpoint que a página Canais consome antes de qualquer disparo.
@@ -219,6 +240,7 @@ describe('WhatsappProvidersController', () => {
                 warming: false,
                 warmupDay: 0,
                 connectionState: null,
+                sectors: [],
               },
             ],
           },
@@ -241,6 +263,7 @@ describe('WhatsappProvidersController', () => {
                 warming: false,
                 warmupDay: 0,
                 connectionState: null,
+                sectors: [],
               },
             ],
           },
@@ -276,6 +299,35 @@ describe('WhatsappProvidersController', () => {
     // Um canal sem evento nenhum (nunca conectou, ou não é sessionBased) não
     // pode virar "close" inventado — precisa ficar null, senão a tela mentiria
     // "desconectado" para um canal TWILIO que está perfeitamente ativo.
+    // C1 — a tela Canais mostra as áreas que cada número atende, por nome.
+    it('traz as áreas de cada canal (sectorsByChannel, por id; sem áreas = lista vazia)', async () => {
+      svc.configuredProviders.mockReturnValue(['GOZAP']);
+      instancesRepo.listAll.mockResolvedValue([
+        channel({ id: 'g1', provider: 'GOZAP' }),
+        channel({ id: 'g2', provider: 'GOZAP', isDefault: false }),
+      ] as never);
+      sectorChannel.sectorsByChannel.mockResolvedValue(
+        new Map([
+          [
+            'g1',
+            [
+              { id: 's1', name: 'Expedição' },
+              { id: 's2', name: 'Logística' },
+            ],
+          ],
+        ]),
+      );
+
+      const result = await controller.providers();
+
+      expect(sectorChannel.sectorsByChannel).toHaveBeenCalledWith(['g1', 'g2']);
+      expect(
+        result.providers[0].channels.map((c) =>
+          (c.sectors ?? []).map((s) => s.name),
+        ),
+      ).toEqual([['Expedição', 'Logística'], []]);
+    });
+
     it('connectionState fica null quando o canal não tem evento nenhum', async () => {
       svc.configuredProviders.mockReturnValue(['TWILIO']);
       instancesRepo.listAll.mockResolvedValue([
@@ -455,7 +507,7 @@ describe('WhatsappProvidersController', () => {
         apiKey: null,
       } as never);
 
-      const result = await controller.createChannel(body);
+      const result = await controller.createChannel(body, ADMIN_REQ);
 
       expect(instancesRepo.createOrReactivateCloudChannel).toHaveBeenCalledWith({
         provider: 'TWILIO',
@@ -476,7 +528,9 @@ describe('WhatsappProvidersController', () => {
       await controller.createChannel({
         ...body,
         twilioMessagingServiceSid: 'MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
-      } as CreateChannelDto);
+        } as CreateChannelDto,
+        ADMIN_REQ,
+      );
 
       expect(instancesRepo.createOrReactivateCloudChannel).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -492,7 +546,7 @@ describe('WhatsappProvidersController', () => {
         apiKey: 'must-not-leak',
       } as never);
 
-      const result = await controller.createChannel(body);
+      const result = await controller.createChannel(body, ADMIN_REQ);
 
       expect(result).not.toHaveProperty('apiKey');
     });
@@ -505,7 +559,7 @@ describe('WhatsappProvidersController', () => {
         phoneE164: '+5592987654321',
       } as never);
 
-      await controller.createChannel(body);
+      await controller.createChannel(body, ADMIN_REQ);
 
       expect(audit.log).toHaveBeenCalledWith(
         'instance.create',
@@ -517,10 +571,10 @@ describe('WhatsappProvidersController', () => {
 
     it('rejects provider=EVOLUTION with a PT-BR 400 pointing at the existing instance flow', async () => {
       await expect(
-        controller.createChannel({ ...body, provider: 'EVOLUTION' } as CreateChannelDto),
+        controller.createChannel({ ...body, provider: 'EVOLUTION' }, ADMIN_REQ),
       ).rejects.toMatchObject({ status: 400 });
       await expect(
-        controller.createChannel({ ...body, provider: 'EVOLUTION' } as CreateChannelDto),
+        controller.createChannel({ ...body, provider: 'EVOLUTION' }, ADMIN_REQ),
       ).rejects.toBeInstanceOf(DomainError);
       expect(instancesRepo.createOrReactivateCloudChannel).not.toHaveBeenCalled();
     });
@@ -528,7 +582,9 @@ describe('WhatsappProvidersController', () => {
     it('rejects a provider that is not configured on this deploy (400)', async () => {
       svc.isProviderConfigured.mockReturnValue(false);
 
-      await expect(controller.createChannel(body)).rejects.toMatchObject({
+      await expect(
+        controller.createChannel(body, ADMIN_REQ),
+      ).rejects.toMatchObject({
         status: 400,
       });
       expect(instancesRepo.createOrReactivateCloudChannel).not.toHaveBeenCalled();
@@ -547,7 +603,9 @@ describe('WhatsappProvidersController', () => {
       const result = await controller.createChannel({
         provider: 'GOZAP',
         name: 'Canal GoZap',
-      } as CreateChannelDto);
+        } as CreateChannelDto,
+        ADMIN_REQ,
+      );
 
       expect(gozapInstances.createChannel).toHaveBeenCalledWith({
         name: 'Canal GoZap',
@@ -556,11 +614,139 @@ describe('WhatsappProvidersController', () => {
       expect(result).toMatchObject({ id: 'gz-ch1', provider: 'GOZAP' });
     });
 
+    // C1 — as áreas são validadas ANTES de provisionar a instância no GoZap e
+    // gravadas depois que o canal existe.
+    it('provider=GOZAP com sectorIds: assertAssignable antes de createChannel e assign depois', async () => {
+      gozapInstances.createChannel.mockResolvedValue({
+        id: 'gz-ch1',
+        provider: 'GOZAP',
+      } as never);
+      sectorChannel.assign.mockResolvedValue({
+        channelId: 'gz-ch1',
+        sectors: [{ id: 's1', name: 'Logística' }],
+        moved: [],
+      });
+
+      const result = await controller.createChannel(
+        {
+          provider: 'GOZAP',
+          name: 'Canal GoZap',
+          sectorIds: ['s1', 's1'],
+        },
+        ADMIN_REQ,
+      );
+
+      expect(sectorChannel.assertAssignable).toHaveBeenCalledWith(['s1', 's1']);
+      expect(
+        sectorChannel.assertAssignable.mock.invocationCallOrder[0],
+      ).toBeLessThan(gozapInstances.createChannel.mock.invocationCallOrder[0]);
+      expect(sectorChannel.assign).toHaveBeenCalledWith({
+        channelId: 'gz-ch1',
+        sectorIds: ['s1'],
+        actorId: 'admin-1',
+      });
+      expect(
+        gozapInstances.createChannel.mock.invocationCallOrder[0],
+      ).toBeLessThan(sectorChannel.assign.mock.invocationCallOrder[0]);
+      expect(result).toMatchObject({
+        id: 'gz-ch1',
+        sectors: [{ id: 's1', name: 'Logística' }],
+      });
+    });
+
+    // M2: a conexão já foi criada (e paga) no GoZap; falha ao associar as áreas
+    // não vira erro para o cliente nem deixa um canal órfão sem resposta.
+    it.each([
+      [
+        'DomainError com código',
+        new DomainError({
+          code: 'channel.sector_invalid',
+          message: 'Logística não existe (+5511999990000)',
+          status: 422,
+        }),
+        'channel.sector_invalid',
+      ],
+      [
+        'erro sem código',
+        new Error('falha com +5511999990000 e Canal da Maria'),
+        'Error',
+      ],
+    ])(
+      'provider=GOZAP: assign falha depois da criação (%s): devolve o canal com sectors [] e loga só id e código',
+      async (_label, failure, reason) => {
+        gozapInstances.createChannel.mockResolvedValue({
+          id: 'gz-ch1',
+          provider: 'GOZAP',
+        } as never);
+        sectorChannel.assign.mockRejectedValue(failure);
+        const warn = vi
+          .spyOn(controller['logger'], 'warn')
+          .mockImplementation(() => undefined);
+
+        const result = await controller.createChannel(
+          { provider: 'GOZAP', name: 'Canal da Maria', sectorIds: ['s1'] },
+          ADMIN_REQ,
+        );
+
+        expect(result).toMatchObject({
+          id: 'gz-ch1',
+          provider: 'GOZAP',
+          sectors: [],
+        });
+        expect(warn).toHaveBeenCalledTimes(1);
+        const line = String(warn.mock.calls[0][0]);
+        expect(line).toContain('gz-ch1');
+        expect(line).toContain(reason);
+        expect(line).not.toMatch(/\+55|Logística|Maria/);
+      },
+    );
+
+    it('provider=GOZAP: área inválida recusa e createChannel nem é chamado', async () => {
+      const provision = vi.fn();
+      gozapInstances.createChannel.mockImplementation(provision);
+      sectorChannel.assertAssignable.mockRejectedValue(
+        new DomainError({
+          code: 'channel.sector_invalid',
+          message: 'x',
+          status: 422,
+        }),
+      );
+
+      await expect(
+        controller.createChannel(
+          {
+            provider: 'GOZAP',
+            name: 'Canal GoZap',
+            sectorIds: ['ruim'],
+          },
+          ADMIN_REQ,
+        ),
+      ).rejects.toMatchObject({ status: 422, code: 'channel.sector_invalid' });
+      expect(provision).not.toHaveBeenCalled();
+      expect(sectorChannel.assign).not.toHaveBeenCalled();
+    });
+
+    it('provider cloud (TWILIO) com sectorIds: 422 channel.sectors_not_team e nada é criado', async () => {
+      await expect(
+        controller.createChannel({ ...body, sectorIds: ['s1'] }, ADMIN_REQ),
+      ).rejects.toMatchObject({
+        status: 422,
+        code: 'channel.sectors_not_team',
+      });
+      expect(
+        instancesRepo.createOrReactivateCloudChannel.mock.calls,
+      ).toHaveLength(0);
+      expect(gozapInstances.createChannel.mock.calls).toHaveLength(0);
+    });
+
     it('provider=GOZAP still checks isProviderConfigured before delegating', async () => {
       svc.isProviderConfigured.mockReturnValue(false);
 
       await expect(
-        controller.createChannel({ provider: 'GOZAP', name: 'Canal GoZap' } as CreateChannelDto),
+        controller.createChannel(
+          { provider: 'GOZAP', name: 'Canal GoZap' },
+          ADMIN_REQ,
+        ),
       ).rejects.toMatchObject({ status: 400 });
       expect(gozapInstances.createChannel).not.toHaveBeenCalled();
     });
@@ -569,7 +755,10 @@ describe('WhatsappProvidersController', () => {
       svc.isProviderConfigured.mockImplementation((p: string) => p === 'ZERNIO');
       instancesRepo.createOrReactivateCloudChannel.mockResolvedValue({ id: 'c1', provider: 'ZERNIO' } as never);
 
-      await controller.createChannel({ ...body, provider: 'ZERNIO' } as CreateChannelDto);
+      await controller.createChannel(
+        { ...body, provider: 'ZERNIO' },
+        ADMIN_REQ,
+      );
 
       expect(svc.isProviderConfigured).toHaveBeenCalledWith('ZERNIO');
       expect(instancesRepo.createOrReactivateCloudChannel).toHaveBeenCalled();
@@ -586,7 +775,9 @@ describe('WhatsappProvidersController', () => {
         phoneE164: '+5592987654321',
       } as never);
 
-      await expect(controller.createChannel(body)).rejects.toMatchObject({
+      await expect(
+        controller.createChannel(body, ADMIN_REQ),
+      ).rejects.toMatchObject({
         status: 400,
         code: 'channel.duplicate_phone',
       });
@@ -601,7 +792,7 @@ describe('WhatsappProvidersController', () => {
       instancesRepo.findActiveByProviderAndPhone.mockResolvedValue(null);
       instancesRepo.createOrReactivateCloudChannel.mockResolvedValue({ id: 'c1', provider: 'TWILIO' } as never);
 
-      await controller.createChannel(body);
+      await controller.createChannel(body, ADMIN_REQ);
 
       expect(instancesRepo.createOrReactivateCloudChannel).toHaveBeenCalled();
     });
@@ -624,7 +815,7 @@ describe('WhatsappProvidersController', () => {
           provider: 'ZERNIO',
         } as never);
 
-        await controller.createChannel(zernioBody);
+        await controller.createChannel(zernioBody, ADMIN_REQ);
 
         expect(instancesRepo.createOrReactivateCloudChannel).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -642,7 +833,7 @@ describe('WhatsappProvidersController', () => {
         } as never);
 
         await expect(
-          controller.createChannel(zernioBody),
+          controller.createChannel(zernioBody, ADMIN_REQ),
         ).rejects.toMatchObject({
           status: 400,
           code: 'channel.duplicate_zernio_account',
@@ -659,7 +850,7 @@ describe('WhatsappProvidersController', () => {
         } as never);
 
         await expect(
-          controller.createChannel(zernioBody),
+          controller.createChannel(zernioBody, ADMIN_REQ),
         ).rejects.toMatchObject({
           message: expect.stringMatching(/j[áa] existe um canal/i),
         });
@@ -672,7 +863,7 @@ describe('WhatsappProvidersController', () => {
           provider: 'ZERNIO',
         } as never);
 
-        await controller.createChannel(zernioBody);
+        await controller.createChannel(zernioBody, ADMIN_REQ);
 
         expect(instancesRepo.createOrReactivateCloudChannel).toHaveBeenCalled();
       });
@@ -683,7 +874,7 @@ describe('WhatsappProvidersController', () => {
           provider: 'TWILIO',
         } as never);
 
-        await controller.createChannel(body); // provider TWILIO, no zernioAccountId
+        await controller.createChannel(body, ADMIN_REQ); // provider TWILIO, no zernioAccountId
 
         expect(instancesRepo.findActiveByZernioAccountId).not.toHaveBeenCalled();
       });
@@ -724,7 +915,7 @@ describe('WhatsappProvidersController', () => {
         } as never);
 
         const err = await controller
-          .createChannel(zernioBody)
+          .createChannel(zernioBody, ADMIN_REQ)
           .catch((e: unknown) => e);
 
         expect(err).toBeInstanceOf(DomainError);
@@ -752,7 +943,7 @@ describe('WhatsappProvidersController', () => {
           provider: 'ZERNIO',
         } as never);
 
-        await controller.createChannel(zernioBody);
+        await controller.createChannel(zernioBody, ADMIN_REQ);
 
         expect(zernioAccounts.lookup).toHaveBeenCalledWith('acc-123');
         expect(instancesRepo.createOrReactivateCloudChannel).toHaveBeenCalledWith(
@@ -777,7 +968,7 @@ describe('WhatsappProvidersController', () => {
           provider: 'ZERNIO',
         } as never);
 
-        const result = await controller.createChannel(zernioBody);
+        const result = await controller.createChannel(zernioBody, ADMIN_REQ);
 
         expect(result).toMatchObject({ id: 'c1' });
         expect(instancesRepo.createOrReactivateCloudChannel).toHaveBeenCalledWith(
@@ -796,7 +987,7 @@ describe('WhatsappProvidersController', () => {
           provider: 'TWILIO',
         } as never);
 
-        await controller.createChannel(body);
+        await controller.createChannel(body, ADMIN_REQ);
 
         expect(zernioAccounts.lookup).not.toHaveBeenCalled();
       });
@@ -813,12 +1004,62 @@ describe('WhatsappProvidersController', () => {
         await controller.createChannel({
           ...zernioBody,
           phoneE164: '+5511333334444',
-        } as CreateChannelDto);
+          } as CreateChannelDto,
+          ADMIN_REQ,
+        );
 
         expect(instancesRepo.createOrReactivateCloudChannel).toHaveBeenCalledWith(
           expect.objectContaining({ phoneE164: '+5511333334444' }),
         );
       });
+    });
+  });
+
+  // C1 — associar áreas ao número é só do ADMIN (como conectar número).
+  describe('PUT /whatsapp/channels/:id/sectors', () => {
+    const handler = Reflect.get(
+      WhatsappProvidersController.prototype,
+      'setChannelSectors',
+    ) as () => void;
+    const guardFor = (role: string) => {
+      const context = {
+        getHandler: () => handler,
+        getClass: () => WhatsappProvidersController,
+        switchToHttp: () => ({ getRequest: () => ({ user: { role } }) }),
+      } as unknown as ExecutionContext;
+      return () => new RolesGuard(new Reflector()).canActivate(context);
+    };
+
+    it('SUPERVISOR e OPERATOR levam 403 pelo RolesGuard; ADMIN passa', () => {
+      expect(guardFor('SUPERVISOR')).toThrow(
+        expect.objectContaining({ status: 403 }),
+      );
+      expect(guardFor('OPERATOR')).toThrow(
+        expect.objectContaining({ status: 403 }),
+      );
+      expect(guardFor('ADMIN')()).toBe(true);
+    });
+
+    it('repassa canal, áreas e o ADMIN que chamou, e devolve o resultado do serviço', async () => {
+      const result = {
+        channelId: 'c1',
+        sectors: [{ id: 's1', name: 'Logística' }],
+        moved: [{ sectorId: 's1', fromChannelId: 'c0' }],
+      };
+      sectorChannel.assign.mockResolvedValue(result);
+
+      const res = await controller.setChannelSectors(
+        'c1',
+        { sectorIds: ['s1'] },
+        ADMIN_REQ,
+      );
+
+      expect(sectorChannel.assign).toHaveBeenCalledWith({
+        channelId: 'c1',
+        sectorIds: ['s1'],
+        actorId: 'admin-1',
+      });
+      expect(res).toBe(result);
     });
   });
 

@@ -28,7 +28,7 @@ vi.mock('@/features/sector-people/components/add-people-dialog', () => ({
   AddPeopleDialog: ({ open }: { open: boolean }) => (open ? <div role="dialog">Adicionar pessoas (diálogo)</div> : null),
 }));
 vi.mock('@/features/internal-admin/api', () => ({
-  useSector: () => ({ data: { id: 's1', name: 'Produção', isActive: true, description: null, numbers: [{ id: 'n1', name: 'Linha 1', phone: '+5592999990000' }] } }),
+  useSector: () => ({ data: { id: 's1', name: 'Produção', isActive: true, description: null, channel: null } }),
   useUpdateSector: () => ({ isPending: false, mutateAsync: vi.fn() }),
 }));
 vi.mock('@/features/internal-admin/components/sector-form', () => ({ SectorForm: () => <button>Salvar setor</button> }));
@@ -40,7 +40,7 @@ const route = Route as unknown as { component: ComponentType };
 
 const ana = { id: 'u1', name: 'Ana', phoneE164: null, hasAccess: true, role: 'OPERATOR', level: { id: 'l1', name: 'Líder', isActive: true }, jobTitle: 'Conferente', shift: { id: 'sh1', name: 'Noite' }, editable: 'limited' };
 const bia = { id: 'u2', name: 'Bia', phoneE164: '+5592988887777', hasAccess: false, role: null, level: null, jobTitle: null, shift: null, editable: 'full' };
-const sector = { id: 's1', name: 'Produção', code: 'PRD', isActive: true, manager: { id: 'm1', name: 'Marta' } };
+const sector = { id: 's1', name: 'Produção', code: 'PRD', isActive: true, manager: { id: 'm1', name: 'Marta' }, channel: null };
 
 function loaded(people: unknown[]) {
   mocks.people.mockReturnValue({ data: { sector, people, options: { levels: [], shifts: [] } }, isError: false });
@@ -90,7 +90,7 @@ describe('/setores/$sectorId', () => {
     expect(screen.getByRole('button', { name: 'Adicionar pessoas' })).toBeInTheDocument();
   });
 
-  it('gestor: sem Editar setor e sem números; mostra Gestor e pessoas', () => {
+  it('gestor: sem Editar setor; mostra Gestor e pessoas', () => {
     mocks.role = 'SUPERVISOR';
     render(<route.component />);
     expect(screen.getByText('Gestor: Marta')).toBeInTheDocument();
@@ -98,13 +98,21 @@ describe('/setores/$sectorId', () => {
     expect(screen.getByRole('button', { name: 'Adicionar pessoas' })).toBeInTheDocument();
     expect(screen.queryByText('Editar setor')).toBeNull();
     expect(screen.queryByText('Salvar setor')).toBeNull();
-    expect(screen.queryByText(/Números vinculados/)).toBeNull();
   });
 
-  it('ADMIN vê Editar setor e os números vinculados', () => {
+  it('ADMIN vê Editar setor', () => {
     render(<route.component />);
     expect(screen.getByText('Editar setor')).toBeInTheDocument();
-    expect(screen.getByText(/Números vinculados/)).toBeInTheDocument();
+  });
+
+  it('cabeçalho mostra "Sem número" sem número e o número quando há', () => {
+    const { unmount } = render(<route.component />);
+    expect(screen.getByText('Sem número')).toBeInTheDocument();
+    unmount();
+    mocks.people.mockReturnValue({ data: { sector: { ...sector, channel: { id: 'c1', name: 'Loja 1', phoneE164: '+5592911111111' } }, people: [ana], options: { levels: [], shifts: [] } }, isError: false });
+    render(<route.component />);
+    expect(screen.getByText('+5592911111111')).toBeInTheDocument();
+    expect(screen.queryByText('Sem número')).toBeNull();
   });
 
   it('403 mostra "Você não gerencia este setor."', () => {

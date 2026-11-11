@@ -12,15 +12,19 @@ const personSchema = z.object({
   email: z.string().nullable(),
 });
 
-export const teamConnectionStateSchema = z.enum(['open', 'connecting', 'close']);
-
-export const teamChannelSchema = z.object({
+/**
+ * Número efetivo da área (D2) com o estado ao vivo (D7). `live.state` só `open` libera o envio;
+ * `unknown` = não deu para conferir no provedor. `checkedAt` = hora da consulta (ISO).
+ */
+export const teamSectorChannelSchema = z.object({
   id: z.string(),
   name: z.string(),
   phoneE164: z.string().nullable(),
   provider: z.enum(['GOZAP', 'EVOLUTION']),
-  // null = sem evento recente (eventos expiram em 7 dias); não significa desconectado.
-  connectionState: teamConnectionStateSchema.nullable(),
+  live: z.object({
+    state: z.enum(['open', 'connecting', 'close', 'unknown']),
+    checkedAt: z.string(),
+  }),
 });
 
 export const teamSectorSchema = z.object({
@@ -35,7 +39,6 @@ export const teamTargetsSchema = z.object({
   // Turno que começou na véspera e ainda não acabou.
   inProgress: z.object({ date: civilDateSchema, shift: shiftRefSchema }).nullable(),
   shifts: shiftRefSchema.array(),
-  channels: teamChannelSchema.array(),
   sectors: teamSectorSchema.array(),
   // Níveis ativos por sortOrder (filtro do envio).
   levels: levelRefSchema.array(),
@@ -50,11 +53,25 @@ export const rosterMemberSchema = personSchema.extend({
   level: levelRefSchema.nullable(),
 });
 
-/** Escala dos setores pedidos na data; setores por nome, cada pessoa em um só. */
+/** Escala dos setores pedidos na data; setores por nome, cada pessoa em um só. `channel` null = área sem número. */
 export const teamRosterSchema = z.object({
   date: civilDateSchema,
   shiftStarts: z.object({ shiftId: z.string(), startsAt: z.string() }).array(),
-  sectors: z.object({ sectorId: z.string(), name: z.string(), members: rosterMemberSchema.array() }).array(),
+  sectors: z
+    .object({
+      sectorId: z.string(),
+      name: z.string(),
+      channel: teamSectorChannelSchema.nullable(),
+      members: rosterMemberSchema.array(),
+    })
+    .array(),
+});
+
+/** Por qual número a pessoa recebe hoje; `sector` null = sem área (e então `channel` também é null). */
+export const teamPersonRouteSchema = z.object({
+  userId: z.string(),
+  sector: z.object({ id: z.string(), name: z.string() }).nullable(),
+  channel: teamSectorChannelSchema.nullable(),
 });
 
 /** Turno gravado no envio; tolerante como o `teamShiftSnapshotSchema` do back (sem regex HH:mm). */
@@ -80,40 +97,33 @@ export const dispatchResultSchema = z.object({
     .array(),
 });
 
+/** Situação de cada destinatário (GC11); a ordem é a do ciclo do envio. */
+export const recipientStatusSchema = z.enum([
+  'QUEUED', 'SENT', 'DELIVERED', 'READ', 'REPLIED', 'FAILED', 'UNCERTAIN', 'SKIPPED', 'SCHEDULED', 'CANCELLED',
+]);
+
+const count = z.number().int().nonnegative();
+
+/** Quantos destinatários há em cada situação (C5). */
 export const dispatchCountsSchema = z.object({
-  queued: z.number().int(),
-  sent: z.number().int(),
-  failed: z.number().int(),
-  skipped: z.number().int(),
-  scheduled: z.number().int(),
-  cancelled: z.number().int(),
+  queued: count,
+  sent: count,
+  delivered: count,
+  read: count,
+  replied: count,
+  failed: count,
+  uncertain: count,
+  skipped: count,
+  scheduled: count,
+  cancelled: count,
 });
 
-/** Pessoa da foto da escala gravada no envio (sem telefone). */
-export const rosterPersonSchema = z.object({
-  userId: z.string().nullable(),
-  name: z.string(),
-  jobTitle: z.string().nullable(),
-  shiftName: z.string().nullable(),
-  reason: z.enum(['DAY_OFF', 'VACATION']).nullable(),
-  // Setor e nível da pessoa na hora do envio (D4); null = foto antiga, sem as chaves.
-  sectorName: z.string().nullable(),
-  levelName: z.string().nullable(),
-});
-
-export const dispatchRecipientSchema = z.object({
-  // null = usuário apagado depois do envio.
-  userId: z.string().nullable(),
-  name: z.string(),
-  // Turno da pessoa no dia; null = entrou pela folga ou sem turno.
-  shiftName: z.string().nullable(),
-  status: z.enum(['QUEUED', 'SENT', 'FAILED', 'SKIPPED', 'SCHEDULED', 'CANCELLED']),
-  // errorCode quando FAILED; 'NO_PHONE' | 'SUPPRESSED' | 'INACTIVE' quando SKIPPED; senão null.
-  reason: z.string().nullable(),
-  // Setor em que entrou e nível da época (não muda ao renomear); null = alvo pessoa ou envio antigo.
-  sectorName: z.string().nullable(),
-  levelName: z.string().nullable(),
-});
+/** C5: totais da página das listas paginadas (`page`/`pageSize` ecoam a consulta). */
+const pageMetaShape = {
+  total: count,
+  page: z.number().int().positive(),
+  pageSize: z.number().int().positive(),
+};
 
 export const dispatchListSchema = z.object({
   items: z
@@ -128,13 +138,14 @@ export const dispatchListSchema = z.object({
         // Snapshot do filtro de turno; null = todos os turnos ou alvo pessoa.
         shift: shiftSnapshotSchema.nullable(),
       }),
-      // Setores do envio por nome (snapshot); [] no alvo pessoa. Mais de um = histórico agrupa por setor.
+      // Setores do envio por nome (snapshot); [] no alvo pessoa.
       sectors: z.object({ id: z.string(), name: z.string() }).array(),
-      // null = canal removido depois do envio.
-      channel: z.object({ id: z.string(), name: z.string() }).nullable(),
+      // Números usados, pelo snapshot dos destinatários (sem telefone de pessoa); name/phoneE164 null =
+      // número removido depois do envio.
+      channels: z
+        .object({ name: z.string().nullable(), phoneE164: z.string().nullable(), count })
+        .array(),
       counts: dispatchCountsSchema,
-      // Todos os destinatários, por nome, sem telefone.
-      recipients: dispatchRecipientSchema.array(),
       // Data da escala; null = envio anterior à foto da escala.
       rosterDate: civilDateSchema.nullable(),
       // DISPATCHED = imediato ou agendado já disparado; SCHEDULED = aguardando; CANCELLED = cancelado.
@@ -143,12 +154,73 @@ export const dispatchListSchema = z.object({
       scheduledFor: z.string().nullable(),
       // Hora real do disparo do agendado (ISO); null = imediato ou não disparado.
       firedAt: z.string().nullable(),
-      // Da foto: escalados no filtro que não receberam / de folga (sem foto = []).
-      unselected: rosterPersonSchema.array(),
-      off: rosterPersonSchema.array(),
     })
     .array(),
+  ...pageMetaShape,
 });
+
+const dispatchStateSchema = z.enum(['DISPATCHED', 'SCHEDULED', 'CANCELLED']);
+
+const channelRefShape = { name: z.string().nullable(), phoneE164: z.string().nullable() };
+
+/**
+ * Pessoa que ficou de fora, como o back a lista no detalhe (`listedRosterPersonSchema`, sem telefone).
+ * Exata de propósito: campo omitido pelo servidor tem de falhar alto, não sumir em silêncio.
+ */
+export const leftOutPersonSchema = z.object({
+  userId: z.string().nullable(),
+  name: z.string(),
+  jobTitle: z.string().nullable(),
+  shiftName: z.string().nullable(),
+  reason: z.enum(['DAY_OFF', 'VACATION']).nullable(),
+  sectorName: z.string().nullable(),
+  levelName: z.string().nullable(),
+});
+
+/** `GET /internal/team-whatsapp/dispatches/:id` (C5): topo da tela de resultado. */
+export const dispatchDetailSchema = z.object({
+  id: z.string(),
+  targetLabel: z.string(),
+  text: z.string(),
+  state: dispatchStateSchema,
+  createdAt: z.string(),
+  scheduledFor: z.string().nullable(),
+  firedAt: z.string().nullable(),
+  author: z.object({ id: z.string(), name: z.string().nullable() }).nullable(),
+  sectors: z.object({ id: z.string(), name: z.string() }).array(),
+  channels: z.object({ ...channelRefShape, count }).array(),
+  counts: dispatchCountsSchema,
+  leftOut: z.object({ unselected: leftOutPersonSchema.array(), off: leftOutPersonSchema.array() }),
+});
+
+/** `GET /internal/team-whatsapp/dispatches/:id/recipients` (C5): uma página de destinatários. */
+export const dispatchRecipientPageSchema = z.object({
+  items: z
+    .object({
+      id: z.string(),
+      userName: z.string(),
+      sectorName: z.string().nullable(),
+      levelName: z.string().nullable(),
+      shiftName: z.string().nullable(),
+      status: recipientStatusSchema,
+      // `skipReason ?? errorCode`: 'NO_PHONE' | 'SUPPRESSED' | 'INACTIVE' ou o código da falha.
+      reason: z.string().nullable(),
+      attempts: z.number().int().nonnegative(),
+      // null = sem número (pulado antes de escolher o canal).
+      channel: z.object(channelRefShape).nullable(),
+      acceptedAt: z.string().nullable(),
+      deliveredAt: z.string().nullable(),
+      readAt: z.string().nullable(),
+      repliedAt: z.string().nullable(),
+      // Decisão do servidor (`isRepeatable`): só falha certa; o front não decide.
+      repeatable: z.boolean(),
+    })
+    .array(),
+  ...pageMetaShape,
+});
+
+/** `POST /internal/team-whatsapp/dispatches/:id/retry` (C6). */
+export const retryResultSchema = z.object({ requeued: z.number().int().nonnegative() });
 
 /** `GET /internal/team-whatsapp/scheduled`: envios aguardando o início do turno. */
 export const scheduledListSchema = z.object({
@@ -164,6 +236,7 @@ export const scheduledListSchema = z.object({
       author: personSchema.nullable(),
     })
     .array(),
+  ...pageMetaShape,
 });
 
 export const cancelDispatchResponseSchema = z.object({ id: z.string(), state: z.literal('CANCELLED') });
@@ -174,15 +247,28 @@ export type TeamTargets = z.infer<typeof teamTargetsSchema>;
 export type TeamSector = z.infer<typeof teamSectorSchema>;
 export type TeamRoster = z.infer<typeof teamRosterSchema>;
 export type RosterMember = z.infer<typeof rosterMemberSchema>;
-export type RosterPerson = z.infer<typeof rosterPersonSchema>;
 export type TeamLevel = z.infer<typeof levelRefSchema>;
 export type RosterSector = TeamRoster['sectors'][number];
-export type TeamChannel = z.infer<typeof teamChannelSchema>;
+export type TeamSectorChannel = z.infer<typeof teamSectorChannelSchema>;
+export type TeamPersonRoute = z.infer<typeof teamPersonRouteSchema>;
 export type DispatchResult = z.infer<typeof dispatchResultSchema>;
 export type DispatchList = z.infer<typeof dispatchListSchema>;
-export type DispatchRecipient = z.infer<typeof dispatchRecipientSchema>;
+export type RecipientStatus = z.infer<typeof recipientStatusSchema>;
+export type DispatchCounts = z.infer<typeof dispatchCountsSchema>;
+export type DispatchDetail = z.infer<typeof dispatchDetailSchema>;
+export type DispatchRecipientPage = z.infer<typeof dispatchRecipientPageSchema>;
+export type DispatchRecipient = DispatchRecipientPage['items'][number];
+export type LeftOutRosterPerson = z.infer<typeof leftOutPersonSchema>;
+/** Corpo do POST retry: algumas pessoas (1..100) ou todas as falhas certas. */
+export type RetryInput = { recipientIds: string[] } | { all: true };
+
+/** Props de `Pagination` (as listas paginadas do histórico e dos agendados). */
+export type Paging = { page: number; pageSize: number; total: number; onPageChange: (page: number) => void };
 
 export type RecipientPreview = { id: string; name: string };
+
+/** Quem fica de fora da prévia: sem telefone, ou com telefone mas não marcado na seleção. */
+export type LeftOutPerson = { name: string; reason: 'unselected' | 'no_phone' };
 
 export type SendTarget =
   | { type: 'user'; userId: string; label: string }
@@ -195,20 +281,19 @@ export type SendTarget =
       /** "Produção · Noite · 21/10" / "RH, TI +2 · Coordenador · todos os turnos · 21/10" / "… · seleção de 2" */
       label: string;
       date: string; // data da escala conferida na tela
-      shiftId: string | null; // null = todos os turnos (não envia `shiftId`)
+      shiftIds: string[]; // vazio = todos os turnos (não envia `shiftIds`)
       includeOff: boolean; // só em "todos os turnos"
       userIds: string[] | null; // null = todos da lista (não envia `userIds`)
       /** Início do turno escolhido (ISO do servidor + HH:mm gravado); ausente = não dá para agendar. */
       shiftStart?: { startsAt: string; startTime: string };
       recipients: RecipientPreview[]; // vão receber (têm telefone)
-      leftOut: RecipientPreview[]; // ficam de fora (sem telefone)
+      leftOut: LeftOutPerson[]; // ficam de fora, com o motivo
     };
 
 /** Corpo de `POST /internal/team-whatsapp/dispatches`. */
 export type CreateDispatchInput = {
-  channelId: string;
   text: string;
-  /** Padrão 'now'; 'shift_start' só com alvo setor + shiftId. */
+  /** Padrão 'now'; 'shift_start' só com alvo setor + exatamente um turno (D9). */
   when?: 'now' | 'shift_start';
   target:
     | { type: 'user'; userId: string }
@@ -216,9 +301,9 @@ export type CreateDispatchInput = {
         type: 'sector';
         sectorIds: string[];
         date: string;
-        shiftId?: string;
+        shiftIds?: string[]; // 1..20; ausente = todos os turnos
         userIds?: string[];
-        includeOff?: boolean;
+        includeOff?: boolean; // só sem `shiftIds`
         levelIds?: string[];
         withoutLevel?: boolean;
       };

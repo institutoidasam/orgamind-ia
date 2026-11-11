@@ -8,6 +8,13 @@ const sectorSummarySchema = z.object({
   isActive: z.boolean().default(true),
 });
 
+/** C1: o número efetivo da área (`null` = "Sem número"). */
+export const sectorChannelSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  phoneE164: z.string().nullable(),
+});
+
 const managerSchema = z.object({
   id: z.string(),
   name: z.string().nullable(),
@@ -19,7 +26,7 @@ export const sectorSchema = sectorSummarySchema.extend({
   managerId: z.string().nullable().optional().default(null),
   manager: managerSchema.nullable().optional().default(null),
   memberCount: z.number().int().nonnegative().default(0),
-  numberCount: z.number().int().nonnegative().default(0),
+  channel: sectorChannelSchema.nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -35,9 +42,6 @@ export const sectorDetailSchema = sectorSchema.extend({
         isActive: z.boolean().default(true),
       }),
     )
-    .default([]),
-  numbers: z
-    .array(z.object({ id: z.string(), name: z.string(), phone: z.string() }))
     .default([]),
 });
 
@@ -66,54 +70,9 @@ export const sectorListSchema = z.object({
   pageSize: z.number().int().positive(),
 });
 
-export const internalNumberSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  phone: z.string(),
-  provider: z.enum(["META", "EVOLUTION", "OTHER"]),
-  sectorId: z.string().nullable().optional().default(null),
-  sector: sectorSummarySchema.nullable(),
-  routeToSector: z.boolean().default(false),
-  channelId: z.string().nullable().optional().default(null),
-  configurationStatus: z
-    .enum(["UNCONFIGURED", "CONFIGURED"])
-    .default("UNCONFIGURED"),
-  routingStatus: z.literal("PENDING").optional().default("PENDING"),
-  channel: z
-    .object({
-      id: z.string(),
-      name: z.string(),
-      provider: z.string(),
-      isActive: z.boolean(),
-      ownerUserId: z.string().nullable(),
-    })
-    .nullable()
-    .optional()
-    .default(null),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-});
-
-export const internalNumberInputSchema = z.object({
-  name: z.string().trim().min(1, "Informe o nome").max(120),
-  phone: z.string().regex(/^\+[1-9]\d{7,14}$/, "Use número no formato E.164"),
-  provider: z.enum(["META", "EVOLUTION", "OTHER"]),
-  sectorId: z.string().min(1, "Selecione o setor"),
-  routeToSector: z.boolean(),
-  channelId: z.string().nullable().optional(),
-});
-
-export const internalNumberListSchema = z.object({
-  items: z.array(internalNumberSchema),
-  total: z.number().int().nonnegative(),
-  page: z.number().int().positive(),
-  pageSize: z.number().int().positive(),
-});
-
 export type Sector = z.infer<typeof sectorSchema>;
+export type SectorChannel = z.infer<typeof sectorChannelSchema>;
 export type SectorDetail = z.infer<typeof sectorDetailSchema>;
 export type SectorInput = z.output<typeof sectorInputSchema>;
-export type InternalNumber = z.infer<typeof internalNumberSchema>;
-export type InternalNumberInput = z.output<typeof internalNumberInputSchema>;
 export type InternalRole = z.infer<typeof roleSchema>;
 export const INTERNAL_ROLES = roleSchema.options;

@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
-  internalNumberInputSchema,
-  internalNumberSchema,
   sectorDetailSchema,
   sectorInputSchema,
   sectorSchema,
 } from "./schemas";
 
-describe("setores e números internos", () => {
+describe("setores", () => {
   it("normaliza a sigla e preserva payloads setoriais legados sem gerente", () => {
     const sector = sectorSchema.parse({
       id: "sector-1",
@@ -15,7 +13,7 @@ describe("setores e números internos", () => {
       code: "ENG",
       description: null,
       memberCount: 0,
-      numberCount: 0,
+      channel: null,
       createdAt: "2026-10-10T00:00:00.000Z",
       updatedAt: "2026-10-10T00:00:00.000Z",
     });
@@ -32,6 +30,7 @@ describe("setores e números internos", () => {
     name: "Engenharia",
     code: "ENG",
     description: null,
+    channel: null,
     createdAt: "2026-10-10T00:00:00.000Z",
     updatedAt: "2026-10-10T00:00:00.000Z",
   };
@@ -56,44 +55,17 @@ describe("setores e números internos", () => {
 
     expect(sector.manager).toEqual({ id: "u2", name: "Bia", email: null });
   });
+});
 
-  it("aceita apenas E.164 para o registro estrutural e nunca presume canal conectado", () => {
-    expect(() =>
-      internalNumberInputSchema.parse({
-        name: "GBR Engenharia",
-        phone: "5592999990000",
-        provider: "META",
-        sectorId: "sector-1",
-        routeToSector: true,
-      }),
-    ).toThrow();
+describe("setor com número (C1)", () => {
+  const base = {
+    id: "sector-1", name: "Engenharia", code: "ENG", description: null,
+    createdAt: "2026-10-10T00:00:00.000Z", updatedAt: "2026-10-10T00:00:00.000Z",
+  };
 
-    const number = internalNumberSchema.parse({
-      id: "number-1",
-      name: "GBR Engenharia",
-      phone: "+5592999990000",
-      provider: "META",
-      sectorId: "sector-1",
-      sector: { id: "sector-1", name: "Engenharia", code: "ENG" },
-      routeToSector: true,
-      channelId: null,
-      createdAt: "2026-10-10T00:00:00.000Z",
-      updatedAt: "2026-10-10T00:00:00.000Z",
-    });
-
-    expect(number.configurationStatus).toBe("UNCONFIGURED");
-  });
-
-  it("aceita o identificador de um canal existente sem mudar o roteamento pendente", () => {
-    expect(
-      internalNumberInputSchema.parse({
-        name: "GBR Engenharia",
-        phone: "+5592999990000",
-        provider: "META",
-        sectorId: "sector-1",
-        routeToSector: true,
-        channelId: "channel-1",
-      }),
-    ).toMatchObject({ channelId: "channel-1", routeToSector: true });
+  it("traz o número efetivo (channel) ou null quando não tem", () => {
+    const channel = { id: "c1", name: "Loja 1", phoneE164: "+5592911111111" };
+    expect(sectorSchema.parse({ ...base, channel }).channel).toEqual(channel);
+    expect(sectorSchema.parse({ ...base, channel: null }).channel).toBeNull();
   });
 });

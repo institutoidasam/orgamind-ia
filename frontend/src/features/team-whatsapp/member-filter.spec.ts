@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { buildSectorTarget, eligibleMembers, filterByLevel, noScheduleCount, offMembers } from './member-filter';
+import {
+  buildSectorTarget, eligibleMembers, filterByLevel, leftOutPeople, noScheduleCount, offMembers,
+} from './member-filter';
 import type { RosterMember } from './schemas';
 
 type Situation = RosterMember['situation'];
@@ -27,12 +29,13 @@ const ids = (list: RosterMember[]) => list.map((m) => m.id);
 
 describe('eligibleMembers', () => {
   it.each([
-    ['turno lista só o WORK daquele turno', 'noite', false, ['joao', 'visita']],
-    ['ALL lista todo WORK e deixa o NONE de fora', 'ALL', false, ['ana', 'joao', 'visita']],
-    ['ALL com includeOff acrescenta quem está de folga', 'ALL', true, ['ana', 'joao', 'visita', 'maria']],
-    ['turno específico ignora includeOff', 'noite', true, ['joao', 'visita']],
-  ])('%s', (_name, choice, includeOff, expected) => {
-    expect(ids(eligibleMembers(members, choice, includeOff))).toEqual(expected);
+    ['turno lista só o WORK daquele turno', ['noite'], false, ['joao', 'visita']],
+    ['dois turnos listam o WORK de qualquer um deles', ['manha', 'noite'], false, ['ana', 'joao', 'visita']],
+    ['sem turnos (todos) lista todo WORK e deixa o NONE de fora', [], false, ['ana', 'joao', 'visita']],
+    ['sem turnos com includeOff acrescenta quem está de folga', [], true, ['ana', 'joao', 'visita', 'maria']],
+    ['turno específico ignora includeOff', ['noite'], true, ['joao', 'visita']],
+  ])('%s', (_name, shiftIds, includeOff, expected) => {
+    expect(ids(eligibleMembers(members, shiftIds, includeOff))).toEqual(expected);
   });
 });
 
@@ -68,52 +71,87 @@ describe('filterByLevel', () => {
 const none = { levelIds: [], withoutLevel: false };
 const levels = [{ id: 'l1', name: 'Coordenador' }, { id: 'l2', name: 'Funcionário' }];
 
+const shifts = [
+  { id: 'manha', name: 'Manhã' },
+  { id: 'tarde', name: 'Tarde' },
+  { id: 'noite', name: 'Noite' },
+];
+
 describe('buildSectorTarget', () => {
   const base = {
-    sectors: [{ id: 's1', name: 'Produção', members }], levels, levelFilter: none,
-    shiftName: 'Noite', date: '2026-10-21',
+    sectors: [{ id: 's1', name: 'Produção', members }], levels, levelFilter: none, shifts, date: '2026-10-21',
   };
 
-  it('seleção: label com data e seleção, userIds e só os escolhidos como destinatários', () => {
-    const target = buildSectorTarget({ ...base, choice: 'noite', includeOff: false, selectedIds: ['joao'] });
+  it('seleção: label com data e seleção, userIds, só o escolhido como destinatário e o resto como não selecionado', () => {
+    const target = buildSectorTarget({ ...base, shiftIds: ['noite'], includeOff: false, selectedIds: ['joao'] });
     expect(target).toEqual({
-      type: 'sector', sectorIds: ['s1'], levelIds: [], withoutLevel: false, date: '2026-10-21', shiftId: 'noite',
+      type: 'sector', sectorIds: ['s1'], levelIds: [], withoutLevel: false, date: '2026-10-21', shiftIds: ['noite'],
       includeOff: false, label: 'Produção · Noite · 21/10 · seleção de 1', userIds: ['joao'],
-      recipients: [{ id: 'joao', name: 'joao' }], leftOut: [],
+      recipients: [{ id: 'joao', name: 'joao' }], leftOut: [{ name: 'visita', reason: 'unselected' }],
     });
   });
 
-  it('todos os turnos com folga: sem shiftId, sem userIds, e sem telefone fica de fora', () => {
+  it('todos os turnos com folga: sem shiftIds, sem userIds, e sem telefone fica de fora', () => {
     const semFone = member('pedro', work('noite'), { phoneE164: null });
     const target = buildSectorTarget({
       ...base, sectors: [{ id: 's1', name: 'Produção', members: [...members, semFone] }],
-      shiftName: null, choice: 'ALL', includeOff: true, selectedIds: null,
+      shiftIds: [], includeOff: true, selectedIds: null,
     });
     expect(target).toMatchObject({
-      shiftId: null, includeOff: true, userIds: null, label: 'Produção · todos os turnos · 21/10',
-      leftOut: [{ id: 'pedro', name: 'pedro' }],
+      shiftIds: [], includeOff: true, userIds: null, label: 'Produção · todos os turnos · 21/10',
+      leftOut: [{ name: 'pedro', reason: 'no_phone' }],
     });
     expect(target.type === 'sector' && target.recipients.map((r) => r.id)).toEqual(['ana', 'joao', 'visita', 'maria']);
   });
 
-  it('includeOff só vale em todos os turnos', () => {
-    const target = buildSectorTarget({ ...base, choice: 'noite', includeOff: true, selectedIds: null });
-    expect(target).toMatchObject({ shiftId: 'noite', includeOff: false });
+  it('includeOff só vale sem turnos escolhidos', () => {
+    const target = buildSectorTarget({ ...base, shiftIds: ['noite'], includeOff: true, selectedIds: null });
+    expect(target).toMatchObject({ shiftIds: ['noite'], includeOff: false });
   });
 
+  it('vários turnos: rótulo na ordem dos turnos, até dois nomes e +N, e quem trabalha em qualquer um recebe', () => {
+    const two = buildSectorTarget({ ...base, shiftIds: ['noite', 'manha'], includeOff: false, selectedIds: null });
+    expect(two).toMatchObject({ shiftIds: ['noite', 'manha'], label: 'Produção · Manhã, Noite · 21/10' });
+    expect(two.type === 'sector' && two.recipients.map((r) => r.id)).toEqual(['ana', 'joao', 'visita']);
+    const three = buildSectorTarget({ ...base, shiftIds: ['manha', 'tarde', 'noite'], includeOff: false, selectedIds: null });
+    expect(three).toMatchObject({ label: 'Produção · Manhã, Tarde +1 · 21/10' });
+  });
+
+});
+
+describe('buildSectorTarget: setores e níveis', () => {
   it('vários setores e níveis: rótulo com dois nomes + N, Sem nível por último, e só o nível escolhido recebe', () => {
     const coord = { id: 'l1', name: 'Coordenador' };
     const sector = (id: string, name: string, level: typeof coord | null) =>
       ({ id, name, members: [member(`${id}-c`, work('noite'), { level }), member(`${id}-x`, work('noite'))] });
     const target = buildSectorTarget({
       sectors: [sector('rh', 'RH', coord), sector('ti', 'TI', coord), sector('op', 'Operação', coord)],
-      levels, levelFilter: { levelIds: ['l1'], withoutLevel: true },
-      shiftName: 'Noite', date: '2026-10-21', choice: 'noite', includeOff: false, selectedIds: null,
+      levels, levelFilter: { levelIds: ['l1'], withoutLevel: true }, shifts,
+      date: '2026-10-21', shiftIds: ['noite'], includeOff: false, selectedIds: null,
     });
     expect(target).toMatchObject({
       sectorIds: ['rh', 'ti', 'op'], levelIds: ['l1'], withoutLevel: true,
       label: 'Operação, RH +1 · Coordenador, Sem nível · Noite · 21/10',
     });
     expect(target.type === 'sector' && target.recipients).toHaveLength(6);
+  });
+});
+
+describe('leftOutPeople', () => {
+  const list = [
+    member('ana', work('noite')),
+    member('bruno', work('noite'), { phoneE164: null }),
+    member('caio', work('noite')),
+  ];
+
+  it('com seleção: quem tem telefone e não foi marcado é "unselected"; sem telefone é "no_phone"; na ordem da lista', () => {
+    expect(leftOutPeople(list, ['caio'])).toEqual([
+      { name: 'ana', reason: 'unselected' },
+      { name: 'bruno', reason: 'no_phone' },
+    ]);
+  });
+
+  it('enviar para todos: só quem não tem telefone fica de fora', () => {
+    expect(leftOutPeople(list, null)).toEqual([{ name: 'bruno', reason: 'no_phone' }]);
   });
 });

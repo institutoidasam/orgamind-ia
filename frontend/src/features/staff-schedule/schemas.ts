@@ -76,6 +76,8 @@ export const scheduleBoardSchema = z.object({
   shifts: shiftRefSchema.extend({ isActive: z.boolean() }).array(),
   rows: boardRowSchema.array(),
   exceptions: staffExceptionSchema.array(),
+  // O setor tem mais pessoas que o limite do quadro (500): as linhas são só as primeiras (D13).
+  truncated: z.boolean(),
 });
 
 /** `adjusted` = exceções anteriores da pessoa recortadas ou substituídas. */

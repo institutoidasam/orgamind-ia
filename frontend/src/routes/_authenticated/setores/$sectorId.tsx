@@ -9,6 +9,7 @@ import { extractApiError } from "@/lib/api-error";
 import { useAuthStore } from "@/stores/auth.store";
 import { SectorForm } from "@/features/internal-admin/components/sector-form";
 import { useSector, useUpdateSector } from "@/features/internal-admin/api";
+import { SectorNumber } from "@/features/internal-admin/components/sector-number";
 import type { SectorDetail } from "@/features/internal-admin/schemas";
 import { useSectorPeople } from "@/features/sector-people/api";
 import { AddPeopleDialog } from "@/features/sector-people/components/add-people-dialog";
@@ -52,6 +53,7 @@ function SectorHeader({ data }: { data: SectorPeopleResponse }) {
         <p className="ds-eyebrow">{sector.code} · {sector.isActive ? "Ativo" : "Inativo"}</p>
         <h1 className="ds-display !text-3xl">{sector.name}.</h1>
         <p className="text-sm text-muted-foreground">Gestor: {sector.manager?.name ?? "A definir"}</p>
+        <p className="flex items-center gap-2 text-sm text-muted-foreground">Número: <SectorNumber channel={sector.channel} /></p>
       </div>
       <Button asChild variant="outline">
         <Link to="/setores">Voltar</Link>
@@ -94,7 +96,7 @@ function PeopleSection({ sectorId, data }: { sectorId: string; data: SectorPeopl
   );
 }
 
-/** Só o ADMIN: estado, números vinculados e o formulário do setor. */
+/** Só o ADMIN: estado e o formulário do setor. */
 function AdminPanel({ sectorId }: { sectorId: string }) {
   const sector = useSector(sectorId);
   const update = useUpdateSector(sectorId);
@@ -126,23 +128,13 @@ function AdminPanel({ sectorId }: { sectorId: string }) {
 
 function SectorReadView({ sector }: { sector: SectorDetail }) {
   return (
-    <section className="grid gap-4 rounded-xl border p-4 md:grid-cols-2">
+    <section className="rounded-xl border p-4">
       <div className="space-y-2">
         <h2 className="font-heading text-lg font-semibold">Estado</h2>
         <Badge variant={sector.isActive ? "secondary" : "outline"}>
           {sector.isActive ? "Ativo" : "Inativo"}
         </Badge>
         {sector.description ? <p className="text-sm text-muted-foreground">{sector.description}</p> : null}
-      </div>
-      <div className="space-y-2">
-        <h2 className="font-heading text-lg font-semibold">Números vinculados</h2>
-        {sector.numbers.length ? (
-          <ul className="flex flex-wrap gap-2">
-            {sector.numbers.map((number) => (
-              <li key={number.id}><Link className="rounded-md border px-2 py-1 text-sm underline" to="/connect">{number.name} · {number.phone}</Link></li>
-            ))}
-          </ul>
-        ) : <p className="text-sm text-muted-foreground">Nenhum número vinculado.</p>}
       </div>
     </section>
   );

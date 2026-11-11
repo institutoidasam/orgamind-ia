@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HTTPError } from 'ky';
 import type { ComponentType } from 'react';
@@ -13,15 +13,15 @@ const { useTeamTargets, useTeamDispatches, useTeamRoster, useScheduledDispatches
 
 vi.mock('@tanstack/react-router', () => ({
   createFileRoute: () => (opts: Record<string, unknown>) => ({ ...opts }),
-  Link: ({ children, to, params }: { children: React.ReactNode; to: string; params: { sectorId: string } }) => (
-    <a href={to.replace('$sectorId', params.sectorId)}>{children}</a>
+  Link: ({ children, to, params }: { children: React.ReactNode; to: string; params: Record<string, string> }) => (
+    <a href={Object.entries(params).reduce((path, [key, value]) => path.replace('$' + key, value), to)}>{children}</a>
   ),
 }));
 vi.mock('@/features/team-whatsapp/api', () => ({
   useTeamTargets: () => useTeamTargets(),
-  useTeamDispatches: () => useTeamDispatches(),
+  useTeamDispatches: (page: number) => useTeamDispatches(page),
   useTeamRoster: (ids: string[], date: string) => useTeamRoster(ids, date),
-  useScheduledDispatches: () => useScheduledDispatches(),
+  useScheduledDispatches: (page: number) => useScheduledDispatches(page),
   useCancelDispatch: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 vi.mock('@/features/team-whatsapp/components/send-whatsapp-dialog', () => ({
@@ -45,10 +45,7 @@ if (!Element.prototype.scrollIntoView) {
 
 type User = ReturnType<typeof userEvent.setup>;
 
-async function pick(user: User, trigger: 'Turno', option: string) {
-  await user.click(screen.getByRole('combobox', { name: trigger }));
-  await user.click(screen.getByRole('option', { name: option }));
-}
+const pickShift = (user: User, name: string) => user.click(screen.getByRole('checkbox', { name }));
 
 const toggleBox = (user: User, name: string) => user.click(screen.getByRole('checkbox', { name }));
 
@@ -56,7 +53,7 @@ async function openProducao(turno: string) {
   const user = userEvent.setup();
   render(<Page />);
   await toggleBox(user, 'Produção');
-  await pick(user, 'Turno', turno);
+  await pickShift(user, turno);
   return user;
 }
 
@@ -87,15 +84,19 @@ const members = [
 ];
 const sectors = [{ id: 's1', name: 'Produção', code: 'PROD' }, { id: 's2', name: 'Expedição', code: 'EXP' }];
 const levels = [{ id: 'l1', name: 'Coordenador' }, { id: 'l2', name: 'Funcionário' }];
-const targets = { today: '2026-10-21', inProgress: null, shifts: [manha, noite], channels: [], sectors, levels };
+const targets = { today: '2026-10-21', inProgress: null, shifts: [manha, noite], sectors, levels };
 let membersBySector: Record<string, RosterMember[]> = {};
 const rosterOf = (ids: string[], date: string, shiftStarts: unknown[] = []) => ({
   data: {
     date, shiftStarts,
-    sectors: ids.map((id) => ({ sectorId: id, name: sectors.find((s) => s.id === id)?.name, members: membersBySector[id] ?? [] })),
+    sectors: ids.map((id) => ({ sectorId: id, name: sectors.find((s) => s.id === id)?.name, channel: null, members: membersBySector[id] ?? [] })),
   },
   isLoading: false, isError: false,
 });
+const COUNTS = {
+  queued: 0, sent: 0, delivered: 0, read: 0, replied: 0, failed: 0, uncertain: 0, skipped: 0, scheduled: 0, cancelled: 0,
+};
+const meta = (total: number, page = 1) => ({ total, page, pageSize: 20 });
 const dispatches = {
   items: [
     {
@@ -103,21 +104,28 @@ const dispatches = {
       author: { id: 'a1', name: 'Ada', email: 'ada@x.test' },
       target: { type: 'sector' as const, id: 's1', label: 'Compras', shift: null },
       sectors: [{ id: 's1', name: 'Compras' }],
-      channel: { id: 'ch1', name: 'GoZap Principal' },
-      counts: { queued: 1, sent: 2, failed: 3, skipped: 4 },
-      recipients: [], rosterDate: null, unselected: [], off: [],
+      channels: [{ name: 'GoZap Principal', phoneE164: '+5592999990000', count: 10 }],
+      counts: { ...COUNTS, queued: 1, sent: 2, failed: 3, skipped: 4 },
+      rosterDate: null, state: 'DISPATCHED' as const, scheduledFor: null, firedAt: null,
     },
     {
       id: 'd2', createdAt: '2026-10-15T12:00:00.000Z',
       author: null,
       target: { type: 'user' as const, id: 'u1', label: 'Ana', shift: null },
       sectors: [],
-      channel: null,
-      counts: { queued: 0, sent: 1, failed: 0, skipped: 0 },
-      recipients: [], rosterDate: null, unselected: [], off: [],
+      channels: [{ name: null, phoneE164: null, count: 1 }],
+      counts: { ...COUNTS, read: 1 },
+      rosterDate: null, state: 'DISPATCHED' as const, scheduledFor: null, firedAt: null,
     },
   ],
+  ...meta(2),
 };
+const query = (data: unknown) => ({ data, isLoading: false, isError: false, refetch: vi.fn() });
+
+function httpError(status: number, code?: string) {
+  const body = code ? JSON.stringify({ code }) : '{}';
+  return new HTTPError(new Response(body, { status }), new Request('https://x'), {} as never);
+}
 
 function http403() {
   return new HTTPError(new Response('{}', { status: 403 }), new Request('https://x'), {} as never);
@@ -125,8 +133,8 @@ function http403() {
 
 beforeEach(() => {
   useTeamTargets.mockReturnValue({ data: targets, isLoading: false, isError: false });
-  useTeamDispatches.mockReturnValue({ data: dispatches, isLoading: false, isError: false });
-  useScheduledDispatches.mockReturnValue({ data: { items: [] }, isLoading: false, isError: false });
+  useTeamDispatches.mockReturnValue(query(dispatches));
+  useScheduledDispatches.mockReturnValue(query({ items: [], ...meta(0) }));
   membersBySector = { s1: members, s2: [] };
   useTeamRoster.mockImplementation((ids: string[], date: string) => rosterOf(ids, date));
 });
@@ -156,19 +164,19 @@ describe('WhatsApp da equipe: acesso', () => {
 });
 
 describe('WhatsApp da equipe: seletores', () => {
-  it('Data começa em targets.today e o Turno lista os turnos ativos e Todos os turnos', async () => {
-    const user = userEvent.setup();
+  it('Data começa em targets.today e Turnos lista Todos os turnos e os turnos ativos', () => {
     render(<Page />);
     expect(screen.getByLabelText('Data')).toHaveValue('2026-10-21');
-    await user.click(screen.getByRole('combobox', { name: 'Turno' }));
-    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Manhã', 'Noite', 'Todos os turnos']);
+    expect(Array.from(screen.getByRole('group', { name: 'Turnos' }).querySelectorAll('label')).map((l) => l.textContent)).toEqual([
+      'Todos os turnos', 'Manhã', 'Noite',
+    ]);
   });
 
   it('pede setor e turno até escolher os dois', async () => {
     const user = userEvent.setup();
     render(<Page />);
     expect(screen.getByText(NEEDS_CHOICE)).toBeInTheDocument();
-    await pick(user, 'Turno', 'Noite');
+    await pickShift(user, 'Noite');
     expect(screen.getByText(NEEDS_CHOICE)).toBeInTheDocument();
     await toggleBox(user, 'Produção');
     expect(screen.queryByText(NEEDS_CHOICE)).not.toBeInTheDocument();
@@ -180,7 +188,7 @@ describe('WhatsApp da equipe: seletores', () => {
     render(<Page />);
     expect(screen.getByRole('checkbox', { name: 'Produção' })).toBeChecked();
     expect(screen.getByText(NEEDS_CHOICE)).toBeInTheDocument();
-    await pick(user, 'Turno', 'Noite');
+    await pickShift(user, 'Noite');
     expect(screen.queryByText(NEEDS_CHOICE)).not.toBeInTheDocument();
   });
 });
@@ -208,7 +216,7 @@ describe('WhatsApp da equipe: quem aparece', () => {
   it('incluir quem está de folga só aparece em Todos os turnos e põe Maria na lista', async () => {
     const user = await openProducao('Noite');
     expect(screen.queryByRole('checkbox', { name: INCLUDE_OFF })).not.toBeInTheDocument();
-    await pick(user, 'Turno', 'Todos os turnos');
+    await pickShift(user, 'Todos os turnos');
     await user.click(screen.getByRole('checkbox', { name: INCLUDE_OFF }));
     expect(checkboxNames()).toEqual(['Ana', 'João', 'Maria', 'Rui']);
     expect(screen.queryByRole('list', { name: 'De folga' })).not.toBeInTheDocument();
@@ -220,7 +228,7 @@ describe('WhatsApp da equipe: vários setores e níveis', () => {
     const user = userEvent.setup();
     render(<Page />);
     await toggleBox(user, 'Todos os setores');
-    await pick(user, 'Turno', 'Noite');
+    await pickShift(user, 'Noite');
     return user;
   }
 
@@ -272,7 +280,7 @@ describe('WhatsApp da equipe: turno em andamento', () => {
     expect(screen.getByText('A Noite de 21/10 ainda está em andamento')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Ver esse turno' }));
     expect(screen.getByLabelText('Data')).toHaveValue('2026-10-21');
-    expect(screen.getByRole('combobox', { name: 'Turno' })).toHaveTextContent('Noite');
+    expect(screen.getByRole('checkbox', { name: 'Noite' })).toBeChecked();
     expect(screen.queryByText('A Noite de 21/10 ainda está em andamento')).not.toBeInTheDocument();
   });
 });
@@ -284,22 +292,22 @@ describe('WhatsApp da equipe: seleção e envio', () => {
     await user.click(screen.getByRole('checkbox', { name: 'João' }));
     await user.click(screen.getByRole('button', { name: 'Enviar para selecionados (2)' }));
     expect(dialogTarget()).toEqual({
-      type: 'sector', sectorIds: ['s1'], levelIds: [], withoutLevel: false, date: '2026-10-21', shiftId: 'noite', includeOff: false, userIds: ['joao', 'rui'],
+      type: 'sector', sectorIds: ['s1'], levelIds: [], withoutLevel: false, date: '2026-10-21', shiftIds: ['noite'], includeOff: false, userIds: ['joao', 'rui'],
       label: 'Produção · Noite · 21/10 · seleção de 2',
       recipients: [{ id: 'joao', name: 'João' }, { id: 'rui', name: 'Rui' }],
-      leftOut: [],
+      leftOut: [{ name: 'Pedro', reason: 'no_phone' }],
     });
   });
 
-  it('todos os turnos com folga: sem shiftId e sem userIds, e o sem telefone fica de fora', async () => {
+  it('todos os turnos com folga: sem shiftIds e sem userIds, e o sem telefone fica de fora', async () => {
     const user = await openProducao('Todos os turnos');
     await user.click(screen.getByRole('checkbox', { name: INCLUDE_OFF }));
     await user.click(screen.getByRole('button', { name: 'Enviar para todos (4)' }));
     expect(dialogTarget()).toEqual({
-      type: 'sector', sectorIds: ['s1'], levelIds: [], withoutLevel: false, date: '2026-10-21', shiftId: null, includeOff: true, userIds: null,
+      type: 'sector', sectorIds: ['s1'], levelIds: [], withoutLevel: false, date: '2026-10-21', shiftIds: [], includeOff: true, userIds: null,
       label: 'Produção · todos os turnos · 21/10',
       recipients: [{ id: 'ana', name: 'Ana' }, { id: 'joao', name: 'João' }, { id: 'maria', name: 'Maria' }, { id: 'rui', name: 'Rui' }],
-      leftOut: [{ id: 'pedro', name: 'Pedro' }],
+      leftOut: [{ name: 'Pedro', reason: 'no_phone' }],
     });
   });
 
@@ -318,13 +326,49 @@ describe('WhatsApp da equipe: seleção e envio', () => {
     expect(useTeamRoster).toHaveBeenLastCalledWith(['s1'], '2026-10-22');
     expect(screen.getByRole('button', { name: 'Enviar para selecionados (0)' })).toBeDisabled();
     await user.click(screen.getByRole('checkbox', { name: 'João' }));
-    await pick(user, 'Turno', 'Manhã');
+    await pickShift(user, 'Manhã');
     expect(screen.getByRole('button', { name: 'Enviar para selecionados (0)' })).toBeDisabled();
-    await pick(user, 'Turno', 'Noite');
+    await pickShift(user, 'Manhã');
     await user.click(screen.getByRole('checkbox', { name: 'João' }));
     await toggleBox(user, 'Expedição');
     await toggleBox(user, 'Expedição');
     expect(screen.getByRole('button', { name: 'Enviar para selecionados (0)' })).toBeDisabled();
+  });
+});
+
+describe('WhatsApp da equipe: vários turnos', () => {
+  it('Manhã e Noite juntas listam quem trabalha em qualquer uma e o alvo leva shiftIds, sem folga', async () => {
+    const user = await openProducao('Manhã');
+    await pickShift(user, 'Noite');
+    expect(checkboxNames()).toEqual(['Ana', 'João', 'Rui']);
+    expect(screen.queryByRole('checkbox', { name: INCLUDE_OFF })).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Enviar para todos (3)' }));
+    expect(dialogTarget()).toMatchObject({
+      shiftIds: ['manha', 'noite'], includeOff: false, label: 'Produção · Manhã, Noite · 21/10',
+    });
+  });
+});
+
+describe('WhatsApp da equipe: erro da escala', () => {
+  async function openWithRosterError(error: unknown) {
+    const refetch = vi.fn();
+    useTeamRoster.mockReturnValue({ isLoading: false, isError: true, error, refetch });
+    const user = await openProducao('Todos os turnos');
+    return { user, refetch };
+  }
+
+  it('mostra o erro com Tentar novamente, que chama refetch', async () => {
+    const { user, refetch } = await openWithRosterError(httpError(500));
+    await user.click(await screen.findByRole('button', { name: 'Tentar novamente' }));
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('too_many_people (422) pede para escolher menos setores', async () => {
+    await openWithRosterError(httpError(422, 'team_whatsapp.too_many_people'));
+    expect(
+      await screen.findByText('Os setores escolhidos têm mais de 2000 pessoas. Escolha menos setores.'),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Tentar novamente' })).toBeInTheDocument();
   });
 });
 
@@ -337,60 +381,81 @@ describe('WhatsApp da equipe: página', () => {
 });
 
 describe('WhatsApp da equipe: envios recentes', () => {
-  it('lista destino, autor, canal e contagens; canal e autor removidos são tratados', () => {
+  it('lista destino, autor, número e contagens; número removido e autor removido são tratados', () => {
     render(<Page />);
-    const first = screen.getByRole('row', { name: /GoZap Principal/ });
+    const first = screen.getByRole('row', { name: /\+5592999990000/ });
     expect(first).toHaveTextContent('Compras');
     expect(first).toHaveTextContent('Ada');
-    expect(first).toHaveTextContent('Enfileirados 1 · Enviados 2 · Falhas 3 · Pulados 4');
-    const second = screen.getByRole('row', { name: /canal removido/ });
+    expect(first).toHaveTextContent('Na fila 1 · Aceito pelo WhatsApp 2 · Falhou 3 · Pulado 4');
+    expect(within(first).getByRole('link', { name: 'Ver resultado' })).toHaveAttribute('href', '/whatsapp-equipe/d1');
+    const second = screen.getByRole('row', { name: /Número removido/ });
     expect(second).toHaveTextContent('Ana');
-    expect(second).toHaveTextContent('—');
+    expect(second).toHaveTextContent('Lido 1');
+    expect(screen.queryByText('Ver destinatários')).not.toBeInTheDocument();
   });
 
   it('mostra o vazio quando não há envios', () => {
-    useTeamDispatches.mockReturnValue({ data: { items: [] }, isLoading: false, isError: false });
+    useTeamDispatches.mockReturnValue(query({ items: [], ...meta(0) }));
     render(<Page />);
     expect(screen.getByText('Nenhum envio ainda.')).toBeInTheDocument();
   });
+
+  it('total 45 mostra Página 1 de 3 e Próxima pede a página 2', async () => {
+    useTeamDispatches.mockReturnValue(query({ ...dispatches, ...meta(45) }));
+    render(<Page />);
+    expect(useTeamDispatches).toHaveBeenLastCalledWith(1);
+    expect(screen.getByText(/Página 1 de 3/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Próxima' }));
+    expect(useTeamDispatches).toHaveBeenLastCalledWith(2);
+  });
+
+  it('página que ficou além do fim (a lista encolheu) volta à última', async () => {
+    useTeamDispatches.mockReturnValue(query({ ...dispatches, ...meta(45) }));
+    const { rerender } = render(<Page />);
+    await userEvent.click(screen.getByRole('button', { name: 'Próxima' }));
+    expect(useTeamDispatches).toHaveBeenLastCalledWith(2);
+    useTeamDispatches.mockReturnValue(query({ items: [], ...meta(20, 2) }));
+    rerender(<Page />);
+    await waitFor(() => expect(useTeamDispatches).toHaveBeenLastCalledWith(1));
+  });
 });
 
-describe('WhatsApp da equipe: Ver destinatários', () => {
-  const recipient = (name: string, shiftName: string | null, status: string, reason: string | null) => ({
-    userId: `id-${name}`, name, shiftName, status, reason, sectorName: 'Produção', levelName: null,
-  });
-  const person = (name: string, extra: Record<string, unknown> = {}) => ({
-    userId: `id-${name}`, name, jobTitle: null, shiftName: null, reason: null, sectorName: 'Produção', levelName: null, ...extra,
-  });
-  const withGroups = {
-    ...dispatches.items[0],
-    target: { type: 'sector' as const, id: 's1', label: 'Produção · Noite · 21/10', shift: { ...noite } },
-    recipients: [
-      recipient('Ana', 'Noite', 'SENT', null),
-      recipient('Bia', 'Noite', 'FAILED', 'evolution.session_closed'),
-      recipient('Caio', null, 'SKIPPED', 'NO_PHONE'),
-    ],
-    rosterDate: '2026-10-21',
-    unselected: [person('Davi', { jobTitle: 'Líder', shiftName: 'Noite' })],
-    off: [person('Eva', { reason: 'VACATION' })],
-  };
-  const texts = (row: HTMLElement, name: string) =>
-    within(within(row).getByRole('list', { name })).getAllByRole('listitem').map((li) => li.textContent);
-
-  it('mostra Destinatários com resultado, Escalados não marcados e De folga, sem telefone', async () => {
-    useTeamDispatches.mockReturnValue({ data: { items: [withGroups, dispatches.items[1]] }, isLoading: false, isError: false });
+describe('WhatsApp da equipe: erro das listas (D14)', () => {
+  it('erro no histórico mostra Tentar novamente, que consulta de novo', async () => {
+    const refetch = vi.fn();
+    useTeamDispatches.mockReturnValue({ data: undefined, isLoading: false, isError: true, error: httpError(500), refetch });
     render(<Page />);
-    const rows = screen.getAllByRole('row');
-    expect(within(rows[2]).queryByText('Ver destinatários')).not.toBeInTheDocument();
-    await userEvent.click(within(rows[1]).getByText('Ver destinatários'));
-    expect(texts(rows[1], 'Destinatários')).toEqual([
-      'Ana · Noite — Enviado',
-      'Bia · Noite — Falhou: Canal desconectado — reconecte em Números e canais',
-      'Caio — Pulado: sem telefone',
-    ]);
-    expect(texts(rows[1], 'Escalados não marcados')).toEqual(['Davi · Líder · Noite']);
-    expect(texts(rows[1], 'De folga')).toEqual(['Eva · Férias']);
-    expect(screen.getByRole('table')).not.toHaveTextContent('+55');
+    await userEvent.click(await screen.findByRole('button', { name: 'Tentar novamente' }));
+    expect(refetch).toHaveBeenCalled();
+    expect(screen.queryByText('Nenhum envio ainda.')).not.toBeInTheDocument();
+  });
+
+  const scheduledRow = {
+    id: 'g1', scheduledFor: '2026-10-22T02:00:00.000Z', rosterDate: '2026-10-21', shift: noite,
+    label: 'Produção · Noite · 21/10', recipientCount: 2, channel: null, author: null,
+  };
+
+  it.each([
+    ['histórico', () => useTeamDispatches, () => query({ ...dispatches, ...meta(45) })],
+    ['agendados', () => useScheduledDispatches, () => query({ items: [scheduledRow], ...meta(45) })],
+  ])('erro na página 2 do %s oferece voltar à página 1, que consulta a primeira', async (_name, hook, ok) => {
+    const mock = hook();
+    const failure = { data: undefined, isLoading: false, isError: true, error: httpError(500), refetch: vi.fn() };
+    mock.mockImplementation((page: number) => (page === 1 ? ok() : failure));
+    render(<Page />);
+    await userEvent.click(screen.getByRole('button', { name: 'Próxima' }));
+    expect(mock).toHaveBeenLastCalledWith(2);
+    await userEvent.click(await screen.findByRole('button', { name: 'Voltar à primeira página' }));
+    expect(mock).toHaveBeenLastCalledWith(1);
+    expect(screen.queryByRole('button', { name: 'Voltar à primeira página' })).not.toBeInTheDocument();
+  });
+
+  it('erro nos agendados mostra Tentar novamente, que consulta de novo', async () => {
+    const refetch = vi.fn();
+    useScheduledDispatches.mockReturnValue({ data: undefined, isLoading: false, isError: true, error: httpError(500), refetch });
+    render(<Page />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Tentar novamente' }));
+    expect(refetch).toHaveBeenCalled();
   });
 });
 
@@ -409,14 +474,13 @@ describe('WhatsApp da equipe: agendamento', () => {
   });
 
   it('lista os agendados acima dos envios recentes e marca o envio agendado como Agendado', () => {
-    useScheduledDispatches.mockReturnValue({ data: { items: [scheduledItem] }, isLoading: false, isError: false });
-    useTeamDispatches.mockReturnValue({
-      data: { items: [{ ...dispatches.items[0], state: 'SCHEDULED', counts: { ...dispatches.items[0].counts, scheduled: 2 } }] },
-      isLoading: false, isError: false,
-    });
+    useScheduledDispatches.mockReturnValue(query({ items: [scheduledItem], ...meta(1) }));
+    useTeamDispatches.mockReturnValue(query({
+      items: [{ ...dispatches.items[0], state: 'SCHEDULED', counts: { ...COUNTS, scheduled: 2 } }], ...meta(1),
+    }));
     render(<Page />);
     expect(screen.getByRole('heading', { name: 'Agendados' })).toBeInTheDocument();
     expect(screen.getByText('21/10 22:00')).toBeInTheDocument();
-    expect(screen.getByText(/Agendados 2/)).toBeInTheDocument();
+    expect(screen.getByText(/Agendado 2/)).toBeInTheDocument();
   });
 });

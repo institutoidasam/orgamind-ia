@@ -8,6 +8,7 @@ export type Action =
   | { kind: 'create' }
   | { kind: 'connect'; id: string }
   | { kind: 'config'; id: string }
+  | { kind: 'sectors'; id: string }
   | { kind: 'restart'; id: string }
   | { kind: 'setDefault'; id: string }
   | { kind: 'remove'; id: string };
@@ -51,6 +52,7 @@ export function InstancesList({
             onRestart={() => onAction({ kind: 'restart', id: i.id })}
             onRemove={() => onAction({ kind: 'remove', id: i.id })}
             onOpenConfig={() => onAction({ kind: 'config', id: i.id })}
+            onEditSectors={() => onAction({ kind: 'sectors', id: i.id })}
           />
         ))}
       </div>

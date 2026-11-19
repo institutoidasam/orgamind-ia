@@ -201,6 +201,15 @@ O plano entregue à GBR em 03/11/2026 (`reports/plano-gbr/`) tem 24 itens. O lot
   - Perder a disputa de gravação da matriz responde conflito (409) com pedido para recarregar.
   - O papel VIEWER aparece como "Leitura".
   - Limitação conhecida: as telas legadas de Contatos e de Inbox ainda mostram o telefone completo ao Operador, mesmo sem a permissão. A GBR decide se entram na regra.
+- **Decisões minhas no Lote C (19/11):**
+  - Envio da equipe com **data passada** usa o vínculo daquela data, na lista e na criação do envio: um envio novo para o setor A com a data de ontem alcança quem estava em A ontem, mesmo que hoje esteja em outro setor, e o remetente vê essa pessoa na lista (telefone conforme "ver telefone completo"). Para hoje e datas futuras nada muda. Isso vale também no dia a dia: o atalho "Ver esse turno" do turno da noite em andamento usa a data de ontem, então todo envio para a noite feito depois da meia-noite já segue o vínculo de ontem. A sentença R4 cita a lista do dia entre as leituras com data passada.
+  - No quadro da escala de datas passadas a pessoa aparece na linha do setor em que estava; os dias em que já estava em outro setor saem como "Em <setor>". Quem pode editar e quem pode ver o quadro continua decidido pelo setor atual.
+  - Em data passada, quem hoje é do setor mas naquele dia estava em outro e trabalhou ali por "Outro setor" aparece como visitante.
+  - A pessoa cadastrada depois deste lote tem o vínculo com início no dia do cadastro; "Anterior ao histórico" só aparece em quem já existia na migração.
+  - Duas trocas no mesmo dia que voltam ao valor original deixam duas linhas iguais em sequência (não se junta linha fechada).
+  - A seção "Vínculos" fica no diálogo Histórico da pessoa e usa a mesma permissão e o mesmo alcance do Histórico: o supervisor vê os setores, turnos e níveis anteriores de quem hoje está no setor dele.
+  - Setor, turno e nível com histórico não podem mais ser apagados direto no banco (o sistema só inativa, como antes).
+  - Vínculo não conta como histórico que impede excluir a pessoa: as linhas saem junto com ela.
 
 ## Aceite
 

@@ -130,6 +130,98 @@ afterAll(async () => {
 const times = (items: readonly { createdAt: string }[]) =>
   items.map((item) => item.createdAt);
 
+const day = (date: string) => new Date(`${date}T00:00:00.000Z`);
+const link = { bia: '', storage: '', front: '', morning: '', full: '' };
+
+/** Bia na Operação (alcance de Marta), com três linhas gravadas fora de ordem. */
+async function seedAssignments(): Promise<void> {
+  const sector = (name: string, code: string) =>
+    prisma.sector.create({ data: { name, code } });
+  link.storage = (await sector('Almoxarifado', 'ALM')).id;
+  link.front = (await sector('Recepção', 'REC')).id;
+  link.morning = (
+    await prisma.shift.create({
+      data: {
+        name: 'Manhã',
+        startTime: '07:00',
+        endTime: '13:00',
+        sortOrder: 1,
+      },
+    })
+  ).id;
+  link.full = (
+    await prisma.staffLevel.create({ data: { name: 'Pleno', sortOrder: 1 } })
+  ).id;
+  link.bia = (
+    await prisma.user.create({
+      data: { ...WITHOUT_ACCESS, name: 'Bia', sectorId: ids.operation },
+    })
+  ).id;
+  const rows = [
+    {
+      sectorId: link.storage,
+      shiftId: link.morning,
+      validFrom: day('2026-02-01'),
+      validTo: day('2026-05-31'),
+    },
+    {
+      sectorId: ids.operation,
+      shiftId: link.morning,
+      levelId: link.full,
+      validFrom: day('2026-06-01'),
+      validTo: null,
+    },
+    { sectorId: link.front, validFrom: null, validTo: day('2026-01-31') },
+  ];
+  for (const row of rows) {
+    await prisma.userAssignment.create({ data: { userId: link.bia, ...row } });
+  }
+}
+
+const refOf = (id: string, name: string) => ({ id, name });
+
+describe('AuditTrailService + repositório — Vínculos da pessoa', () => {
+  beforeAll(seedAssignments);
+
+  it('devolve aberta primeiro e depois por fim decrescente, com nomes de setor, turno e nível', async () => {
+    const { items } = await service.personAssignments(ids.supervisor, link.bia);
+
+    expect(items).toMatchObject([
+      {
+        sector: refOf(ids.operation, 'Operação'),
+        shift: refOf(link.morning, 'Manhã'),
+        level: refOf(link.full, 'Pleno'),
+        from: '2026-06-01',
+        to: null,
+      },
+      { from: '2026-02-01', to: '2026-05-31' },
+      {
+        sector: refOf(link.front, 'Recepção'),
+        shift: null,
+        level: null,
+        from: null,
+        to: '2026-01-31',
+      },
+    ]);
+  });
+
+  it('setor inativado depois continua aparecendo pelo nome na linha fechada', async () => {
+    await prisma.sector.update({
+      where: { id: link.storage },
+      data: { isActive: false },
+    });
+
+    const { items } = await service.personAssignments(ids.admin, link.bia);
+
+    expect(items[1]).toMatchObject({
+      sector: refOf(link.storage, 'Almoxarifado'),
+      shift: refOf(link.morning, 'Manhã'),
+      level: null,
+      to: '2026-05-31',
+    });
+  });
+});
+
 describe('AuditTrailService + repositório — busca q sem coringa de LIKE', () => {
   it('"_" e "%" em q valem como texto; nome e matrícula normais acham', async () => {
     const total = async (q: string) =>

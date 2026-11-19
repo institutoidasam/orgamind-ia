@@ -7,6 +7,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ get: vi.fn() }));
 
 vi.mock('@/lib/api-client', () => ({ api: { get: mocks.get } }));
+// A seção Vínculos tem spec próprio e faz outra consulta; aqui fica um marcador vazio, sem GET.
+vi.mock('./person-assignments', () => ({ PersonAssignments: () => <div data-testid="person-assignments" /> }));
 
 import { PersonHistoryDialog } from './person-history-dialog';
 
@@ -61,6 +63,15 @@ function lastSearchParams() {
 beforeEach(() => {
   vi.clearAllMocks();
   respondWith(pageOf([phoneChange]));
+});
+
+describe('Histórico da pessoa: seção Vínculos', () => {
+  it('o Histórico mostra a seção Vínculos acima das alterações', async () => {
+    renderDialog();
+    const section = screen.getByTestId('person-assignments');
+    const table = await screen.findByRole('table');
+    expect(section.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });
 
 describe('Histórico da pessoa: lista', () => {

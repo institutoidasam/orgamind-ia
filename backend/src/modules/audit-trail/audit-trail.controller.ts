@@ -13,9 +13,9 @@ type AuthRequest = { user: JwtPayload };
 
 /**
  * Trilha de alterações (C7). A consulta geral é fixa do ADMIN (`@Roles`); o
- * histórico da pessoa exige `trilha.consultar` (`@RequirePermission`, sem
- * `@Roles`); quem pode qual pessoa é decidido no serviço
- * (`person-actions.policy`).
+ * histórico e os vínculos da pessoa exigem `trilha.consultar`
+ * (`@RequirePermission`, sem `@Roles`); quem pode qual pessoa é decidido no
+ * serviço (`person-actions.policy`).
  */
 @ApiTags('audit-trail')
 @Controller('audit-trail')
@@ -38,5 +38,14 @@ export class AuditTrailController {
     @Req() req: AuthRequest,
   ) {
     return this.trail.personHistory(req.user.sub, userId, query);
+  }
+
+  @Get('people/:userId/assignments')
+  @RequirePermission('trilha.consultar')
+  @ApiOperation({
+    summary: 'Vínculos de uma pessoa (setor, turno e nível), atual primeiro',
+  })
+  personAssignments(@Param('userId') userId: string, @Req() req: AuthRequest) {
+    return this.trail.personAssignments(req.user.sub, userId);
   }
 }

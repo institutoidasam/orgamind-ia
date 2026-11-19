@@ -3,6 +3,9 @@ import { Prisma, type Role, type User } from '@prisma/client';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import crypto from 'crypto';
 import { personAuditSelect, type PersonAuditRow } from './person-audit';
+import { todayIn, type CivilDate } from '../staff-schedule/civil-date';
+import type { AssignmentPatch } from './assignment-timeline';
+import { isOpenAssignmentConflict, writeAssignment } from './assignment-writer';
 import { personHasHistory } from './person-history';
 import {
   foldAuthorizationCounts,
@@ -84,6 +87,35 @@ export type PersonDeleteTrail = (
   before: PersonAuditRow,
 ) => Promise<void>;
 
+/**
+ * Troca de setor, turno ou nível (CV3): só por aqui, nunca em `data` (DV15).
+ * `today` vem do serviço (`todayIn`, DV7); `actorId` vira `recordedById`.
+ */
+export type AssignmentChange = {
+  patch: AssignmentPatch;
+  today: CivilDate;
+  actorId: string | null;
+};
+
+// Chaves de vínculo que `data` não pode trazer (DV15(b)): relação e coluna.
+const ASSIGNMENT_KEYS = [
+  'sector',
+  'sectorId',
+  'workShift',
+  'shiftId',
+  'level',
+  'levelId',
+  'assignments',
+] as const;
+
+/** Vínculo em `data` fura a função única: recusa antes de abrir o tx. */
+function refuseAssignmentInData(data: object): Promise<never> | null {
+  const fields = data as Record<string, unknown>;
+  return ASSIGNMENT_KEYS.some((key) => fields[key] !== undefined)
+    ? Promise.reject(new Error('vínculo só por writeAssignment'))
+    : null;
+}
+
 /** Credencial de quem ganha acesso (D1): tudo num único update. */
 export type AccessGrantData = {
   email: string;
@@ -157,25 +189,37 @@ export class UsersRepository {
   }
 
   /**
-   * Cria a pessoa e grava a trilha na mesma transação (GC1): se a trilha
-   * lançar, a pessoa não fica criada. Devolve já no formato público (sem
-   * `password`). Matrícula repetida estoura P2002 em `registrationKey`.
+   * Cria a pessoa, abre a linha de vínculo (`writeAssignment`, origem CREATE:
+   * sempre abre, mesmo com os três em branco) e grava a trilha na mesma
+   * transação (GC1): se a trilha lançar, nem pessoa nem linha ficam. O retrato
+   * da trilha e o resumo devolvido são lidos depois da função. Sem
+   * `assignment`: nada atribuído, hoje em Manaus, sem autor. Matrícula
+   * repetida estoura P2002 em `registrationKey`. Transação padrão: o id é novo.
    */
   createWithAudit(
     data: Prisma.UserCreateInput,
     audit: PersonCreateTrail,
+    assignment?: AssignmentChange,
   ): Promise<UserSummary> {
+    const refused = refuseAssignmentInData(data);
+    if (refused) return refused;
+    const change = assignment ?? {
+      patch: {},
+      today: todayIn(new Date()),
+      actorId: null,
+    };
     return this.prisma.$transaction(async (tx) => {
-      const created = await tx.user.create({
-        data,
-        select: USER_SUMMARY_SELECT,
-      });
+      const { id } = await tx.user.create({ data, select: { id: true } });
+      await writeAssignment(tx, { userId: id, ...change, origin: 'CREATE' });
       const row = await tx.user.findUniqueOrThrow({
-        where: { id: created.id },
+        where: { id },
         select: personAuditSelect,
       });
-      await audit(tx, row, created.id);
-      return created;
+      await audit(tx, row, id);
+      return tx.user.findUniqueOrThrow({
+        where: { id },
+        select: USER_SUMMARY_SELECT,
+      });
     });
   }
 
@@ -275,43 +319,65 @@ export class UsersRepository {
    * deleteWithLastAdminGuard: if `data.role` would demote the last admin, the
    * transaction rejects. Other field-only updates skip the count check.
    *
-   * A trilha (GC1) roda no mesmo tx, com o retrato de antes lido nele e o de
-   * depois relido no update: se lançar, a edição não fica. Numa nova tentativa
-   * por P2034 o tx anterior já foi desfeito, então a trilha é refeita sem
-   * duplicar evento.
+   * Setor, turno e nível só chegam por `assignment` (DV15): `writeAssignment`
+   * (origem CHANGE) roda no mesmo tx, depois do update e antes de reler o
+   * retrato de depois. A trilha (GC1) roda no mesmo tx, com o retrato de antes
+   * lido nele e o de depois relido após a função: se lançar, nem edição nem
+   * linha nem espelho ficam. Numa nova tentativa por conflito (P2034, ou P2002
+   * no único parcial da linha aberta) o tx anterior já foi desfeito, então a
+   * trilha é refeita sem duplicar evento e a linha aberta é relida.
    */
   updateWithLastAdminGuard(
     id: string,
     data: Prisma.UserUpdateInput,
     audit?: PersonUpdateTrail,
+    assignment?: AssignmentChange,
   ): Promise<{ updated: PersonAuditRow } | { lastAdmin: true }> {
+    const refused = refuseAssignmentInData(data);
+    if (refused) return refused;
     return this.runSerializable(async (tx) => {
       const before = await tx.user.findUnique({
         where: { id },
         select: personAuditSelect,
       });
       if (!before) throw new Error('USER_NOT_FOUND');
-      const nextRole = typeof data.role === 'string' ? data.role : before.role;
-      const nextActive =
-        typeof data.isActive === 'boolean' ? data.isActive : before.isActive;
-      if (
-        before.role === 'ADMIN' &&
-        before.isActive &&
-        (nextRole !== 'ADMIN' || !nextActive)
-      ) {
-        const adminCount = await tx.user.count({
-          where: { role: 'ADMIN', isActive: true },
+      if (await this.dropsLastAdmin(tx, before, data))
+        return { lastAdmin: true as const };
+      await tx.user.update({ where: { id }, data, select: { id: true } });
+      if (assignment)
+        await writeAssignment(tx, {
+          userId: id,
+          ...assignment,
+          origin: 'CHANGE',
         });
-        if (adminCount <= 1) return { lastAdmin: true as const };
-      }
-      const updated = await tx.user.update({
+      const updated = await tx.user.findUniqueOrThrow({
         where: { id },
-        data,
         select: personAuditSelect,
       });
       await audit?.(tx, before, updated);
       return { updated };
     });
+  }
+
+  /** A edição tiraria o último ADMIN ativo (papel ou situação)? */
+  private async dropsLastAdmin(
+    tx: Prisma.TransactionClient,
+    before: PersonAuditRow,
+    data: Prisma.UserUpdateInput,
+  ): Promise<boolean> {
+    const nextRole = typeof data.role === 'string' ? data.role : before.role;
+    const nextActive =
+      typeof data.isActive === 'boolean' ? data.isActive : before.isActive;
+    if (
+      before.role !== 'ADMIN' ||
+      !before.isActive ||
+      (nextRole === 'ADMIN' && nextActive)
+    )
+      return false;
+    const adminCount = await tx.user.count({
+      where: { role: 'ADMIN', isActive: true },
+    });
+    return adminCount <= 1;
   }
 
   resetPassword(id: string, passwordHash: string): Promise<void> {
@@ -368,10 +434,12 @@ export class UsersRepository {
     throw lastError;
   }
 
+  /** P2034, ou inserção concorrente de linha aberta de vínculo (DV7). */
   private isSerializationFailure(error: unknown): boolean {
     return (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === 'P2034'
+      (error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2034') ||
+      isOpenAssignmentConflict(error)
     );
   }
 }

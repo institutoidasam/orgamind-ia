@@ -15,7 +15,7 @@ import { PERMISSION_DENIED_TEXT } from '../../shared/authz/permissions';
 import { AuditTrailController } from './audit-trail.controller';
 import type { AuditTrailService } from './audit-trail.service';
 
-type Handler = 'list' | 'personHistory';
+type Handler = 'list' | 'personHistory' | 'personAssignments';
 
 function context(handler: Handler, role: Role) {
   return {
@@ -56,6 +56,48 @@ const DENIED = {
   code: 'auth.permission_denied',
   detail: PERMISSION_DENIED_TEXT['trilha.consultar'],
 };
+
+describe('AuditTrailController — personAssignments por permissão (DV13)', () => {
+  it('sem trilha.consultar responde 403 auth.permission_denied; com, 200', async () => {
+    expect(permissionOf('personAssignments')).toBe('trilha.consultar');
+    expect(rolesOf('personAssignments')).toBeUndefined();
+    for (const role of ['OPERATOR', 'VIEWER'] as const) {
+      await expect(
+        passesGuards('personAssignments', role),
+      ).rejects.toMatchObject(DENIED);
+    }
+    await expect(
+      passesGuards('personAssignments', 'SUPERVISOR', {
+        revoke: ['trilha.consultar'],
+      }),
+    ).rejects.toMatchObject(DENIED);
+    await expect(passesGuards('personAssignments', 'SUPERVISOR')).resolves.toBe(
+      true,
+    );
+    await expect(
+      passesGuards('personAssignments', 'OPERATOR', {
+        grant: ['trilha.consultar'],
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it('encaminha o ator do token e a pessoa ao serviço e devolve a resposta', async () => {
+    const body = { items: [] };
+    const service = { personAssignments: vi.fn().mockResolvedValue(body) };
+    const controller = new AuditTrailController(
+      service as unknown as AuditTrailService,
+    );
+    const req = { user: { sub: 'user_supervisor', role: 'SUPERVISOR' } };
+
+    await expect(
+      controller.personAssignments('user_ana', req as never),
+    ).resolves.toBe(body);
+    expect(service.personAssignments).toHaveBeenCalledWith(
+      'user_supervisor',
+      'user_ana',
+    );
+  });
+});
 
 describe('AuditTrailController — personHistory por permissão', () => {
   it('personHistory: @RequirePermission("trilha.consultar") e nenhum @Roles', () => {

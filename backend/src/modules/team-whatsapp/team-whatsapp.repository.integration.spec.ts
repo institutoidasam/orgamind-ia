@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { PrismaClient } from '@prisma/client';
 import {
@@ -9,8 +9,10 @@ import {
   TeamWhatsappRepository,
   type NewTeamDispatch,
   type NewTeamDispatchRecipient,
+  type TeamMemberWithSchedule,
 } from './team-whatsapp.repository';
 import { StaffScheduleRepository } from '../staff-schedule/staff-schedule.repository';
+import { toDbDate } from '../staff-schedule/civil-date';
 import { dayMembers } from './team-whatsapp.roster';
 import { defaultPermissionsFor } from '../../shared/authz/permissions';
 import {
@@ -55,6 +57,249 @@ beforeAll(async () => {
 afterAll(async () => {
   await prisma?.$disconnect();
   await postgres?.stop();
+});
+
+// Lote C, T6 (DV9, DV11, GV4). "Hoje" explícito: Rui foi movido hoje de A
+// (1º turno, nível antigo) para B (2º turno, nível novo); Ana fica em A, Bia em
+// B; Ivo, inativo, estava em A ontem. Linhas abertas como as da migração.
+const TODAY = '2026-09-15';
+const YESTERDAY = '2026-09-14';
+const FUTURE = '2026-09-20';
+
+async function criarSetoresENiveis(tag: string) {
+  const [a, b] = await Promise.all(
+    ['A', 'B'].map((s) =>
+      prisma.sector.create({
+        data: { name: `Vínculo ${s}${tag}`, code: `VIN${s}${tag}` },
+      }),
+    ),
+  );
+  const [old, novo] = await Promise.all(
+    ['antigo', 'novo'].map((n, i) =>
+      prisma.staffLevel.create({
+        data: { name: `Nível ${n} ${tag}`, sortOrder: 60 + i },
+        select: { id: true, name: true },
+      }),
+    ),
+  );
+  return { a, b, old, novo };
+}
+
+async function criarPessoaMovidaHoje(tag: string) {
+  const { a, b, old, novo } = await criarSetoresENiveis(tag);
+  const pessoa = (name: string, data: object) =>
+    prisma.user.create({
+      data: {
+        email: `${name}.vin${tag}@test.local`,
+        password: 'x',
+        name,
+        ...data,
+      },
+    });
+  const ana = await pessoa('Ana', { sectorId: a.id });
+  const bia = await pessoa('Bia', { sectorId: b.id });
+  const rui = await pessoa('Rui', {
+    sectorId: b.id,
+    shiftId: 'shift_second',
+    levelId: novo.id,
+  });
+  const ivo = await pessoa('Ivo', { sectorId: b.id, isActive: false });
+  const day = toDbDate;
+  await prisma.userAssignment.createMany({
+    data: [
+      { userId: ana.id, sectorId: a.id },
+      { userId: bia.id, sectorId: b.id },
+      {
+        userId: rui.id,
+        sectorId: a.id,
+        shiftId: 'shift_first',
+        levelId: old.id,
+        validTo: day(YESTERDAY),
+      },
+      {
+        userId: rui.id,
+        sectorId: b.id,
+        shiftId: 'shift_second',
+        levelId: novo.id,
+        validFrom: day(TODAY),
+      },
+      { userId: ivo.id, sectorId: a.id, validTo: day(YESTERDAY) },
+      { userId: ivo.id, sectorId: b.id, validFrom: day(TODAY) },
+    ],
+  });
+  return { a, b, old, novo, ids: [a.id, b.id] };
+}
+
+// Nome, setor (e se está ativo), turno e nível de cada linha da lista do dia.
+const linhas = (people: readonly TeamMemberWithSchedule[] | undefined) =>
+  (people ?? []).map((p) => [
+    p.name,
+    p.sectorId,
+    p.sector,
+    p.shiftId,
+    p.workShift,
+    p.levelId,
+    p.level,
+  ]);
+
+describe('TeamWhatsappRepository — lista do dia pelo vínculo da data (Postgres real)', () => {
+  it('lista do dia de ontem usa o vínculo de ontem; a de hoje, o espelho', async () => {
+    const { a, b, old, novo, ids } = await criarPessoaMovidaHoje('1');
+    const active = { isActive: true };
+
+    const ontem = await repo.loadDayPeopleMany(ids, YESTERDAY, TODAY);
+    const hoje = await repo.loadDayPeopleMany(ids, TODAY, TODAY);
+
+    expect(linhas(ontem.get(a.id))).toEqual([
+      ['Ana', a.id, active, null, null, null, null],
+      ['Rui', a.id, active, 'shift_first', { name: '1º turno' }, old.id, old],
+    ]);
+    expect(linhas(ontem.get(b.id))).toEqual([
+      ['Bia', b.id, active, null, null, null, null],
+    ]);
+    expect(linhas(hoje.get(a.id))).toEqual([
+      ['Ana', a.id, active, null, null, null, null],
+    ]);
+    expect(linhas(hoje.get(b.id))).toEqual([
+      ['Bia', b.id, active, null, null, null, null],
+      [
+        'Rui',
+        b.id,
+        active,
+        'shift_second',
+        { name: '2º turno' },
+        novo.id,
+        novo,
+      ],
+    ]);
+    // Ontem em A, Rui é do setor (não visitante): a foto sai do vínculo da data.
+    const roster = dayMembers({
+      sectorId: a.id,
+      date: YESTERDAY,
+      people: ontem.get(a.id) ?? [],
+    });
+    expect(roster.map((m) => [m.name, m.fromOtherSector])).toEqual([
+      ['Ana', false],
+      ['Rui', false],
+    ]);
+  }, 60_000);
+});
+
+// Lia foi movida hoje de B para A; ontem, ainda em B, trabalhou em A (OTHER_SECTOR).
+async function criarEmprestadaAntesDaTroca(tag: string) {
+  const { a, b } = await criarSetoresENiveis(tag);
+  const lia = await prisma.user.create({
+    data: {
+      email: `lia.vin${tag}@test.local`,
+      password: 'x',
+      name: 'Lia',
+      sectorId: a.id,
+    },
+  });
+  await prisma.userAssignment.createMany({
+    data: [
+      { userId: lia.id, sectorId: b.id, validTo: toDbDate(YESTERDAY) },
+      { userId: lia.id, sectorId: a.id, validFrom: toDbDate(TODAY) },
+    ],
+  });
+  await prisma.staffScheduleException.create({
+    data: {
+      userId: lia.id,
+      kind: 'OTHER_SECTOR',
+      sectorId: a.id,
+      shiftId: 'shift_first',
+      startDate: toDbDate(YESTERDAY),
+      endDate: toDbDate(YESTERDAY),
+    },
+  });
+  return { a, b };
+}
+
+describe('TeamWhatsappRepository — visitante pelo setor da data (Postgres real)', () => {
+  it('ontem em B com OTHER_SECTOR para A: ontem A a traz como de fora; B a tem como do setor, trabalhando fora', async () => {
+    const { a, b } = await criarEmprestadaAntesDaTroca('4');
+
+    const ontem = await repo.loadDayPeopleMany([a.id, b.id], YESTERDAY, TODAY);
+
+    const roster = (sectorId: string) =>
+      dayMembers({
+        sectorId,
+        date: YESTERDAY,
+        people: ontem.get(sectorId) ?? [],
+      }).map((m) => [m.name, m.fromOtherSector, m.situation.kind]);
+    expect(roster(a.id)).toEqual([['Lia', true, 'WORK']]);
+    expect(
+      linhas(ontem.get(b.id)).map(([name, sectorId]) => [name, sectorId]),
+    ).toEqual([['Lia', b.id]]);
+    expect(roster(b.id)).toEqual([]);
+  }, 60_000);
+});
+
+// Sonda: um client com o log de consultas, para contar SQL sobre "UserAssignment".
+function sondaDeConsultas() {
+  const client = new PrismaClient({
+    datasources: { db: { url: postgres.getConnectionUri() } },
+    log: [{ emit: 'event', level: 'query' }],
+  });
+  const sqls: string[] = [];
+  client.$on('query', (e) => sqls.push(e.query));
+  return {
+    repo: new TeamWhatsappRepository(
+      client as never,
+      new StaffScheduleRepository(client as never),
+    ),
+    touched: () => sqls.filter((q) => q.includes('"UserAssignment"')).length,
+    close: () => client.$disconnect(),
+  };
+}
+
+describe('TeamWhatsappRepository — lista do dia de hoje e futura no espelho (Postgres real)', () => {
+  it('hoje e data futura: loadDayPeopleMany não consulta UserAssignment e devolve exatamente o que devolvia', async () => {
+    const { b, ids } = await criarPessoaMovidaHoje('2');
+    const sonda = sondaDeConsultas();
+    const comLinhas = [
+      await sonda.repo.loadDayPeopleMany(ids, TODAY, TODAY),
+      await sonda.repo.loadDayPeopleMany(ids, FUTURE, TODAY),
+    ];
+    expect(sonda.touched()).toBe(0);
+    // A sonda enxerga a tabela: a data passada consulta.
+    await sonda.repo.loadDayPeopleMany(ids, YESTERDAY, TODAY);
+    expect(sonda.touched()).toBeGreaterThan(0);
+    await sonda.close();
+
+    // O mesmo cenário sem nenhuma linha de vínculo: resultado idêntico.
+    await prisma.userAssignment.deleteMany({
+      where: { user: { email: { endsWith: '.vin2@test.local' } } },
+    });
+    expect(comLinhas).toEqual([
+      await repo.loadDayPeopleMany(ids, TODAY, TODAY),
+      await repo.loadDayPeopleMany(ids, FUTURE, TODAY),
+    ]);
+    expect(
+      comLinhas.map((m) => linhas(m.get(b.id)).map(([name]) => name)),
+    ).toEqual([
+      ['Bia', 'Rui'],
+      ['Bia', 'Rui'],
+    ]);
+  }, 60_000);
+
+  it('sem today, hoje é a data de Manaus: 19/11 às 23h59 em Manaus não consulta UserAssignment', async () => {
+    const { ids } = await criarPessoaMovidaHoje('3');
+    const sonda = sondaDeConsultas();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-11-20T03:59:00Z'));
+      await sonda.repo.loadDayPeopleMany(ids, '2026-11-19');
+      expect(sonda.touched()).toBe(0);
+      // Meia-noite em Manaus: 19/11 vira passado e passa a ler o vínculo.
+      vi.setSystemTime(new Date('2026-11-20T04:00:00Z'));
+      await sonda.repo.loadDayPeopleMany(ids, '2026-11-19');
+      expect(sonda.touched()).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+      await sonda.close();
+    }
+  }, 60_000);
 });
 
 // Pessoa autorizada de um setor já desativado.

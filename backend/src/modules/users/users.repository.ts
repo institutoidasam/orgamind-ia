@@ -2,6 +2,15 @@ import { Injectable } from '@nestjs/common';
 import { Prisma, type Role, type User } from '@prisma/client';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import crypto from 'crypto';
+import { personAuditSelect, type PersonAuditRow } from './person-audit';
+import { personHasHistory } from './person-history';
+import {
+  foldAuthorizationCounts,
+  userListWhere,
+  type UserListFilters,
+} from './user-list-where';
+
+export type { UserListFilters };
 
 // Allowlist of fields safe to expose via the API. Crucially does NOT include
 // `password` — the argon2 hash must never leave the backend, even logged.
@@ -21,6 +30,14 @@ const USER_SUMMARY_SELECT = {
   phoneE164: true,
   shiftId: true,
   jobTitle: true,
+  // Ficha: matrícula (a chave em minúsculas não sai) e a autorização de contato.
+  // `authorizationRecordedById` também fica de fora.
+  registration: true,
+  contactAuthorization: true,
+  authorizationSource: true,
+  authorizationNote: true,
+  authorizationDate: true,
+  authorizationRecordedAt: true,
   levelId: true,
   level: { select: { id: true, name: true, isActive: true } },
   createdAt: true,
@@ -38,8 +55,34 @@ export type UserListResult = {
   total: number;
 };
 
-/** Filtro da listagem; `hasAccess` ausente = todos. */
-export type UserListFilters = { hasAccess?: boolean };
+/**
+ * Trilha da criação (GC1): roda no tx da pessoa, com o retrato dela lido nesse
+ * tx e o id. Se lançar, a pessoa não fica criada.
+ */
+export type PersonCreateTrail = (
+  tx: Prisma.TransactionClient,
+  row: PersonAuditRow,
+  userId: string,
+) => Promise<void>;
+
+/**
+ * Trilha da edição (GC1): roda no tx do update, com o retrato de antes e o de
+ * depois lidos nele. Se lançar, a edição não fica.
+ */
+export type PersonUpdateTrail = (
+  tx: Prisma.TransactionClient,
+  before: PersonAuditRow,
+  after: PersonAuditRow,
+) => Promise<void>;
+
+/**
+ * Trilha da exclusão (GC1): roda no tx do delete, com o retrato da pessoa lido
+ * nele antes de apagar. Se lançar, a pessoa não é excluída.
+ */
+export type PersonDeleteTrail = (
+  tx: Prisma.TransactionClient,
+  before: PersonAuditRow,
+) => Promise<void>;
 
 /** Credencial de quem ganha acesso (D1): tudo num único update. */
 export type AccessGrantData = {
@@ -65,8 +108,7 @@ export class UsersRepository {
     filters: UserListFilters = {},
   ): Promise<UserListResult> {
     const skip = (page - 1) * pageSize;
-    const where: Prisma.UserWhereInput =
-      filters.hasAccess === undefined ? {} : { hasAccess: filters.hasAccess };
+    const where = userListWhere(filters);
     return Promise.all([
       this.prisma.user.findMany({
         where,
@@ -77,6 +119,23 @@ export class UsersRepository {
       }),
       this.prisma.user.count({ where }),
     ]).then(([data, total]) => ({ data, total }));
+  }
+
+  /**
+   * Contadores da lista (D9): só pessoas ativas, na base inteira (não seguem
+   * a página nem os filtros), numa única consulta agregada.
+   */
+  countAuthorizationPending(): Promise<{
+    unverified: number;
+    notAuthorized: number;
+  }> {
+    return this.prisma.user
+      .groupBy({
+        by: ['contactAuthorization', 'authorizationSource'],
+        where: { isActive: true },
+        _count: { _all: true },
+      })
+      .then(foldAuthorizationCounts);
   }
 
   findById(id: string): Promise<UserSummary | null> {
@@ -90,30 +149,69 @@ export class UsersRepository {
     return this.prisma.user.findUnique({ where: { email } });
   }
 
-  create(data: Prisma.UserCreateInput): Promise<User> {
-    return this.prisma.user.create({ data });
+  /** Quem já tem a matrícula (chave em minúsculas), para a pré-checagem da criação. */
+  findIdByRegistrationKey(key: string): Promise<string | null> {
+    return this.prisma.user
+      .findUnique({ where: { registrationKey: key }, select: { id: true } })
+      .then((user) => user?.id ?? null);
   }
 
-  /** Cria e devolve já no formato público (sem `password`). */
-  createSummary(data: Prisma.UserCreateInput): Promise<UserSummary> {
-    return this.prisma.user.create({ data, select: USER_SUMMARY_SELECT });
+  /**
+   * Cria a pessoa e grava a trilha na mesma transação (GC1): se a trilha
+   * lançar, a pessoa não fica criada. Devolve já no formato público (sem
+   * `password`). Matrícula repetida estoura P2002 em `registrationKey`.
+   */
+  createWithAudit(
+    data: Prisma.UserCreateInput,
+    audit: PersonCreateTrail,
+  ): Promise<UserSummary> {
+    return this.prisma.$transaction(async (tx) => {
+      const created = await tx.user.create({
+        data,
+        select: USER_SUMMARY_SELECT,
+      });
+      const row = await tx.user.findUniqueOrThrow({
+        where: { id: created.id },
+        select: personAuditSelect,
+      });
+      await audit(tx, row, created.id);
+      return created;
+    });
   }
 
   /**
    * Dá acesso a quem não tem: um único UPDATE condicionado a `hasAccess =
-   * false`. Dois pedidos concorrentes para a mesma pessoa: o segundo relê a
-   * linha já com acesso e não casa (0 linhas) → null. E-mail de outro usuário
-   * estoura o @unique (P2002), tratado no serviço.
+   * false`, com a trilha (GC1) no mesmo tx, que recebe o retrato de antes e o
+   * de depois. Serializable: dois pedidos concorrentes para a mesma pessoa, o
+   * segundo é refeito, relê a linha já com acesso e não casa → null. E-mail de
+   * outro usuário estoura o @unique (P2002), tratado no serviço.
    */
-  async grantAccess(
+  grantAccess(
     id: string,
     data: AccessGrantData,
+    audit: PersonUpdateTrail,
   ): Promise<UserSummary | null> {
-    const { count } = await this.prisma.user.updateMany({
-      where: { id, hasAccess: false },
-      data,
+    return this.runSerializable(async (tx) => {
+      const before = await tx.user.findUnique({
+        where: { id },
+        select: personAuditSelect,
+      });
+      if (!before) return null;
+      const { count } = await tx.user.updateMany({
+        where: { id, hasAccess: false },
+        data,
+      });
+      if (count === 0) return null;
+      const after = await tx.user.findUniqueOrThrow({
+        where: { id },
+        select: personAuditSelect,
+      });
+      await audit(tx, before, after);
+      return tx.user.findUniqueOrThrow({
+        where: { id },
+        select: USER_SUMMARY_SELECT,
+      });
     });
-    return count === 0 ? null : this.findById(id);
   }
 
   /** Id do usuário dono de qualquer uma das grafias do número (ou null). */
@@ -135,34 +233,40 @@ export class UsersRepository {
   }
 
   /**
-   * Delete a user, rejecting the operation if removing them would leave zero
-   * admins. The count + delete run inside a Serializable transaction so two
-   * concurrent requests against two distinct admins both see the same admin
-   * pool and only one of them succeeds (the other retries / fails).
+   * Exclui a pessoa, só se ela não deixou histórico (A3/D7) e se não for o
+   * último ADMIN ativo. A checagem de histórico, a contagem, o delete e a
+   * trilha (GC1) rodam na mesma transação Serializable: dois pedidos contra
+   * dois ADMINs distintos veem o mesmo conjunto e só um passa, e nada ganha
+   * histórico entre conferir e apagar. A trilha recebe o retrato lido no tx;
+   * se lançar, a pessoa continua. `subjectUserId` do evento não tem FK: ele
+   * sobrevive à exclusão.
    *
-   * Returns the deleted user on success, or null when the last-admin rule
-   * fired (caller turns this into ForbiddenError). Throws when the user does
-   * not exist (caller handles NotFoundError separately via findById).
+   * Devolve `{ deleted }` (o retrato apagado), `{ lastAdmin }` ou
+   * `{ hasHistory }`; quem chama transforma os dois últimos em erro. Lança
+   * quando a pessoa não existe (o serviço já tratou o 404 antes).
    */
   deleteWithLastAdminGuard(
     id: string,
-  ): Promise<{ deleted: User } | { lastAdmin: true }> {
+    audit: PersonDeleteTrail,
+  ): Promise<
+    { deleted: PersonAuditRow } | { lastAdmin: true } | { hasHistory: true }
+  > {
     return this.runSerializable(async (tx) => {
-      const user = await tx.user.findUnique({ where: { id } });
-      if (!user) {
-        // Surface as a NotFoundError caller-side. We propagate via a thrown
-        // marker — Prisma's findUnique returning null is the only way we'd
-        // reach here.
-        throw new Error('USER_NOT_FOUND');
-      }
-      if (user.role === 'ADMIN' && user.isActive) {
+      const before = await tx.user.findUnique({
+        where: { id },
+        select: personAuditSelect,
+      });
+      if (!before) throw new Error('USER_NOT_FOUND');
+      if (before.role === 'ADMIN' && before.isActive) {
         const adminCount = await tx.user.count({
           where: { role: 'ADMIN', isActive: true },
         });
         if (adminCount <= 1) return { lastAdmin: true as const };
       }
-      const deleted = await tx.user.delete({ where: { id } });
-      return { deleted };
+      if (await personHasHistory(tx, id)) return { hasHistory: true as const };
+      await tx.user.delete({ where: { id } });
+      await audit(tx, before);
+      return { deleted: before };
     });
   }
 
@@ -170,20 +274,29 @@ export class UsersRepository {
    * Update a user with the same last-admin guard semantics as
    * deleteWithLastAdminGuard: if `data.role` would demote the last admin, the
    * transaction rejects. Other field-only updates skip the count check.
+   *
+   * A trilha (GC1) roda no mesmo tx, com o retrato de antes lido nele e o de
+   * depois relido no update: se lançar, a edição não fica. Numa nova tentativa
+   * por P2034 o tx anterior já foi desfeito, então a trilha é refeita sem
+   * duplicar evento.
    */
   updateWithLastAdminGuard(
     id: string,
     data: Prisma.UserUpdateInput,
-  ): Promise<{ updated: User } | { lastAdmin: true }> {
+    audit?: PersonUpdateTrail,
+  ): Promise<{ updated: PersonAuditRow } | { lastAdmin: true }> {
     return this.runSerializable(async (tx) => {
-      const user = await tx.user.findUnique({ where: { id } });
-      if (!user) throw new Error('USER_NOT_FOUND');
-      const nextRole = typeof data.role === 'string' ? data.role : user.role;
+      const before = await tx.user.findUnique({
+        where: { id },
+        select: personAuditSelect,
+      });
+      if (!before) throw new Error('USER_NOT_FOUND');
+      const nextRole = typeof data.role === 'string' ? data.role : before.role;
       const nextActive =
-        typeof data.isActive === 'boolean' ? data.isActive : user.isActive;
+        typeof data.isActive === 'boolean' ? data.isActive : before.isActive;
       if (
-        user.role === 'ADMIN' &&
-        user.isActive &&
+        before.role === 'ADMIN' &&
+        before.isActive &&
         (nextRole !== 'ADMIN' || !nextActive)
       ) {
         const adminCount = await tx.user.count({
@@ -191,7 +304,12 @@ export class UsersRepository {
         });
         if (adminCount <= 1) return { lastAdmin: true as const };
       }
-      const updated = await tx.user.update({ where: { id }, data });
+      const updated = await tx.user.update({
+        where: { id },
+        data,
+        select: personAuditSelect,
+      });
+      await audit?.(tx, before, updated);
       return { updated };
     });
   }

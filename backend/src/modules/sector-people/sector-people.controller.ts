@@ -16,7 +16,10 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { AddFromContactsDto } from './dto/add-from-contacts.dto';
 import { CreateSectorPersonDto } from './dto/create-sector-person.dto';
 import { ListCandidatesQueryDto } from './dto/list-candidates.query';
+import { ListSectorPeopleQueryDto } from './dto/list-sector-people.query';
 import { MovePeopleDto } from './dto/move-people.dto';
+import { RemoveSectorPersonDto } from './dto/remove-sector-person.dto';
+import { SetSectorPersonStatusDto } from './dto/set-sector-person-status.dto';
 import { UpdateSectorPersonDto } from './dto/update-sector-person.dto';
 import { SectorPeopleService } from './sector-people.service';
 import { SectorPeopleWriteService } from './sector-people-write.service';
@@ -38,10 +41,15 @@ export class SectorPeopleController {
 
   @Get()
   @ApiOperation({
-    summary: 'Setor, pessoas ativas dele e opções de nível e turno',
+    summary:
+      'Setor, pessoas dele (inativas só com includeInactive) e opções de nível e turno',
   })
-  list(@Param('sectorId') sectorId: string, @Req() req: AuthRequest) {
-    return this.people.list(req.user.sub, sectorId);
+  list(
+    @Param('sectorId') sectorId: string,
+    @Query() query: ListSectorPeopleQueryDto,
+    @Req() req: AuthRequest,
+  ) {
+    return this.people.list(req.user.sub, sectorId, query.includeInactive);
   }
 
   @Get('candidates')
@@ -95,7 +103,7 @@ export class SectorPeopleController {
     @Body() body: MovePeopleDto,
     @Req() req: AuthRequest,
   ) {
-    return this.write.move(req.user.sub, sectorId, body.userIds);
+    return this.write.move(req.user.sub, sectorId, body.userIds, body.reason);
   }
 
   @Patch(':userId')
@@ -111,14 +119,27 @@ export class SectorPeopleController {
     return this.write.update(req.user.sub, sectorId, userId, body);
   }
 
+  @Post(':userId/status')
+  @HttpCode(200)
+  @ApiOperation({ summary: 'Inativa ou reativa pessoa do setor, com motivo' })
+  setStatus(
+    @Param('sectorId') sectorId: string,
+    @Param('userId') userId: string,
+    @Body() body: SetSectorPersonStatusDto,
+    @Req() req: AuthRequest,
+  ) {
+    return this.write.setStatus(req.user.sub, sectorId, userId, body);
+  }
+
   @Delete(':userId')
   @HttpCode(204)
   @ApiOperation({ summary: 'Tira do setor pessoa sem acesso' })
   remove(
     @Param('sectorId') sectorId: string,
     @Param('userId') userId: string,
+    @Body() body: RemoveSectorPersonDto,
     @Req() req: AuthRequest,
   ) {
-    return this.write.remove(req.user.sub, sectorId, userId);
+    return this.write.remove(req.user.sub, sectorId, userId, body.reason);
   }
 }

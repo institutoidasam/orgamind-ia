@@ -31,6 +31,10 @@ function context(method: keyof InternalSectorsController, role?: string) {
   } as ExecutionContext;
 }
 
+const ACTOR = { user: { sub: 'admin-1' } } as Parameters<
+  InternalSectorsController['create']
+>[1];
+
 describe('InternalSectorsController', () => {
   it('exige ADMIN para criar e editar, e o guard real rejeita os demais papéis', () => {
     const guard = new RolesGuard(new Reflector());
@@ -66,15 +70,15 @@ describe('InternalSectorsController', () => {
     const update = { isActive: false };
 
     await controller.list({ page: 2, pageSize: 50, activeOnly: false });
-    await controller.create(create);
+    await controller.create(create, ACTOR);
     await controller.get('sector-1');
-    await controller.update('sector-1', update);
+    await controller.update('sector-1', update, ACTOR);
     await controller.members('sector-1', { eligible: true });
 
     expect(service.list).toHaveBeenCalledWith(2, 50, false);
-    expect(service.create).toHaveBeenCalledWith(create);
+    expect(service.create).toHaveBeenCalledWith(create, 'admin-1');
     expect(service.get).toHaveBeenCalledWith('sector-1');
-    expect(service.update).toHaveBeenCalledWith('sector-1', update);
+    expect(service.update).toHaveBeenCalledWith('sector-1', update, 'admin-1');
     expect(service.members).toHaveBeenCalledWith('sector-1', true);
   });
 });

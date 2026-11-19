@@ -105,6 +105,8 @@ function createPeople(
           name: p.name,
           isActive: p.isActive ?? true,
           sectorId,
+          // Destinatários do agendado: a autorização é o padrão deles (T1 nasce NAO_AUTORIZADO).
+          contactAuthorization: 'AUTORIZADO',
         },
       }),
     ),
@@ -449,7 +451,9 @@ describe('condições na hora — número de cada destinatário (D3/D7)', () => 
 });
 
 // Um agendado de uma pessoa com telefone, já na fila (QUEUED, com o canal); devolve o id do destinatário.
-async function seedQueuedRecipient(): Promise<string> {
+async function seedQueuedRecipient(
+  phoneE164 = '+5592991234567',
+): Promise<string> {
   const d = await seedScheduled({
     prisma,
     scheduledFor: DUE,
@@ -458,13 +462,35 @@ async function seedQueuedRecipient(): Promise<string> {
   const [recipientId] = d.recipientIds;
   await prisma.user.update({
     where: { id: d.userIds[0] },
-    data: { phoneE164: '+5592991234567' },
+    data: { phoneE164 },
   });
   await prisma.teamWhatsappRecipient.update({
     where: { id: recipientId },
     data: { status: 'QUEUED', channelId: d.channelId },
   });
   return recipientId;
+}
+
+// Processor real sobre o banco do teste; o `chat` é o dublê de cada cenário.
+async function runProcessor(
+  chat: Record<string, unknown>,
+  recipientId: string,
+): Promise<void> {
+  const proc = new TeamWhatsappSendProcessor(
+    prisma as never,
+    chat as never,
+    { isSuppressed: vi.fn().mockResolvedValue(false) } as never,
+    { del: vi.fn() } as never,
+  );
+  Object.assign(proc, {
+    repo,
+    liveState: { check: vi.fn().mockResolvedValue({ state: 'open' }) },
+  });
+  await proc.process({
+    data: { recipientId },
+    attemptsMade: 0,
+    opts: { attempts: 3 },
+  } as never);
 }
 
 // Roda o processor; o recibo READ chega enquanto o provedor ainda responde ao envio.
@@ -492,21 +518,7 @@ async function processWithReceiptRace(
       };
     }),
   };
-  const proc = new TeamWhatsappSendProcessor(
-    prisma as never,
-    chat as never,
-    { isSuppressed: vi.fn().mockResolvedValue(false) } as never,
-    { del: vi.fn() } as never,
-  );
-  Object.assign(proc, {
-    repo,
-    liveState: { check: vi.fn().mockResolvedValue({ state: 'open' }) },
-  });
-  await proc.process({
-    data: { recipientId },
-    attemptsMade: 0,
-    opts: { attempts: 3 },
-  } as never);
+  await runProcessor(chat, recipientId);
 }
 
 describe('processor × recibo que chega antes do SENT', () => {
@@ -532,6 +544,37 @@ describe('processor × recibo que chega antes do SENT', () => {
       readAt: read,
       attempts: 1,
       messageId: 'msg-race',
+    });
+  });
+});
+
+describe('processor × autorização retirada depois do agendamento', () => {
+  it('NAO_AUTORIZADO na hora do envio: SKIPPED/NOT_AUTHORIZED, sem Message nem envio', async () => {
+    const recipientId = await seedQueuedRecipient('+5592991234568');
+    const { userId } = await prisma.teamWhatsappRecipient.findUniqueOrThrow({
+      where: { id: recipientId },
+      select: { userId: true },
+    });
+    await prisma.user.update({
+      where: { id: userId as string },
+      data: {
+        contactAuthorization: 'NAO_AUTORIZADO',
+        authorizationSource: null,
+      },
+    });
+    const chat = { prepareTeamMessage: vi.fn(), sendTeamMessage: vi.fn() };
+    await runProcessor(chat, recipientId);
+    expect(chat.prepareTeamMessage).not.toHaveBeenCalled();
+    expect(chat.sendTeamMessage).not.toHaveBeenCalled();
+    expect(
+      await prisma.teamWhatsappRecipient.findUniqueOrThrow({
+        where: { id: recipientId },
+        select: { status: true, skipReason: true, messageId: true },
+      }),
+    ).toEqual({
+      status: 'SKIPPED',
+      skipReason: 'NOT_AUTHORIZED',
+      messageId: null,
     });
   });
 });

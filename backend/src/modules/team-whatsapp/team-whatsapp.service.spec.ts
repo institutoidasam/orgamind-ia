@@ -55,6 +55,64 @@ async function expectRejected(
 const expectForbidden = (input: CreateTeamDispatchInput) =>
   expectRejected(input, 'team_whatsapp.forbidden', 403);
 
+const notAuthorized = { contactAuthorization: 'NAO_AUTORIZADO' } as const;
+const legacy = { authorizationSource: 'CADASTRO_ANTERIOR' } as const;
+
+describe('TeamWhatsappService.dispatch — autorização no envio, setor', () => {
+  beforeEach(() => h.repo.findActor.mockResolvedValue(MANAGER));
+
+  it('setor: NAO_AUTORIZADO sai como NOT_AUTHORIZED; sem telefone e suprimido vêm antes; CADASTRO_ANTERIOR segue', async () => {
+    givenSector(h, [
+      onDuty({ id: 'u1', name: 'Ana', ...legacy }),
+      onDuty({ id: 'u2', name: 'Bia', ...notAuthorized }),
+      onDuty({ id: 'u3', name: 'Caio', phoneE164: null, ...notAuthorized }),
+      onDuty({
+        id: 'u4',
+        name: 'Duda',
+        phoneE164: SUPPRESSED,
+        ...notAuthorized,
+      }),
+    ]);
+    await expect(h.service.dispatch('m', toSector())).resolves.toMatchObject({
+      queued: 1,
+      skipped: [
+        { userId: 'u2', name: 'Bia', reason: 'NOT_AUTHORIZED' },
+        { userId: 'u3', name: 'Caio', reason: 'NO_PHONE' },
+        { userId: 'u4', name: 'Duda', reason: 'SUPPRESSED' },
+      ],
+    });
+    const { recipients } = h.repo.createDispatch.mock.calls[0][0];
+    expect(recipients.map((r) => [r.userId, r.status])).toEqual([
+      ['u1', 'QUEUED'],
+      ['u2', 'SKIPPED'],
+      ['u3', 'SKIPPED'],
+      ['u4', 'SKIPPED'],
+    ]);
+  });
+});
+
+describe('TeamWhatsappService.dispatch — autorização no envio, pessoas e usuário único', () => {
+  beforeEach(() => h.repo.findActor.mockResolvedValue(MANAGER));
+
+  it('pessoas escolhidas: quem está NAO_AUTORIZADO não entra mesmo escolhida', async () => {
+    givenSector(h, [
+      onDuty({ id: 'u1', name: 'Ana' }),
+      onDuty({ id: 'u2', name: 'Bia', ...notAuthorized }),
+    ]);
+    const input = toSector();
+    if (input.target.type === 'sector') input.target.userIds = ['u1', 'u2'];
+    await expect(h.service.dispatch('m', input)).resolves.toMatchObject({
+      queued: 1,
+      skipped: [{ userId: 'u2', name: 'Bia', reason: 'NOT_AUTHORIZED' }],
+    });
+  });
+
+  it('usuário único NAO_AUTORIZADO → 422 no_recipients e nada criado', async () => {
+    h.repo.findTargetUser.mockResolvedValue(member(notAuthorized));
+    await expectRejected(toUser(), 'team_whatsapp.no_recipients', 422);
+  });
+});
+
 describe('TeamWhatsappService.dispatch — remetente fora da política (403)', () => {
   it('remetente inexistente recebe 403', async () => {
     h.repo.findActor.mockResolvedValue(null);

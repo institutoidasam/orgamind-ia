@@ -5,12 +5,14 @@ import type {
   SectorPeopleCandidate,
   SectorPerson,
 } from '../../schemas/contracts/sector-people.schema';
+import { escapeLike } from '../../shared/prisma/escape-like';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { buildContactListWhere } from '../contacts/contacts.repository';
 import {
   SECTOR_CHANNEL_SELECT,
   type SectorChannelRow,
 } from '../team-whatsapp/sector-channel';
+import { toContactAuthorization } from '../users/person-record';
 import type {
   PeopleActor,
   PeoplePerson,
@@ -31,6 +33,14 @@ export const sectorPersonSelect = {
   jobTitle: true,
   level: { select: { id: true, name: true, isActive: true } },
   workShift: { select: { id: true, name: true } },
+  // Ficha (C6): matrícula, situação e autorização de contato (sem a chave nem quem registrou).
+  registration: true,
+  isActive: true,
+  contactAuthorization: true,
+  authorizationSource: true,
+  authorizationNote: true,
+  authorizationDate: true,
+  authorizationRecordedAt: true,
 } satisfies Prisma.UserSelect;
 
 export type SectorPersonRow = Prisma.UserGetPayload<{
@@ -69,12 +79,15 @@ function sortByName<T>(items: T[], nameOf: (item: T) => string): T[] {
   return items.sort((a, b) => nameOf(a).localeCompare(nameOf(b), 'pt-BR'));
 }
 
+/** Nome, telefone e matrícula (A1): a matrícula casa pela chave em minúsculas. */
 function nameOrPhoneWhere(q: string): Prisma.UserWhereInput {
   if (!q) return {};
+  const text = escapeLike(q);
   return {
     OR: [
-      { name: { contains: q, mode: 'insensitive' } },
-      { phoneE164: { contains: q } },
+      { name: { contains: text, mode: 'insensitive' } },
+      { phoneE164: { contains: text } },
+      { registrationKey: { contains: text.toLowerCase() } },
     ],
   };
 }
@@ -106,6 +119,9 @@ export function toSectorPerson(
     jobTitle: row.jobTitle,
     shift: row.workShift,
     editable: row.hasAccess ? 'limited' : 'full',
+    registration: row.registration,
+    isActive: row.isActive,
+    contactAuthorization: toContactAuthorization(row),
   };
 }
 
@@ -209,10 +225,13 @@ export class SectorPeopleRepository {
     return count > 0;
   }
 
-  /** Ativos com `sectorId` = este, nome asc pt-BR. */
-  async listPeople(sectorId: string): Promise<SectorPersonRow[]> {
+  /** Com `sectorId` = este, nome asc pt-BR; os inativos só entram com `includeInactive` (A3). */
+  async listPeople(
+    sectorId: string,
+    includeInactive: boolean,
+  ): Promise<SectorPersonRow[]> {
     const rows = await this.prisma.user.findMany({
-      where: { sectorId, isActive: true },
+      where: { sectorId, ...(includeInactive ? {} : { isActive: true }) },
       select: sectorPersonSelect,
     });
     return sortByName<SectorPersonRow>(rows, displayName);
@@ -231,6 +250,7 @@ export class SectorPeopleRepository {
         name: true,
         email: true,
         hasAccess: true,
+        registration: true,
         sector: { select: { id: true, name: true } },
       },
     });

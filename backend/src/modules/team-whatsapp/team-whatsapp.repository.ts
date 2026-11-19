@@ -35,6 +35,8 @@ import {
 /**
  * Alvo/membro: o `sector` alimenta `canSendToUser`; o telefone fica só na memória do POST.
  * `workShift.name` vira o `shiftName` gravado no destinatário (turno do cadastro).
+ * `contactAuthorization` decide `NOT_AUTHORIZED` (C8); a origem só alimenta o
+ * aviso `authorizationUnverified` do roster.
  */
 export const teamMemberSelect = {
   id: true,
@@ -47,6 +49,8 @@ export const teamMemberSelect = {
   contact: { select: { phoneE164: true } },
   shiftId: true,
   workShift: { select: { name: true } },
+  contactAuthorization: true,
+  authorizationSource: true,
 } satisfies Prisma.UserSelect;
 export type TeamMember = Prisma.UserGetPayload<{
   select: typeof teamMemberSelect;

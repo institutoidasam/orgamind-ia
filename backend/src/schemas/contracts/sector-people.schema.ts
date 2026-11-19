@@ -1,4 +1,8 @@
 import { z } from 'zod';
+import {
+  contactAuthorizationInputSchema,
+  contactAuthorizationSchema,
+} from './contact-authorization.schema';
 import { levelRefSchema } from './level.schema';
 import { sectorChannelSchema } from './sector.schema';
 
@@ -26,6 +30,10 @@ export const sectorPersonSchema = z.object({
   jobTitle: z.string().nullable(),
   shift: idNameSchema.nullable(),
   editable: z.enum(['full', 'limited']),
+  // C6: ficha da pessoa (matrícula, situação e autorização de contato).
+  registration: z.string().nullable(),
+  isActive: z.boolean(),
+  contactAuthorization: contactAuthorizationSchema,
 });
 
 export const sectorPeopleResponseSchema = z.object({
@@ -40,12 +48,20 @@ export const sectorPeopleResponseSchema = z.object({
     // C1: número efetivo da área (D2); null = "Sem número".
     channel: sectorChannelSchema.nullable(),
   }),
-  // Ativos com `sectorId` = este, nome asc pt-BR.
+  // Com `sectorId` = este, nome asc pt-BR; só ativos, salvo `includeInactive`.
   people: sectorPersonSchema.array(),
   options: z.object({
     levels: levelRefSchema.array(), // ativos, por sortOrder
     shifts: idNameSchema.array(), // ativos, por sortOrder
   }),
+});
+
+// A3: a lista esconde inativos por padrão; `?includeInactive=true` os traz.
+export const sectorPeopleListQuerySchema = z.object({
+  includeInactive: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((value) => value === 'true'),
 });
 
 export const sectorPeopleSearchQuerySchema = z.object({
@@ -60,6 +76,8 @@ export const sectorPeopleCandidatesResponseSchema = z.object({
       name: z.string(),
       hasAccess: z.boolean(),
       sector: idNameSchema.nullable(),
+      // A1: matrícula como digitada; a busca por ela usa a chave em minúsculas.
+      registration: z.string().nullable(),
     })
     .array(),
 });
@@ -91,6 +109,10 @@ const idListSchema = idSchema.array().min(1).max(100);
 const personNameSchema = z.string().trim().min(1).max(120);
 const personPhoneSchema = z.string().trim().min(1).max(40);
 const jobTitleSchema = z.string().trim().max(80).nullable();
+// A1: vazio ou null limpa a matrícula (o `UsersService` normaliza).
+const registrationSchema = z.string().trim().max(30).nullable();
+// A4/D14: motivo de 3 a 200 caracteres; quem cobra é o serviço (`requireReason`).
+const reasonSchema = z.string().trim().max(200);
 
 // Q3: turno obrigatório (ativo, conferido no serviço) ao adicionar.
 export const createSectorPersonBodySchema = z
@@ -100,6 +122,8 @@ export const createSectorPersonBodySchema = z
     levelId: idSchema.nullable().optional(),
     jobTitle: jobTitleSchema.optional(),
     shiftId: idSchema,
+    registration: registrationSchema.optional(),
+    contactAuthorization: contactAuthorizationInputSchema.optional(),
   })
   .strict();
 
@@ -109,14 +133,23 @@ export const addFromContactsBodySchema = z
     contactIds: idListSchema,
     levelId: idSchema.nullable().optional(),
     shiftId: idSchema,
+    // A2: uma escolha para o lote; nada vem de `Contact.sourceOrigin`.
+    contactAuthorization: contactAuthorizationInputSchema.optional(),
   })
   .strict();
 
+// D14: o motivo de mover é opcional e, quando vem, vai para a trilha.
 export const movePeopleBodySchema = z
-  .object({ userIds: idListSchema })
+  .object({ userIds: idListSchema, reason: reasonSchema.optional() })
   .strict();
 
-// Pessoa com acesso: só `levelId`, `jobTitle` e `shiftId` (P1, no serviço).
+// D14: corpo opcional do DELETE; mesmo motivo opcional de mover.
+export const removeSectorPersonBodySchema = z
+  .object({ reason: reasonSchema.optional() })
+  .strict();
+
+// Pessoa com acesso: só `levelId`, `jobTitle` e `shiftId` (P1/D16, no serviço).
+// O motivo (A4) é cobrado pelo serviço e não conta como campo editado.
 export const updateSectorPersonBodySchema = z
   .object({
     name: personNameSchema.optional(),
@@ -124,11 +157,23 @@ export const updateSectorPersonBodySchema = z
     levelId: idSchema.nullable().optional(),
     jobTitle: jobTitleSchema.optional(),
     shiftId: idSchema.optional(),
+    registration: registrationSchema.optional(),
+    contactAuthorization: contactAuthorizationInputSchema.optional(),
+    reason: reasonSchema.optional(),
   })
   .strict()
-  .refine((d) => Object.values(d).some((value) => value !== undefined), {
-    message: 'Informe ao menos um campo',
-  });
+  .refine(
+    (d) =>
+      Object.entries(d).some(
+        ([field, value]) => field !== 'reason' && value !== undefined,
+      ),
+    { message: 'Informe ao menos um campo' },
+  );
+
+// D6/A3: inativar e reativar pelo setor. O motivo (3 a 200) é cobrado pelo serviço.
+export const sectorPersonStatusBodySchema = z
+  .object({ isActive: z.boolean(), reason: reasonSchema.optional() })
+  .strict();
 
 export const sectorPeopleFailureReasonSchema = z.enum([
   'invalid_phone',
@@ -151,6 +196,10 @@ export const movePeopleResponseSchema = z.object({
 
 export type SectorPerson = z.infer<typeof sectorPersonSchema>;
 export type SectorPeopleResponse = z.infer<typeof sectorPeopleResponseSchema>;
+export type SectorPeopleListQuery = z.infer<typeof sectorPeopleListQuerySchema>;
+export type SectorPersonStatusInput = z.infer<
+  typeof sectorPersonStatusBodySchema
+>;
 export type SectorPeopleSearchQuery = z.infer<
   typeof sectorPeopleSearchQuerySchema
 >;
@@ -170,6 +219,9 @@ export type CreateSectorPersonInput = z.infer<
 export type AddFromContactsInput = z.infer<typeof addFromContactsBodySchema>;
 export type UpdateSectorPersonInput = z.infer<
   typeof updateSectorPersonBodySchema
+>;
+export type RemoveSectorPersonInput = z.infer<
+  typeof removeSectorPersonBodySchema
 >;
 export type SectorPeopleFailureReason = z.infer<
   typeof sectorPeopleFailureReasonSchema

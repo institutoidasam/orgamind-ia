@@ -16,7 +16,8 @@ import { ConsentAction, ConsentSource } from '@prisma/client';
 import { ZernioCloudAdapter } from '../whatsapp-providers/adapters/zernio-cloud.adapter';
 import { TemplatesService } from '../templates/templates.service';
 
-const TRACK_OCCURRED_AT = new Date('2026-11-10T12:30:00Z');
+// Data relativa ao relógio: precisa ficar dentro da janela de replay do serviço.
+const TRACK_OCCURRED_AT = new Date();
 const TRACK_MESSAGE = {
   id: 'm1',
   status: 'QUEUED',

@@ -59,6 +59,13 @@ function row(over: Partial<SectorPersonRow> = {}): SectorPersonRow {
     jobTitle: null,
     level: null,
     workShift: { id: 'shift_day', name: 'Dia' },
+    registration: null,
+    isActive: true,
+    contactAuthorization: 'NAO_AUTORIZADO',
+    authorizationSource: null,
+    authorizationNote: null,
+    authorizationDate: null,
+    authorizationRecordedAt: null,
     ...over,
   };
 }
@@ -108,13 +115,72 @@ function harness(people: SectorPersonRow[] = [row()]) {
   return { service, repo, levels };
 }
 
+describe('SectorPeopleService — lista com inativos (A3)', () => {
+  it('com includeInactive o repositório recebe a flag e a resposta traz o inativo com isActive false', async () => {
+    const inactive = row({ id: 'user_olga', name: 'Olga', isActive: false });
+    const { service, repo } = harness([row(), inactive]);
+
+    const result = await service.list(MANAGER.id, OPERATION.id, true);
+
+    expect(repo.listPeople).toHaveBeenCalledWith(OPERATION.id, true);
+    expect(result.people.map((p) => [p.id, p.isActive])).toEqual([
+      ['user_ana', true],
+      ['user_olga', false],
+    ]);
+  });
+});
+
+describe('SectorPeopleService — ficha na resposta', () => {
+  it('traz matrícula, situação e autorização (C6) e mantém o telefone escondido de quem tem login', async () => {
+    const person = row({
+      hasAccess: true,
+      role: 'OPERATOR',
+      registration: 'M-100',
+      contactAuthorization: 'AUTORIZADO',
+      authorizationSource: 'OUTRO',
+      authorizationNote: 'Combinado por e-mail',
+      authorizationDate: new Date('2026-11-10T00:00:00.000Z'),
+      authorizationRecordedAt: new Date('2026-11-10T12:00:00.000Z'),
+    });
+    const { service } = harness([person]);
+
+    const [seen] = (await service.list(MANAGER.id, OPERATION.id)).people;
+
+    expect(seen).toMatchObject({
+      phoneE164: null,
+      registration: 'M-100',
+      isActive: true,
+      contactAuthorization: {
+        status: 'AUTORIZADO',
+        source: 'OUTRO',
+        note: 'Combinado por e-mail',
+        date: '2026-11-10',
+        recordedAt: '2026-11-10T12:00:00.000Z',
+      },
+    });
+  });
+
+  it('pessoa sem registro devolve matrícula nula e NAO_AUTORIZADO', async () => {
+    const { service } = harness([row()]);
+
+    const [seen] = (await service.list(ADMIN.id, OPERATION.id)).people;
+
+    expect(seen.registration).toBeNull();
+    expect(seen.contactAuthorization).toMatchObject({
+      status: 'NAO_AUTORIZADO',
+      source: null,
+      date: null,
+    });
+  });
+});
+
 describe('SectorPeopleService — leitura', () => {
   it('gestor de Operação lista Operação com options de níveis e turnos ativos (sem o inativo)', async () => {
     const { service, repo, levels } = harness();
 
     const result = await service.list(MANAGER.id, OPERATION.id);
 
-    expect(repo.listPeople).toHaveBeenCalledWith(OPERATION.id);
+    expect(repo.listPeople).toHaveBeenCalledWith(OPERATION.id, false);
     expect(levels.listActive).toHaveBeenCalled();
     expect(result.sector).toEqual({
       id: OPERATION.id,

@@ -54,11 +54,15 @@ export class SectorPeopleService {
     return { actor, sector };
   }
 
-  async list(actorId: string, sectorId: string): Promise<SectorPeopleResponse> {
+  async list(
+    actorId: string,
+    sectorId: string,
+    includeInactive = false,
+  ): Promise<SectorPeopleResponse> {
     const { actor, sector } = await this.requireManageable(actorId, sectorId);
     const viewer = { isAdmin: isSectorAdmin(actor) };
     const [rows, levels, shifts] = await Promise.all([
-      this.repo.listPeople(sector.id),
+      this.repo.listPeople(sector.id, includeInactive),
       this.levels.listActive(),
       this.shifts.listAll(),
     ]);

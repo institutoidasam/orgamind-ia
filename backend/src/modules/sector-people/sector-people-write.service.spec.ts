@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AuditService } from '../../shared/audit/audit.service';
+import { canEditContactAuthorization } from '../../shared/authz/person-actions.policy';
 import {
   ConflictError,
+  ForbiddenError,
   ValidationError,
 } from '../../shared/errors/domain.error';
 import type { LevelsRepository } from '../levels/levels.repository';
@@ -16,6 +18,18 @@ import type {
 import { SectorPeopleService } from './sector-people.service';
 import { SectorPeopleWriteService } from './sector-people-write.service';
 
+// Spy sobre a função real: a guarda do `update` precisa ser consultada de fato (D16).
+vi.mock('../../shared/authz/person-actions.policy', async (importOriginal) => {
+  const original =
+    await importOriginal<
+      typeof import('../../shared/authz/person-actions.policy')
+    >();
+  return {
+    ...original,
+    canEditContactAuthorization: vi.fn(original.canEditContactAuthorization),
+  };
+});
+
 const ADMIN: PeopleActor = {
   id: 'user_admin',
   role: 'ADMIN',
@@ -25,6 +39,13 @@ const ADMIN: PeopleActor = {
 const MANAGER: PeopleActor = {
   id: 'user_manager',
   role: 'SUPERVISOR',
+  isActive: true,
+  hasAccess: true,
+};
+// OPERATOR que gerencia um setor: passa o pré-gate, mas não inativa ninguém.
+const OPERATOR_MANAGER: PeopleActor = {
+  id: 'user_op_manager',
+  role: 'OPERATOR',
   isActive: true,
   hasAccess: true,
 };
@@ -39,7 +60,8 @@ const sector = (id: string, managerId: string | null) => ({
 const OPERATION = sector('sector_operation', MANAGER.id);
 const IT = sector('sector_it', 'user_other');
 const HR = sector('sector_hr', null);
-const SECTORS = [OPERATION, IT, HR];
+const FIELD = sector('sector_field', OPERATOR_MANAGER.id);
+const SECTORS = [OPERATION, IT, HR, FIELD];
 
 const person = (
   id: string,
@@ -58,6 +80,8 @@ const PEOPLE = [
   person('user_nina'),
   person('user_tiago', { sectorId: IT.id, hasAccess: true }),
   person('user_ivo', { isActive: false }),
+  person('user_olga', { sectorId: OPERATION.id, isActive: false }),
+  person('user_ines', { sectorId: FIELD.id }),
 ];
 
 const contact = (
@@ -101,12 +125,21 @@ function personRow(id: string): SectorPersonRow {
     jobTitle: null,
     level: null,
     workShift: null,
+    registration: null,
+    isActive: true,
+    contactAuthorization: 'NAO_AUTORIZADO',
+    authorizationSource: null,
+    authorizationNote: null,
+    authorizationDate: null,
+    authorizationRecordedAt: null,
   };
 }
 
 function harness() {
   const repo = {
-    findActor: vi.fn((id: string) => find([ADMIN, MANAGER], id)),
+    findActor: vi.fn((id: string) =>
+      find([ADMIN, MANAGER, OPERATOR_MANAGER], id),
+    ),
     findSector: vi.fn((id: string) => find(SECTORS, id)),
     findPerson: vi.fn((id: string) => find(PEOPLE, id)),
     findPeople: vi.fn((ids: string[]) =>
@@ -158,6 +191,296 @@ const NEW_PERSON = {
 };
 const BATCH = { levelId: 'level_employee', shiftId: 'shift_night' };
 
+const GRANTED = {
+  status: 'AUTORIZADO',
+  source: 'TERMO_ASSINADO',
+  date: '2026-11-10',
+} as const;
+const MOVED_META = {
+  action: 'sector_people.person_moved',
+  category: 'ASSIGNMENT',
+};
+
+const STATUS_FORBIDDEN = {
+  status: 403,
+  code: 'sector_people.status_forbidden',
+};
+const OFF = { isActive: false, reason: 'Desligamento' };
+
+/** `setStatus` com o `harness` de sempre; `set(ator, setor, pessoa, corpo?)`. */
+function statusHarness() {
+  const { service, users } = harness();
+  const set = (
+    actor: PeopleActor,
+    inSector: { id: string },
+    userId: string,
+    body: { isActive: boolean; reason?: string } = OFF,
+  ) => service.setStatus(actor.id, inSector.id, userId, body);
+  return { users, set };
+}
+
+describe('SectorPeopleWriteService — status no setor, quem decide', () => {
+  it('SUPERVISOR gestor inativa pessoa sem login do setor; updateUser recebe { isActive:false } e o motivo', async () => {
+    const { users, set } = statusHarness();
+
+    const result = await set(MANAGER, OPERATION, 'user_ana');
+
+    expect(users.updateUser).toHaveBeenCalledWith(
+      'user_ana',
+      { isActive: false },
+      MANAGER.id,
+      { reason: 'Desligamento' },
+    );
+    expect(result).toMatchObject({ id: 'user_ana' });
+  });
+
+  it('pessoa com login: SUPERVISOR gestor → 403 status_forbidden; ADMIN inativa', async () => {
+    const { users, set } = statusHarness();
+
+    await expect(set(MANAGER, OPERATION, 'user_bruno')).rejects.toMatchObject(
+      STATUS_FORBIDDEN,
+    );
+    expect(users.updateUser).not.toHaveBeenCalled();
+    await set(ADMIN, OPERATION, 'user_bruno');
+    expect(users.updateUser).toHaveBeenCalledTimes(1);
+  });
+
+  it('OPERATOR gestor → 403 status_forbidden, mesmo em pessoa sem login do setor', async () => {
+    const { users, set } = statusHarness();
+
+    await expect(
+      set(OPERATOR_MANAGER, FIELD, 'user_ines'),
+    ).rejects.toMatchObject(STATUS_FORBIDDEN);
+    expect(users.updateUser).not.toHaveBeenCalled();
+  });
+});
+
+describe('SectorPeopleWriteService — status no setor, alcance e motivo', () => {
+  it.each([ADMIN, MANAGER])(
+    'pessoa de outro setor → 403 sector_people.forbidden (%#)',
+    async (actor) => {
+      const { users, set } = statusHarness();
+
+      await expect(set(actor, OPERATION, 'user_tiago')).rejects.toMatchObject(
+        FORBIDDEN,
+      );
+      expect(users.updateUser).not.toHaveBeenCalled();
+    },
+  );
+
+  it('sem reason → 422 user.reason_required; pessoa inexistente → 404', async () => {
+    const { users, set } = statusHarness();
+
+    await expect(
+      set(MANAGER, OPERATION, 'user_ana', { isActive: false }),
+    ).rejects.toMatchObject({ status: 422, code: 'user.reason_required' });
+    await expect(set(MANAGER, OPERATION, 'user_x')).rejects.toMatchObject({
+      status: 404,
+      code: 'sector_people.person_not_found',
+    });
+    expect(users.updateUser).not.toHaveBeenCalled();
+  });
+
+  it('reativar pessoa inativa funciona (não exige ativa)', async () => {
+    const { users, set } = statusHarness();
+    const body = { isActive: true, reason: 'Voltou da licença' };
+
+    await set(MANAGER, OPERATION, 'user_olga', body);
+
+    expect(users.updateUser).toHaveBeenCalledWith(
+      'user_olga',
+      { isActive: true },
+      MANAGER.id,
+      { reason: 'Voltou da licença' },
+    );
+  });
+});
+
+describe('SectorPeopleWriteService — status no setor, guardas do updateUser', () => {
+  it.each([
+    ['user.cannot_self_deactivate', /próprio cadastro/],
+    ['user.last_admin', /último administrador/],
+  ])(
+    'guarda %s chega com o mesmo código e texto em pt-BR',
+    async (code, text) => {
+      const { users, set } = statusHarness();
+      users.updateUser.mockRejectedValue(new ForbiddenError('Cannot', code));
+      const message: unknown = expect.stringMatching(text);
+
+      await expect(set(ADMIN, OPERATION, 'user_bruno')).rejects.toMatchObject({
+        status: 403,
+        code,
+        message,
+      });
+    },
+  );
+});
+
+describe('SectorPeopleWriteService — ficha no setor, repasse na criação', () => {
+  it('create e from-contacts repassam contactAuthorization; from-contacts usa a mesma para o lote', async () => {
+    const { service, users } = harness();
+    const created = { ...NEW_PERSON, registration: 'M-100' };
+
+    await service.create(MANAGER.id, OPERATION.id, {
+      ...created,
+      contactAuthorization: GRANTED,
+    });
+    await service.addFromContacts(MANAGER.id, OPERATION.id, {
+      contactIds: ['contact_0001', 'contact_0002'],
+      shiftId: 'shift_night',
+      contactAuthorization: GRANTED,
+    });
+
+    const withGranted: unknown = expect.objectContaining({
+      contactAuthorization: GRANTED,
+    });
+    expect(users.createPersonWithoutAccess).toHaveBeenNthCalledWith(
+      1,
+      MANAGER.id,
+      expect.objectContaining({
+        registration: 'M-100',
+        contactAuthorization: GRANTED,
+      }),
+    );
+    expect(users.createPersonWithoutAccess).toHaveBeenNthCalledWith(
+      2,
+      MANAGER.id,
+      withGranted,
+    );
+    expect(users.createPersonWithoutAccess).toHaveBeenNthCalledWith(
+      3,
+      MANAGER.id,
+      withGranted,
+    );
+  });
+});
+
+describe('SectorPeopleWriteService — ficha no setor, update com motivo', () => {
+  it('update sem reason → 422 user.reason_required; com reason → updateUser recebe { reason }', async () => {
+    const { service, users } = harness();
+    const patch = { jobTitle: 'Auxiliar' };
+
+    await expect(
+      service.update(MANAGER.id, OPERATION.id, 'user_ana', patch),
+    ).rejects.toMatchObject({ status: 422, code: 'user.reason_required' });
+    expect(users.updateUser).not.toHaveBeenCalled();
+
+    await service.update(MANAGER.id, OPERATION.id, 'user_ana', {
+      ...patch,
+      reason: 'Correção de função',
+    });
+
+    expect(users.updateUser).toHaveBeenCalledWith(
+      'user_ana',
+      patch,
+      MANAGER.id,
+      { reason: 'Correção de função' },
+    );
+  });
+
+  it.each([
+    { actor: MANAGER, patch: { contactAuthorization: GRANTED } },
+    { actor: ADMIN, patch: { contactAuthorization: GRANTED } },
+    { actor: ADMIN, patch: { registration: 'M-200' } },
+  ])(
+    'update de autorização ou matrícula de pessoa com acesso → 403 (limited), inclusive para ADMIN',
+    async ({ actor, patch }) => {
+      const { service, users } = harness();
+
+      await expect(
+        service.update(actor.id, OPERATION.id, 'user_bruno', {
+          ...patch,
+          reason: 'Termo assinado',
+        }),
+      ).rejects.toMatchObject(FORBIDDEN);
+      expect(users.updateUser).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe('SectorPeopleWriteService — ficha no setor, guarda da autorização', () => {
+  it('update de contactAuthorization de pessoa sem acesso chama canEditContactAuthorization com o PeopleActor e passa', async () => {
+    const { service, users } = harness();
+    vi.mocked(canEditContactAuthorization).mockClear();
+
+    await service.update(MANAGER.id, OPERATION.id, 'user_ana', {
+      registration: null,
+      contactAuthorization: GRANTED,
+      reason: 'Termo assinado',
+    });
+
+    expect(canEditContactAuthorization).toHaveBeenCalledWith(
+      expect.objectContaining({ id: MANAGER.id, role: 'SUPERVISOR' }),
+      { hasAccess: false },
+    );
+    expect(users.updateUser).toHaveBeenCalledWith(
+      'user_ana',
+      { registration: null, contactAuthorization: GRANTED },
+      MANAGER.id,
+      { reason: 'Termo assinado' },
+    );
+  });
+
+  it('update: a guarda de autorização recusa → 403 sem gravar', async () => {
+    const { service, users } = harness();
+    vi.mocked(canEditContactAuthorization).mockReturnValueOnce(false);
+
+    await expect(
+      service.update(MANAGER.id, OPERATION.id, 'user_ana', {
+        contactAuthorization: GRANTED,
+        reason: 'Termo assinado',
+      }),
+    ).rejects.toMatchObject(FORBIDDEN);
+    expect(users.updateUser).not.toHaveBeenCalled();
+  });
+});
+
+describe('SectorPeopleWriteService — ficha no setor, mover e remover', () => {
+  it('move repassa action sector_people.person_moved, ASSIGNMENT e reason opcional', async () => {
+    const { service, users } = harness();
+
+    await service.move(MANAGER.id, OPERATION.id, ['user_nina'], 'Reforço');
+    await service.move(MANAGER.id, OPERATION.id, ['user_nina']);
+    await expect(
+      service.move(MANAGER.id, OPERATION.id, ['user_nina'], 'ab'),
+    ).rejects.toMatchObject({ status: 422, code: 'user.reason_required' });
+
+    const sector = { sectorId: OPERATION.id };
+    expect(users.updateUser).toHaveBeenCalledTimes(2);
+    expect(users.updateUser).toHaveBeenNthCalledWith(
+      1,
+      'user_nina',
+      sector,
+      MANAGER.id,
+      { reason: 'Reforço', ...MOVED_META },
+    );
+    expect(users.updateUser).toHaveBeenNthCalledWith(
+      2,
+      'user_nina',
+      sector,
+      MANAGER.id,
+      { reason: null, ...MOVED_META },
+    );
+  });
+
+  it('remove repassa sector_people.person_removed e reason do corpo', async () => {
+    const { service, users } = harness();
+
+    await service.remove(MANAGER.id, OPERATION.id, 'user_ana', 'Desligada');
+
+    expect(users.updateUser).toHaveBeenCalledWith(
+      'user_ana',
+      { sectorId: null },
+      MANAGER.id,
+      {
+        reason: 'Desligada',
+        action: 'sector_people.person_removed',
+        category: 'ASSIGNMENT',
+      },
+    );
+  });
+});
+
 describe('SectorPeopleWriteService — nova pessoa', () => {
   it('gestor de Operação cria sem acesso em Operação com nível e turno', async () => {
     const { service, users, audit } = harness();
@@ -184,6 +507,7 @@ describe('SectorPeopleWriteService — nova pessoa', () => {
         created: 1,
         failed: 0,
       },
+      { category: null },
     );
   });
 
@@ -237,6 +561,7 @@ describe('SectorPeopleWriteService — dos contatos, criação', () => {
         created: 3,
         failed: 0,
       },
+      { category: null },
     );
   });
 });
@@ -298,6 +623,7 @@ describe('SectorPeopleWriteService — dos contatos, falha por item', () => {
       'Sector',
       OPERATION.id,
       expect.objectContaining({ created: 2, failed: 1 }),
+      { category: null },
     );
   });
 
@@ -424,6 +750,7 @@ describe('SectorPeopleWriteService — mover', () => {
       'user_nina',
       { sectorId: OPERATION.id },
       MANAGER.id,
+      { reason: null, ...MOVED_META },
     );
     expect(result.moved.map((p) => p.id)).toEqual(['user_nina']);
     expect(audit.log).toHaveBeenCalledWith(
@@ -431,6 +758,7 @@ describe('SectorPeopleWriteService — mover', () => {
       'Sector',
       OPERATION.id,
       { actorId: MANAGER.id, sectorId: OPERATION.id, count: 1 },
+      { category: null },
     );
   });
 
@@ -452,6 +780,7 @@ describe('SectorPeopleWriteService — mover', () => {
       'user_tiago',
       { sectorId: HR.id },
       ADMIN.id,
+      { reason: null, ...MOVED_META },
     );
     expect(result.moved[0]).toMatchObject({
       id: 'user_tiago',
@@ -495,15 +824,14 @@ describe('SectorPeopleWriteService — editar', () => {
       MANAGER.id,
       OPERATION.id,
       'user_bruno',
-      {
-        levelId: 'level_employee',
-      },
+      { levelId: 'level_employee', reason: 'Nível definido' },
     );
 
     expect(users.updateUser).toHaveBeenCalledWith(
       'user_bruno',
       { levelId: 'level_employee' },
       MANAGER.id,
+      { reason: 'Nível definido' },
     );
     expect(result).toMatchObject({
       id: 'user_bruno',
@@ -536,7 +864,12 @@ describe('SectorPeopleWriteService — editar', () => {
 describe('SectorPeopleWriteService — editar, campos fora do contrato', () => {
   it('campo fora do contrato no patch não chega ao UsersService', async () => {
     const { service, users } = harness();
-    const patch = { jobTitle: 'Auxiliar', sectorId: IT.id, role: 'ADMIN' };
+    const patch = {
+      jobTitle: 'Auxiliar',
+      sectorId: IT.id,
+      role: 'ADMIN',
+      reason: 'Ajuste de função',
+    };
 
     await service.update(MANAGER.id, OPERATION.id, 'user_ana', patch);
 
@@ -544,6 +877,7 @@ describe('SectorPeopleWriteService — editar, campos fora do contrato', () => {
       'user_ana',
       { jobTitle: 'Auxiliar' },
       MANAGER.id,
+      { reason: 'Ajuste de função' },
     );
   });
 });
@@ -558,12 +892,18 @@ describe('SectorPeopleWriteService — tirar do setor', () => {
       'user_ana',
       { sectorId: null },
       MANAGER.id,
+      {
+        reason: null,
+        action: 'sector_people.person_removed',
+        category: 'ASSIGNMENT',
+      },
     );
     expect(audit.log).toHaveBeenCalledWith(
       'sector_people.removed',
       'Sector',
       OPERATION.id,
       { actorId: MANAGER.id, sectorId: OPERATION.id, userId: 'user_ana' },
+      { category: null },
     );
   });
 

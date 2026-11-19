@@ -26,7 +26,8 @@ import { StaffScheduleRepository } from './staff-schedule.repository';
  * rotas: ator (403) → pessoa (404) → setor principal da pessoa (403) → turnos
  * (422) → destino de "Outro setor" (422 inexistente/inativo, 403 fora do
  * alcance). Nada é gravado antes de todas passarem. Auditoria só com ids e
- * contagem (GC10), nunca nome nem nota.
+ * contagem (GC10), nunca nome nem nota; `subjectUserId` aponta a pessoa
+ * afetada e a categoria (SCHEDULE) vem do prefixo da ação.
  */
 @Injectable()
 export class StaffScheduleEditService {
@@ -43,10 +44,13 @@ export class StaffScheduleEditService {
     await this.editablePerson(actorId, userId);
     await this.assertShifts(input.days);
     const schedule = await this.repo.replaceSchedule(userId, input, actorId);
-    await this.audit.log('staff_schedule.put', 'StaffSchedule', userId, {
-      actorId,
+    await this.audit.log(
+      'staff_schedule.put',
+      'StaffSchedule',
       userId,
-    });
+      { actorId, userId },
+      { subjectUserId: userId },
+    );
     return schedule;
   }
 
@@ -54,10 +58,13 @@ export class StaffScheduleEditService {
   async deleteSchedule(actorId: string, userId: string): Promise<void> {
     await this.editablePerson(actorId, userId);
     await this.repo.deleteSchedule(userId);
-    await this.audit.log('staff_schedule.delete', 'StaffSchedule', userId, {
-      actorId,
+    await this.audit.log(
+      'staff_schedule.delete',
+      'StaffSchedule',
       userId,
-    });
+      { actorId, userId },
+      { subjectUserId: userId },
+    );
   }
 
   async createException(
@@ -78,6 +85,7 @@ export class StaffScheduleEditService {
       'StaffScheduleException',
       result.exception.id,
       { actorId, userId, adjusted: result.adjusted },
+      { subjectUserId: userId },
     );
     return result;
   }
@@ -95,6 +103,7 @@ export class StaffScheduleEditService {
       'StaffScheduleException',
       exceptionId,
       { actorId, userId, exceptionId },
+      { subjectUserId: userId },
     );
   }
 

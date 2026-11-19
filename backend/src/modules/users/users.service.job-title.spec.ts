@@ -5,6 +5,7 @@ import { UsersService } from './users.service';
 import type { UserPhoneService } from './user-phone.service';
 import type { UsersRepository, UserSummary } from './users.repository';
 import type { AuditService } from '../../shared/audit/audit.service';
+import { NO_PERSON_RECORD } from './users.test-fixtures';
 import type { RefreshService } from '../auth/refresh.service';
 import { createUserSchema } from './dto/create-user.dto';
 import { updateUserSchema } from './dto/update-user.dto';
@@ -29,6 +30,7 @@ const operator = {
   phoneE164: null,
   shiftId: null,
   jobTitle: 'Operador de empilhadeira',
+  ...NO_PERSON_RECORD,
   levelId: null,
   level: null,
   createdAt: new Date('2026-10-21T12:00:00Z'),
@@ -40,7 +42,7 @@ const invite = (jobTitle: string | null) =>
     { email: 'b@idasam.org', role: 'ADMIN', phone: '92991234567', jobTitle },
     'admin',
   );
-const created = () => repo.create.mock.calls[0]?.[0];
+const created = () => repo.createWithAudit.mock.calls[0]?.[0];
 const patched = () => repo.updateWithLastAdminGuard.mock.calls[0]?.[1];
 
 beforeEach(() => {
@@ -52,7 +54,7 @@ beforeEach(() => {
   phones.normalize.mockReturnValue('+5592991234567');
   phones.resolveContactId.mockResolvedValue('c7');
   repo.findByEmail.mockResolvedValue(null);
-  repo.create.mockResolvedValue({
+  repo.createWithAudit.mockResolvedValue({
     id: 'u-new',
     email: 'b@idasam.org',
   } as never);
@@ -73,6 +75,10 @@ describe('UsersService — função (jobTitle) no cadastro', () => {
 
   it('listUsers devolve jobTitle e passa no contrato', async () => {
     repo.findMany.mockResolvedValue({ data: [operator], total: 1 });
+    repo.countAuthorizationPending.mockResolvedValue({
+      unverified: 0,
+      notAuthorized: 0,
+    });
     const res = await svc.listUsers(1, 20);
     const wire = userListResponseSchema.parse(JSON.parse(JSON.stringify(res)));
     expect(wire.data[0]?.jobTitle).toBe('Operador de empilhadeira');

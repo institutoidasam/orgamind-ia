@@ -27,8 +27,14 @@ const sectorInvalid = () =>
 const sectorsNotTeam = () =>
   new DomainError({
     code: 'channel.sectors_not_team',
-    message:
-      'Só um número ativo do GoZap ou da Evolution pode atender áreas da equipe.',
+    message: 'Só um número ativo da Evolution pode atender áreas da equipe.',
+    status: 422,
+  });
+
+const sectorChannelProviderDisabled = () =>
+  new DomainError({
+    code: 'sector.channel_provider_disabled',
+    message: 'Só um número Evolution pode atender uma área.',
     status: 422,
   });
 
@@ -168,7 +174,9 @@ export class SectorChannelService {
       select: SECTOR_CHANNEL_SELECT,
     });
     if (!channel) throw new InstanceNotFoundError(channelId);
-    if (!effectiveChannel(channel)) throw sectorsNotTeam();
+    if (!channel.isActive) throw sectorsNotTeam();
+    // Ativo, mas de provedor desligado: a regra única do número efetivo recusa (R10).
+    if (!effectiveChannel(channel)) throw sectorChannelProviderDisabled();
   }
 
   private async loadActiveSectors(

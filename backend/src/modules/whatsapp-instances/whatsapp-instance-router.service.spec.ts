@@ -1,13 +1,30 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { mockDeep, type MockProxy } from 'vitest-mock-extended';
+import {
+  mockDeep,
+  type MockProxy,
+  type DeepMockProxy,
+} from 'vitest-mock-extended';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { WhatsappInstancesRepository } from './whatsapp-instances.repository';
 import { WhatsappInstanceRouter } from './whatsapp-instance-router.service';
 import { DomainError } from '../../shared/errors/domain.error';
 
+const offlineEvent = {
+  state: 'close',
+  reasonCode: 408,
+  occurredAt: new Date(),
+} as any;
+
+/** router + mocks for specs that live outside the main describe's shared state. */
+function routerHarness() {
+  const prisma = mockDeep<PrismaService>();
+  const repo = mockDeep<WhatsappInstancesRepository>();
+  return { prisma, repo, router: new WhatsappInstanceRouter(prisma, repo) };
+}
+
 describe('WhatsappInstanceRouter', () => {
   let router: WhatsappInstanceRouter;
-  let prisma: MockProxy<PrismaService>;
+  let prisma: DeepMockProxy<PrismaService>;
   let repo: MockProxy<WhatsappInstancesRepository>;
 
   beforeEach(() => {
@@ -17,11 +34,6 @@ describe('WhatsappInstanceRouter', () => {
   });
 
   const onlineEvent = { state: 'open', occurredAt: new Date() } as any;
-  const offlineEvent = {
-    state: 'close',
-    reasonCode: 408,
-    occurredAt: new Date(),
-  } as any;
 
   it('new contact uses campaign default — returns send', async () => {
     // no prior sent messages
@@ -534,5 +546,30 @@ describe('WhatsappInstanceRouter', () => {
         }),
       }),
     );
+  });
+});
+
+describe('WhatsappInstanceRouter — canal GOZAP sem gate de conexão', () => {
+  it('canal GOZAP ativo com último evento close → kind send (sem gate de conexão)', async () => {
+    const { router, prisma, repo } = routerHarness();
+    prisma.message.findFirst.mockResolvedValue({
+      instanceId: 'sticky-G',
+    } as never);
+    repo.findById.mockResolvedValue({
+      id: 'sticky-G',
+      isActive: true,
+      provider: 'GOZAP',
+    } as never);
+    prisma.whatsappConnectionEvent.findFirst.mockResolvedValue(offlineEvent);
+
+    const result = await router.resolveForSend({
+      contactId: 'c1',
+      campaignDefaultInstanceId: 'def',
+    });
+
+    expect(result.kind).toBe('send');
+    if (result.kind === 'send') expect(result.instance.id).toBe('sticky-G');
+    const gateCalls = prisma.whatsappConnectionEvent.findFirst.mock.calls;
+    expect(gateCalls).toHaveLength(0);
   });
 });

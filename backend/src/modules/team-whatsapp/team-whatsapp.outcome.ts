@@ -1,4 +1,5 @@
 import type { TeamWhatsappRecipientStatus } from '@prisma/client';
+import { PROVIDER_DISABLED_CODE } from '../../shared/errors/channel-provider-disabled.error';
 
 /** Código de "pode ter saído": a Message ficou SENDING ou o provedor não respondeu. */
 export const INDETERMINATE_CODE = 'team_whatsapp.indeterminate';
@@ -13,17 +14,20 @@ export const NOT_REPEATABLE_CODES: ReadonlySet<string> = new Set([
   'gozap.not_on_whatsapp',
   'gozap.invalid_recipient',
   'team_whatsapp.message_missing',
+  PROVIDER_DISABLED_CODE,
 ]);
 
 /**
  * Status final de um envio que não saiu (D5): "situação incerta" quando pode
  * ter saído (código indeterminado ou que o chat nunca reenvia), "falha" quando
  * nada saiu. `redispatchable` é o `ChatService.isRedispatchableFailure`.
+ * Canal de provedor desligado nunca envia (D2): é sempre `FAILED`, nunca incerto.
  */
 export function failureStatus(
   code: string,
   redispatchable: (code: string) => boolean,
 ): 'FAILED' | 'UNCERTAIN' {
+  if (code === PROVIDER_DISABLED_CODE) return 'FAILED';
   return code === INDETERMINATE_CODE || !redispatchable(code)
     ? 'UNCERTAIN'
     : 'FAILED';

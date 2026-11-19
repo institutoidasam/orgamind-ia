@@ -6,6 +6,7 @@ import type Redis from 'ioredis';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { REDIS_CLIENT } from '../../shared/redis/redis.module';
 import { ConflictError, DomainError } from '../../shared/errors/domain.error';
+import { PROVIDER_DISABLED_CODE } from '../../shared/errors/channel-provider-disabled.error';
 import { ChatService, type TeamSendResult } from '../chat/chat.service';
 import { ConsentService } from '../consent/consent.service';
 import {
@@ -268,10 +269,14 @@ export class TeamWhatsappSendProcessor extends WorkerHost {
     if (await this.consent.isSuppressed(phone))
       return { data: { status: 'SKIPPED', skipReason: 'SUPPRESSED' } };
     const channel = r.channel ?? r.dispatch.channel;
-    if (!channel?.isActive || !isTeamProvider(channel.provider)) {
+    if (!channel?.isActive) {
       return {
         data: { status: 'FAILED', errorCode: 'team_whatsapp.channel_invalid' },
       };
+    }
+    // Canal ativo de provedor desligado (R9): FAILED sem retry, nunca UNCERTAIN.
+    if (!isTeamProvider(channel.provider)) {
+      return { data: { status: 'FAILED', errorCode: PROVIDER_DISABLED_CODE } };
     }
     return { phone, channel };
   }

@@ -19,7 +19,7 @@ const channelRow = {
   id: 'ch1',
   name: 'Compras Zap',
   phoneE164: '+5592999990001',
-  provider: 'GOZAP',
+  provider: 'EVOLUTION',
   isActive: true,
 };
 
@@ -82,11 +82,16 @@ describe('InternalSectorsService', () => {
 describe('InternalSectorsService — número efetivo do setor (C1)', () => {
   it.each([
     [
-      'canal GOZAP ativo',
+      'canal EVOLUTION ativo',
       channelRow,
       { id: 'ch1', name: 'Compras Zap', phoneE164: '+5592999990001' },
     ],
     ['canal inativo', { ...channelRow, isActive: false }, null],
+    [
+      'canal GOZAP ativo (provedor desligado)',
+      { ...channelRow, provider: 'GOZAP' },
+      null,
+    ],
     ['canal TWILIO', { ...channelRow, provider: 'TWILIO' }, null],
     ['sem canal', null, null],
   ])(

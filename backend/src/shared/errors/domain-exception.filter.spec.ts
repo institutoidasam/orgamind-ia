@@ -9,6 +9,7 @@ import {
   NotFoundError,
   ConflictError,
 } from './domain.error';
+import { ChannelProviderDisabledError } from './channel-provider-disabled.error';
 
 vi.mock('@sentry/nestjs', () => ({
   captureException: vi.fn(),
@@ -502,6 +503,22 @@ describe('DomainExceptionFilter', () => {
 
       expect(res.destroy).not.toHaveBeenCalled();
       expect(captured.status).toBe(400);
+    });
+  });
+});
+
+describe('DomainExceptionFilter — somente Evolution', () => {
+  it('ChannelProviderDisabledError vira 409 com title pt-BR e detail de máquina (contrato C1)', () => {
+    const filter = new DomainExceptionFilter();
+    const { host, captured } = makeHost('/chat/c1/messages');
+    filter.catch(new ChannelProviderDisabledError('GOZAP'), host);
+
+    expect(captured.status).toBe(409);
+    expect(captured.body).toMatchObject({
+      status: 409,
+      code: 'channel.provider_disabled',
+      title: 'Este número usa uma integração desligada (GoZap).',
+      detail: 'provider=GOZAP',
     });
   });
 });

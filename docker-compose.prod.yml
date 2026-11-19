@@ -149,11 +149,19 @@ services:
     restart: "no"
 
   evolution-api:
-    image: evoapicloud/evolution-api:latest
+    # Evolution 2.3.7 (Baileys 7.0.0-rc.9, Node 24.15), build de 2026-05-06; trocar pela 2.3.8
+    # quando publicada (correção de segurança #2435); não usar 2.4.0-rc (exige licença).
+    # Troca de versão: OPERATIONS.md → "Evolution: versão fixa e troca de versão".
+    image: evoapicloud/evolution-api@sha256:966625532d9076a2381e973a271307d107e6f070450de3abeeea8bd18be07252
     restart: unless-stopped
+    # Teto de memória do container (host de 8 GB sem swap, compartilhado com outros serviços).
+    # NODE_OPTIONS mantém o heap do Node abaixo do teto, para o GC agir antes do kernel matar o
+    # container (o Baileys 7.0.0-rc.9 vaza memória). Vale só para o evolution-api.
+    mem_limit: 1g
     volumes:
       - evolution_instances:/evolution/instances
     environment:
+      NODE_OPTIONS: --max-old-space-size=768
       SERVER_URL: ${EVOLUTION_BASE_URL}
       AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
       AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
@@ -212,11 +220,11 @@ services:
       # INTERNA: o endereço que os containers deste compose usam para chamar a
       # api. NÃO serve para provedor SaaS externo — ver PUBLIC_WEBHOOK_BASE_URL.
       WEBHOOK_BASE_URL: ${WEBHOOK_BASE_URL}
-      # PÚBLICA: a base que um provedor de terceiro (GoZap) precisa conseguir
-      # chamar pela internet. Inclui o prefixo do proxy — o nginx do `web` faz
-      # `location /api/ → proxy_pass http://api:3000/`, então o valor é
-      # `https://SEU-DOMINIO/api`. Sem ela, o GoZap registra a URL interna,
-      # aceita com 200 e nunca entrega nada (incidente 2026-08-07).
+      # PÚBLICA: a base que um provedor SaaS externo precisaria chamar pela
+      # internet (o GoZap, desligado desde 2026-11, era o único). A Evolution NÃO
+      # usa esta var: ela chama a api pela rede interna (WEBHOOK_BASE_URL). Inclui
+      # o prefixo do proxy — o nginx do `web` faz `location /api/ → proxy_pass
+      # http://api:3000/`, então o valor seria `https://SEU-DOMINIO/api`.
       PUBLIC_WEBHOOK_BASE_URL: ${PUBLIC_WEBHOOK_BASE_URL:-}
       # ── Identidade da organização titular deste deploy ───────────────────
       # Vai para o TITULAR dos dados: texto de consentimento, landing /opt-in,
@@ -237,10 +245,12 @@ services:
       # compose exige que seja definido pelo ambiente de produção.
       PICOA_CONSENT_SALT: "${PICOA_CONSENT_SALT:?PICOA_CONSENT_SALT must be set and non-empty}"
 
-      # WhatsApp providers: at least one credential group below must be FULLY
-      # set or the app fails to boot (see backend/src/shared/config/env.schema.ts).
-      # A deploy can run several providers/channels at once — there is no
-      # single "WHATSAPP_PROVIDER" selector anymore.
+      # WhatsApp: só a Evolution está ligada (ENABLED_CHANNEL_PROVIDERS, em
+      # backend/src/shared/config/enabled-providers.ts). EVOLUTION_BASE_URL,
+      # EVOLUTION_API_KEY e EVOLUTION_INSTANCE_NAME são obrigatórios no boot
+      # (env.schema.ts). Meta, Twilio,
+      # Zernio e GoZap estão desligados desde 2026-11: o código segue inativo no
+      # repositório e as env deles não são mais encaminhadas aos contêineres.
       EVOLUTION_BASE_URL: http://evolution-api:8080
       EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
       EVOLUTION_INSTANCE_NAME: ${EVOLUTION_INSTANCE_NAME}
@@ -254,65 +264,12 @@ services:
       EVOLUTION_PROXY_USERNAME: ${EVOLUTION_PROXY_USERNAME:-}
       EVOLUTION_PROXY_PASSWORD: ${EVOLUTION_PROXY_PASSWORD:-}
 
-      # Meta Cloud API — only required to enable the META provider group (all
-      # four vars must be set together)
-      META_ACCESS_TOKEN: ${META_ACCESS_TOKEN:-}
-      META_APP_SECRET: ${META_APP_SECRET:-}
-      META_BUSINESS_ACCOUNT_ID: ${META_BUSINESS_ACCOUNT_ID:-}
-      META_PHONE_NUMBER_ID: ${META_PHONE_NUMBER_ID:-}
-      META_WEBHOOK_VERIFY_TOKEN: ${META_WEBHOOK_VERIFY_TOKEN:-}
-
-      # Twilio WhatsApp (BSP) — only required to enable the TWILIO provider
-      # group (ACCOUNT_SID + AUTH_TOKEN + one of WHATSAPP_FROM/MESSAGING_SERVICE_SID)
-      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
-      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
-      TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM:-}
-      TWILIO_MESSAGING_SERVICE_SID: ${TWILIO_MESSAGING_SERVICE_SID:-}
-      TWILIO_WEBHOOK_URL: ${TWILIO_WEBHOOK_URL:-}
-
-      # Zernio Cloud API — only required to enable the ZERNIO provider group
-      # (API_KEY + WEBHOOK_SECRET). BASE_URL defaults in the env schema.
-      ZERNIO_API_KEY: ${ZERNIO_API_KEY:-}
-      ZERNIO_BASE_URL: ${ZERNIO_BASE_URL:-}
-      ZERNIO_WEBHOOK_SECRET: ${ZERNIO_WEBHOOK_SECRET:-}
-
-      # GoZap Cloud API — only required to enable the GOZAP provider group,
-      # all four vars together (BASE_URL + ADMIN_TOKEN + WEBHOOK_TOKEN +
-      # TOKEN_ENCRYPTION_KEY). Unlike ZERNIO_BASE_URL, GOZAP_BASE_URL has NO
-      # schema default (per-tenant subdomain) — it is part of the group.
-      GOZAP_BASE_URL: ${GOZAP_BASE_URL:-}
-      GOZAP_ADMIN_TOKEN: ${GOZAP_ADMIN_TOKEN:-}
-      GOZAP_WEBHOOK_TOKEN: ${GOZAP_WEBHOOK_TOKEN:-}
-      GOZAP_TOKEN_ENCRYPTION_KEY: ${GOZAP_TOKEN_ENCRYPTION_KEY:-}
-      # Captura o payload cru dos webhooks do GoZap (o contrato deles é
-      # indocumentado). Estava declarada no env.schema mas NÃO era encaminhada
-      # aqui — ligá-la no painel não tinha efeito nenhum no container.
-      GOZAP_WEBHOOK_DEBUG: ${GOZAP_WEBHOOK_DEBUG:-}
-      # Compatibilidade do segredo do webhook na query (`?t=<segredo>`). Fica
-      # LIGADA enquanto o painel do GoZap mandar o segredo na URL; `false`
-      # fecha essa porta depois que o painel passar a mandar o cabeçalho
-      # (OPERATIONS.md → "Webhook do GoZap: tirar o segredo da URL"). Precisa
-      # estar encaminhada aqui, senão desligá-la no painel do Dokploy não tem
-      # efeito nenhum e o operador acredita ter fechado a porta sem ter fechado
-      # — foi o que já aconteceu com GOZAP_WEBHOOK_DEBUG, logo acima.
-      GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN: ${GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN:-}
-      # Vagas do plano GoZap (instâncias por conta, contando as de outro
-      # sistema que divida a conta). "Nova conexão GoZap" é recusada antes de
-      # criar quando a conta já está cheia. Padrão 1 (plano Básico).
-      GOZAP_MAX_INSTANCES: ${GOZAP_MAX_INSTANCES:-}
-
       # ── Validação ativa de números (spec B.5) ────────────────────────────
-      # Ritmo do `/chat/check` do GoZap, em consultas por minuto. Padrão 40 no
-      # env schema — lento DE PROPÓSITO: consulta de existência em massa por
-      # cliente não-oficial é sinal conhecido de bloqueio, e este cliente já
-      # perdeu um número. Subir isto aumenta o risco de perder o canal.
-      GOZAP_CHECK_RATE_PER_MIN: ${GOZAP_CHECK_RATE_PER_MIN:-}
       # Validação automática DIÁRIA (cron `whatsapp.contact-sync.cron`).
       # DESLIGADA por padrão: ligada, ela varre a base inteira (até 5000 por
       # noite) sem ninguém clicar em nada. Ligar só com decisão explícita de
-      # quem responde pelo número; ligada, roda no ritmo de
-      # GOZAP_CHECK_RATE_PER_MIN e só dentro da janela de envio do canal.
-      # O caminho normal continua sendo o clique do operador em
+      # quem responde pelo número; ligada, roda só dentro da janela de envio do
+      # canal. O caminho normal continua sendo o clique do operador em
       # "Validar não validados (N)", depois do aviso de risco.
       CONTACT_SYNC_CRON_ENABLED: ${CONTACT_SYNC_CRON_ENABLED:-}
 
@@ -371,11 +328,11 @@ services:
       # INTERNA: o endereço que os containers deste compose usam para chamar a
       # api. NÃO serve para provedor SaaS externo — ver PUBLIC_WEBHOOK_BASE_URL.
       WEBHOOK_BASE_URL: ${WEBHOOK_BASE_URL}
-      # PÚBLICA: a base que um provedor de terceiro (GoZap) precisa conseguir
-      # chamar pela internet. Inclui o prefixo do proxy — o nginx do `web` faz
-      # `location /api/ → proxy_pass http://api:3000/`, então o valor é
-      # `https://SEU-DOMINIO/api`. Sem ela, o GoZap registra a URL interna,
-      # aceita com 200 e nunca entrega nada (incidente 2026-08-07).
+      # PÚBLICA: a base que um provedor SaaS externo precisaria chamar pela
+      # internet (o GoZap, desligado desde 2026-11, era o único). A Evolution NÃO
+      # usa esta var: ela chama a api pela rede interna (WEBHOOK_BASE_URL). Inclui
+      # o prefixo do proxy — o nginx do `web` faz `location /api/ → proxy_pass
+      # http://api:3000/`, então o valor seria `https://SEU-DOMINIO/api`.
       PUBLIC_WEBHOOK_BASE_URL: ${PUBLIC_WEBHOOK_BASE_URL:-}
       # ── Identidade da organização titular deste deploy ───────────────────
       # Vai para o TITULAR dos dados: texto de consentimento, landing /opt-in,
@@ -396,8 +353,8 @@ services:
       # exige que seja definido pelo ambiente de produção.
       PICOA_CONSENT_SALT: "${PICOA_CONSENT_SALT:?PICOA_CONSENT_SALT must be set and non-empty}"
 
-      # WhatsApp providers — same rules as the api service (see the comment
-      # there): at least one credential group must be FULLY set.
+      # WhatsApp: só a Evolution está ligada — mesma regra do serviço api (ver o
+      # comentário lá). As env dos provedores desligados não são encaminhadas.
       EVOLUTION_BASE_URL: http://evolution-api:8080
       EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
       EVOLUTION_INSTANCE_NAME: ${EVOLUTION_INSTANCE_NAME}
@@ -409,50 +366,12 @@ services:
       EVOLUTION_PROXY_USERNAME: ${EVOLUTION_PROXY_USERNAME:-}
       EVOLUTION_PROXY_PASSWORD: ${EVOLUTION_PROXY_PASSWORD:-}
 
-      META_ACCESS_TOKEN: ${META_ACCESS_TOKEN:-}
-      META_APP_SECRET: ${META_APP_SECRET:-}
-      META_BUSINESS_ACCOUNT_ID: ${META_BUSINESS_ACCOUNT_ID:-}
-      META_PHONE_NUMBER_ID: ${META_PHONE_NUMBER_ID:-}
-      META_WEBHOOK_VERIFY_TOKEN: ${META_WEBHOOK_VERIFY_TOKEN:-}
-
-      # Twilio WhatsApp (BSP) — only required to enable the TWILIO provider group
-      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
-      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
-      TWILIO_WHATSAPP_FROM: ${TWILIO_WHATSAPP_FROM:-}
-      TWILIO_MESSAGING_SERVICE_SID: ${TWILIO_MESSAGING_SERVICE_SID:-}
-      TWILIO_WEBHOOK_URL: ${TWILIO_WEBHOOK_URL:-}
-
-      # Zernio Cloud API — same rule as the api service: only required to
-      # enable the ZERNIO provider group (API_KEY + WEBHOOK_SECRET).
-      ZERNIO_API_KEY: ${ZERNIO_API_KEY:-}
-      ZERNIO_BASE_URL: ${ZERNIO_BASE_URL:-}
-      ZERNIO_WEBHOOK_SECRET: ${ZERNIO_WEBHOOK_SECRET:-}
-
-      # GoZap Cloud API — same rule as the api service: only required to
-      # enable the GOZAP provider group (all four vars together).
-      GOZAP_BASE_URL: ${GOZAP_BASE_URL:-}
-      GOZAP_ADMIN_TOKEN: ${GOZAP_ADMIN_TOKEN:-}
-      GOZAP_WEBHOOK_TOKEN: ${GOZAP_WEBHOOK_TOKEN:-}
-      GOZAP_TOKEN_ENCRYPTION_KEY: ${GOZAP_TOKEN_ENCRYPTION_KEY:-}
-      # Captura o payload cru dos webhooks do GoZap (o contrato deles é
-      # indocumentado). Estava declarada no env.schema mas NÃO era encaminhada
-      # aqui — ligá-la no painel não tinha efeito nenhum no container.
-      GOZAP_WEBHOOK_DEBUG: ${GOZAP_WEBHOOK_DEBUG:-}
-      # Mesma var do serviço api: o worker valida o MESMO schema no boot, e uma
-      # env presente num serviço e ausente no outro produz dois processos com
-      # crenças diferentes sobre a mesma porta.
-      GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN: ${GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN:-}
-      # Mesma var do serviço api (vagas do plano GoZap): o worker valida o
-      # mesmo schema, e as duas pontas precisam acreditar no mesmo limite.
-      GOZAP_MAX_INSTANCES: ${GOZAP_MAX_INSTANCES:-}
-
       # ── Validação ativa de números (spec B.5) ────────────────────────────
-      # Mesmas vars do serviço api, e aqui é onde elas de fato MORDEM: o cron e
-      # o processor de validação rodam NO WORKER. Uma env presente num serviço
-      # e ausente no outro produz dois processos com crenças diferentes sobre a
+      # Mesma var do serviço api, e aqui é onde ela de fato MORDE: o cron e o
+      # processor de validação rodam NO WORKER. Uma env presente num serviço e
+      # ausente no outro produz dois processos com crenças diferentes sobre a
       # mesma coisa — o api mostrando "cron desligado" e o worker varrendo a
       # base toda noite, por exemplo.
-      GOZAP_CHECK_RATE_PER_MIN: ${GOZAP_CHECK_RATE_PER_MIN:-}
       CONTACT_SYNC_CRON_ENABLED: ${CONTACT_SYNC_CRON_ENABLED:-}
 
       # Bull Board basic-auth — see note on the api service. The worker boots

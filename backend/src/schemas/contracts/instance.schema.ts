@@ -4,6 +4,7 @@ import {
   type ChannelProviderContract,
 } from './channel-provider.schema';
 import { dateFromIso } from './date.schema';
+import { isEnabledChannelProvider } from '../../shared/config/enabled-providers';
 
 // Re-exported for backward compatibility — the single source is now
 // channel-provider.schema.ts (see that file for the rationale).
@@ -57,6 +58,9 @@ export const createChannelSchema = z
     sectorIds: channelSectorIdsSchema.optional(),
   })
   .superRefine((data, ctx) => {
+    // Provedor desligado não exige campo nenhum aqui: o controller responde
+    // 422 channel.provider_disabled, e o pipe não pode barrar antes com 400.
+    if (!isEnabledChannelProvider(data.provider)) return;
     if (data.provider === 'ZERNIO') {
       if (!data.zernioAccountId) {
         ctx.addIssue({
@@ -218,6 +222,17 @@ export const providerTraitsSchema = z.object({
   sessionWindow: z.boolean(),
 });
 
+/** Um número de provedor desligado, como o bloco "Números desligados" o lista. */
+export const disabledChannelSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  provider: channelProviderEnum,
+  phoneE164: z.string().nullable(),
+  /** Nomes das áreas ativas ligadas ao número, em ordem alfabética. */
+  sectorNames: z.array(z.string()),
+});
+export type DisabledChannelContract = z.infer<typeof disabledChannelSchema>;
+
 /**
  * GET /whatsapp/providers — configured providers on this deploy, each with
  * its declared traits + capabilities (F0 — ProviderProfile, ver
@@ -235,6 +250,11 @@ export const providersResponseSchema = z.object({
       channels: z.array(channelSummarySchema),
     }),
   ),
+  /**
+   * Números ativos de provedor desligado (C3), para o ADMIN removê-los. Só o
+   * ADMIN recebe a lista; os demais papéis recebem `[]`.
+   */
+  disabledChannels: z.array(disabledChannelSchema).default([]),
 });
 export type ProvidersResponse = z.infer<typeof providersResponseSchema>;
 

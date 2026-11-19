@@ -61,8 +61,9 @@ describe('createChannelSchema (POST /whatsapp/channels)', () => {
     expect(createChannelSchema.safeParse({}).success).toBe(false);
   });
 
-  it('requires phoneE164 for a non-ZERNIO provider (omitted)', () => {
-    const { phoneE164: _drop, ...withoutPhone } = valid;
+  it('requires phoneE164 for an enabled non-ZERNIO provider (EVOLUTION, omitted)', () => {
+    const withoutPhone = { ...valid, provider: 'EVOLUTION' as const };
+    delete (withoutPhone as Partial<typeof withoutPhone>).phoneE164;
     const result = createChannelSchema.safeParse(withoutPhone);
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -89,19 +90,10 @@ describe('createChannelSchema (POST /whatsapp/channels)', () => {
       expect(() => createChannelSchema.parse(noPhone)).not.toThrow();
     });
 
-    it('requires zernioAccountId when provider is ZERNIO', () => {
+    it('não exige zernioAccountId enquanto ZERNIO está desligado (controller responde 422)', () => {
       const { zernioAccountId: _drop, ...withoutAccountId } = zernioValid;
       const result = createChannelSchema.safeParse(withoutAccountId);
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(
-          result.error.issues.some(
-            (i) =>
-              i.path.join('.') === 'zernioAccountId' &&
-              /obrigat[óo]rio/i.test(i.message),
-          ),
-        ).toBe(true);
-      }
+      expect(result.success).toBe(true);
     });
 
     it('rejects an empty-string zernioAccountId when provider is ZERNIO', () => {
@@ -316,4 +308,17 @@ describe('áreas do número (C1)', () => {
       updateChannelSectorsSchema.safeParse({ sectorIds: [], extra: 1 }).success,
     ).toBe(false);
   });
+});
+
+describe('createChannelSchema — provedor desligado (R4/DV5)', () => {
+  // Provedor desligado responde 422 channel.provider_disabled no controller;
+  // o schema não pode barrar antes com 400 de validação por campo do provedor.
+  it.each(['ZERNIO', 'TWILIO', 'META', 'GOZAP'])(
+    'createChannelSchema aceita %s sem os campos do provedor desligado',
+    (provider) => {
+      expect(
+        createChannelSchema.safeParse({ provider, name: 'Canal X' }).success,
+      ).toBe(true);
+    },
+  );
 });

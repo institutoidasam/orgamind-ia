@@ -24,6 +24,10 @@ import {
   ZernioCredentialsNotConfiguredError,
 } from './errors/templates.errors';
 import { ValidationError } from '../../shared/errors/domain.error';
+import {
+  ENABLED_CHANNEL_PROVIDERS,
+  isEnabledChannelProvider,
+} from '../../shared/config/enabled-providers';
 import { AuditService } from '../../shared/audit/audit.service';
 import { TwilioContentService } from '../whatsapp-providers/twilio-content.service';
 import {
@@ -92,6 +96,18 @@ function isTwilioDraft(raw: string | null | undefined): boolean {
   return !raw || raw === 'draft';
 }
 
+/**
+ * Provedores que a lista consulta (R12): sem filtro, todos os ligados; com
+ * filtro, só ele — e `[]` se estiver desligado (a linha fica no banco, fora da
+ * lista).
+ */
+function listedProviders(
+  provider: ChannelProvider | undefined,
+): readonly ChannelProvider[] {
+  if (!provider) return ENABLED_CHANNEL_PROVIDERS;
+  return isEnabledChannelProvider(provider) ? [provider] : [];
+}
+
 @Injectable()
 export class TemplatesService {
   private readonly logger = new Logger(TemplatesService.name);
@@ -116,7 +132,9 @@ export class TemplatesService {
    * `null` = não há nada a dizer (não é ZERNIO, ou não tem resposta rápida).
    */
   async list(provider?: ChannelProvider) {
-    const rows = await this.repo.listAll(provider);
+    const providers = listedProviders(provider);
+    if (providers.length === 0) return [];
+    const rows = await this.repo.listAll(providers);
     return rows.map((row) => ({
       ...row,
       consentButtons: this.consentButtonsVerdict(row),

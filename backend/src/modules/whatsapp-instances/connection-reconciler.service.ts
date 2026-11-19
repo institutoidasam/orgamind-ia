@@ -6,6 +6,13 @@ import { EvolutionApiAdapter } from '../whatsapp-providers/adapters/evolution-ap
 import { QUEUE_NAMES } from '../queue/queue.constants';
 
 /**
+ * E1: intervalo mínimo entre duas conferências do webhook de uma mesma
+ * instância (por processo). O primeiro ciclo depois do boot sempre confere,
+ * porque o mapa de últimas conferências começa vazio.
+ */
+export const WEBHOOK_CHECK_INTERVAL_MS = 10 * 60_000;
+
+/**
  * Connection-state reconciler.
  *
  * Evolution's CONNECTION_UPDATE webhooks are unreliable: they arrive
@@ -26,10 +33,15 @@ import { QUEUE_NAMES } from '../queue/queue.constants';
  *    last stored state (or there is no stored state for the instance).
  *  - Each instance is processed inside its own try/catch: one failure must
  *    not abort the loop for the remaining instances.
+ *  - Depois do reconcile de estado, o webhook da instância é conferido (e
+ *    re-armado se divergir) no máximo uma vez a cada WEBHOOK_CHECK_INTERVAL_MS,
+ *    com o próprio try/catch: falha só é logada.
  */
 @Processor(QUEUE_NAMES.CONNECTION_RECONCILER, { concurrency: 1 })
 export class ConnectionReconcilerService extends WorkerHost {
   private readonly logger = new Logger(ConnectionReconcilerService.name);
+  // instanceId -> epoch ms da última conferência do webhook (mapa por processo).
+  private readonly lastWebhookCheck = new Map<string, number>();
 
   constructor(
     private readonly instancesRepo: WhatsappInstancesRepository,
@@ -63,15 +75,50 @@ export class ConnectionReconcilerService extends WorkerHost {
       } catch (err) {
         failed++;
         this.logger.warn(
-          { err, instanceId: instance.id, evolutionInstanceName: instance.evolutionInstanceName },
+          {
+            instanceId: instance.id,
+            evolutionInstanceName: instance.evolutionInstanceName,
+            message: err instanceof Error ? err.message : String(err),
+          },
           'reconciler: unexpected error processing instance (skipping)',
         );
       }
+      await this.checkWebhook(instance.id, instance.evolutionInstanceName);
+    }
+
+    // Poda o mapa de conferência: instâncias fora do conjunto ativo deste ciclo saem dele.
+    const activeIds = new Set(instances.map((i) => i.id));
+    for (const id of this.lastWebhookCheck.keys()) {
+      if (!activeIds.has(id)) this.lastWebhookCheck.delete(id);
     }
 
     if (instances.length > 0) {
       this.logger.log(
         `connection-reconciler: total=${instances.length} reconciled=${reconciled} skipped=${skipped} failed=${failed}`,
+      );
+    }
+  }
+
+  /**
+   * E1: confere/re-arma o webhook da instância, no máximo uma vez a cada
+   * WEBHOOK_CHECK_INTERVAL_MS. Nunca lança: o log leva só ids e status, sem o
+   * erro do axios (carrega a apikey).
+   */
+  private async checkWebhook(
+    instanceId: string,
+    evolutionInstanceName: string,
+  ): Promise<void> {
+    const now = Date.now();
+    const last = this.lastWebhookCheck.get(instanceId) ?? -Infinity;
+    if (now - last < WEBHOOK_CHECK_INTERVAL_MS) return;
+    this.lastWebhookCheck.set(instanceId, now);
+    try {
+      await this.evolutionAdapter.ensureWebhookArmed(evolutionInstanceName);
+    } catch (err) {
+      const { response } = err as { response?: { status?: number } };
+      this.logger.warn(
+        { instanceId, evolutionInstanceName, httpStatus: response?.status },
+        'reconciler: falha ao conferir o webhook (seguindo)',
       );
     }
   }

@@ -21,7 +21,7 @@ const ref = {
   id: 'c1',
   name: 'GBR',
   phoneE164: '+5592999991111',
-  provider: 'GOZAP' as const,
+  provider: 'EVOLUTION' as const,
 };
 
 describe('liveBlock (só open libera; close/connecting vencem unknown)', () => {
@@ -72,7 +72,7 @@ const NOW = new Date('2026-11-10T13:00:00.000Z');
 describe('distinctLiveChannels', () => {
   it('um canal por id, sem os setores sem número', () => {
     expect(distinctLiveChannels([row, null, row])).toEqual([
-      { id: 'c1', provider: 'GOZAP', evolutionInstanceName: 'inst-1' },
+      { id: 'c1', provider: 'EVOLUTION', evolutionInstanceName: 'inst-1' },
     ]);
   });
 });

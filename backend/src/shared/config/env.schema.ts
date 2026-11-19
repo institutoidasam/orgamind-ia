@@ -5,13 +5,15 @@ import {
 } from './consent-salt';
 
 // ── Provider credential groups ──────────────────────────────────────────────
-// A WhatsApp provider is usable only when its ENTIRE credential group is set.
+// Só o grupo Evolution é obrigatório no boot (R2): `EVOLUTION_BASE_URL`,
+// `EVOLUTION_API_KEY` e `EVOLUTION_INSTANCE_NAME`. Os grupos dos provedores
+// desligados (Meta, Twilio, Zernio, GoZap) NÃO derrubam o boot, completos ou
+// parciais: seus validadores de formato caem para `undefined` (`.catch`) e as
+// chaves com valor viram um aviso só com os NOMES (`ignoredProviderEnvKeys`,
+// logado pelo registry) — nunca com valores (GC6).
 // The compose forwards unset vars as `${VAR:-}` = '' (empty string), so an empty
-// value counts as ABSENT. Rules (validated in superRefine + mirrored at runtime
-// by the ProviderRegistry via `configuredProviderGroups`):
-//   - a group is "present" if ANY of its member vars is non-empty;
-//   - a present group must be COMPLETE (all required members set) or boot fails;
-//   - at least one group must be complete or boot fails.
+// value counts as ABSENT. `configuredProviderGroups` mirrors the presence rule
+// (a group is "present" if ANY member is non-empty, "complete" if none missing).
 
 export type ProviderGroupName =
   'meta' | 'evolution' | 'twilio' | 'zernio' | 'gozap';
@@ -168,6 +170,8 @@ export function configuredProviderGroups(env: EnvInput): ProviderGroupName[] {
   );
 }
 
+const ZERNIO_BASE_URL_DEFAULT = 'https://zernio.com/api/v1';
+
 export const envSchema = z
   .object({
     NODE_ENV: z
@@ -284,10 +288,14 @@ export const envSchema = z
     // The compose forwards `${ZERNIO_BASE_URL:-}` (empty string) when unset,
     // so '' must resolve to the default instead of failing `.url()` — same
     // preprocess-empty-to-undefined pattern as DIFY_BASE_URL/EVOLUTION_BASE_URL.
-    ZERNIO_BASE_URL: z.preprocess(
-      (v) => (v === '' ? undefined : v),
-      z.string().url().default('https://zernio.com/api/v1'),
-    ),
+    // Zernio is switched off: a malformed URL must not crash boot (R2), so it
+    // falls back to the default too (`.catch`; the type stays `string`).
+    ZERNIO_BASE_URL: z
+      .preprocess(
+        (v) => (v === '' ? undefined : v),
+        z.string().url().default(ZERNIO_BASE_URL_DEFAULT),
+      )
+      .catch(ZERNIO_BASE_URL_DEFAULT),
     ZERNIO_WEBHOOK_SECRET: z.string().optional(),
 
     // GoZap Cloud API (5º provider — WhatsApp não-oficial via QR, SaaS
@@ -301,10 +309,15 @@ export const envSchema = z
     // `GOZAP_BASE_URL: ${GOZAP_BASE_URL:-}`, i.e. delivers an EMPTY STRING
     // when the env isn't set — and `.url()` on an empty string crashes boot.
     // Same preprocess EVOLUTION_BASE_URL already uses; follow it verbatim.
-    GOZAP_BASE_URL: z.preprocess(
-      (v) => (v === '' ? undefined : v),
-      z.string().url().optional(),
-    ),
+    // GoZap is switched off (R2): a malformed URL must not crash boot, so the
+    // format validators of its credential keys end in `.catch(undefined)`
+    // (the type stays `string | undefined`).
+    GOZAP_BASE_URL: z
+      .preprocess(
+        (v) => (v === '' ? undefined : v),
+        z.string().url().optional(),
+      )
+      .catch(undefined),
     GOZAP_ADMIN_TOKEN: z.string().optional(),
     GOZAP_WEBHOOK_TOKEN: z.string().optional(),
     // Interruptor de FIM da transição do achado C20 ("o segredo do webhook em
@@ -347,13 +360,17 @@ export const envSchema = z
     // `${GOZAP_TOKEN_ENCRYPTION_KEY:-}` (='') on every deploy that doesn't
     // set it, and a bare regex would reject '' and crash boot — so '' must
     // be preprocessed to undefined before the regex ever sees it.
-    GOZAP_TOKEN_ENCRYPTION_KEY: z.preprocess(
-      (v) => (v === '' ? undefined : v),
-      z
-        .string()
-        .regex(/^[0-9a-fA-F]{64}$/)
-        .optional(),
-    ),
+    // GoZap is switched off (R2): a malformed key becomes `undefined` instead of
+    // failing boot (`.catch`). The value is never echoed anywhere.
+    GOZAP_TOKEN_ENCRYPTION_KEY: z
+      .preprocess(
+        (v) => (v === '' ? undefined : v),
+        z
+          .string()
+          .regex(/^[0-9a-fA-F]{64}$/)
+          .optional(),
+      )
+      .catch(undefined),
     // Optional: captures raw inbound webhook payloads for shape validation
     // (GoZap's webhook contract is undocumented — see gozap-cloud.adapter.ts).
     // Never required for the group to be considered configured.
@@ -380,7 +397,7 @@ export const envSchema = z
     // — o mesmo tropeço já documentado em ORG_PRIVACY_POLICY_URL.
     GOZAP_CHECK_RATE_PER_MIN: z.preprocess(
       (v) => (v === '' ? undefined : v),
-      z.coerce.number().int().positive().default(40),
+      z.coerce.number().int().positive().default(40).catch(40),
     ),
 
     // Vagas do PLANO contratado no GoZap: quantas instâncias a conta comporta.
@@ -393,7 +410,7 @@ export const envSchema = z
     // mesmo motivo: o compose entrega `${GOZAP_MAX_INSTANCES:-}` como ''.
     GOZAP_MAX_INSTANCES: z.preprocess(
       (v) => (v === '' ? undefined : v),
-      z.coerce.number().int().positive().default(1),
+      z.coerce.number().int().positive().default(1).catch(1),
     ),
 
     // ★ VALIDAÇÃO AUTOMÁTICA DIÁRIA — DESLIGADA POR PADRÃO.
@@ -519,35 +536,18 @@ export const envSchema = z
       .optional(),
     GIT_SHA: z.string().optional(),
   })
-  // Provider credentials are validated by GROUP — there is no single
-  // deploy-global "the provider" selector: any non-empty var in a group makes
-  // the WHOLE group required, and at least one group must be fully
-  // configured. This lets one deploy serve several providers at once
-  // (multi-provider channels) while still failing fast on a half-configured
-  // group instead of surfacing `Bearer undefined` at first send.
+  // Só o grupo Evolution é obrigatório (R2). Os grupos dos desligados não são
+  // validados aqui: completos ou parciais, não derrubam o boot.
   .superRefine((env, ctx) => {
-    let anyComplete = false;
-    for (const [name, state] of PROVIDER_GROUPS) {
-      const s = state(env);
-      if (s.present && s.missing.length > 0) {
-        for (const key of s.missing) {
-          ctx.addIssue({
-            code: 'custom',
-            path: [key],
-            message: `Required — the ${name} provider group is partially configured (set all of its variables or none)`,
-          });
-        }
-      }
-      if (isComplete(s)) anyComplete = true;
-    }
-    if (!anyComplete) {
-      // No single field owns this failure (it's a cross-group invariant), so
+    if (!isComplete(evolutionGroupState(env))) {
+      // No single field owns this failure (the whole group is required), so
       // the issue is attached to a synthetic path rather than a real env var.
+      // A mensagem lista só NOMES de chaves, nunca valores.
       ctx.addIssue({
         code: 'custom',
         path: ['providers'],
         message:
-          'At least one WhatsApp provider group must be fully configured (meta, evolution, twilio, zernio, or gozap)',
+          'O grupo Evolution é obrigatório: defina EVOLUTION_BASE_URL, EVOLUTION_API_KEY e EVOLUTION_INSTANCE_NAME',
       });
     }
 

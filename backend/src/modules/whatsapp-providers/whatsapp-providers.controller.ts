@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   Inject,
   Logger,
   Param,
@@ -19,7 +20,6 @@ import { UpdateChannelSettingsDto } from './dto/update-channel-settings.dto';
 import { UpdateChannelSectorsDto } from './dto/update-channel-sectors.dto';
 import {
   SectorChannelService,
-  assignToCreatedChannel,
   type ChannelSector,
   type ChannelSectorsResult,
 } from './sector-channel.service';
@@ -27,25 +27,20 @@ import type { JwtPayload } from '../auth/jwt.strategy';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { WhatsappInstancesRepository } from '../whatsapp-instances/whatsapp-instances.repository';
 import { InstanceNotFoundError } from '../whatsapp-instances/errors/instance.errors';
-import { ProviderNotConfiguredError } from './provider-registry.service';
-import {
-  ZernioAccountsService,
-  type ZernioAccount,
-} from './zernio-accounts.service';
 import { WebhookDropsService } from './webhook-drops.service';
-import { ChannelHealthService } from './channel-health.service';
-import { GozapInstancesService } from './gozap-instances.service';
+import { DisabledChannelsService } from './disabled-channels.service';
 import { WhatsappProvidersRepository } from './whatsapp-providers.repository';
 import type { ConnectionState } from './ports/message-provider.port';
 import { warmupInfo } from '../whatsapp-instances/warmup.helper';
 import { AuditService } from '../../shared/audit/audit.service';
 import { DomainError } from '../../shared/errors/domain.error';
+import { ChannelProviderDisabledError } from '../../shared/errors/channel-provider-disabled.error';
+import { isEnabledChannelProvider } from '../../shared/config/enabled-providers';
 import type {
   ChannelSummary,
+  DisabledChannelContract,
   ProvidersResponse,
-  ZernioAccountsResponse,
   WebhookDropsResponse,
-  ChannelHealthResponse,
 } from '../../schemas/contracts/instance.schema';
 import { PROVIDER_TRAITS } from '../../schemas/contracts/channel-provider.schema';
 
@@ -53,17 +48,6 @@ type AuthRequest = { user: JwtPayload };
 type ChannelRow = Awaited<
   ReturnType<WhatsappInstancesRepository['listAll']>
 >[number];
-
-/**
- * Uma conta Zernio como uma linha legível na mensagem de erro — o operador
- * precisa reconhecer QUAL das contas é a dele, então id + número + nome.
- */
-function describeAccount(a: ZernioAccount): string {
-  const parts = [a.id];
-  if (a.phoneE164) parts.push(a.phoneE164);
-  if (a.displayName) parts.push(a.displayName);
-  return parts.join(' — ');
-}
 
 @Controller('whatsapp')
 export class WhatsappProvidersController {
@@ -73,11 +57,9 @@ export class WhatsappProvidersController {
     private readonly wa: WhatsappProvidersService,
     private readonly instancesRepo: WhatsappInstancesRepository,
     private readonly audit: AuditService,
-    private readonly zernioAccounts: ZernioAccountsService,
     private readonly drops: WebhookDropsService,
-    private readonly health: ChannelHealthService,
-    private readonly gozapInstances: GozapInstancesService,
     private readonly providersRepo: WhatsappProvidersRepository,
+    private readonly disabledChannels: DisabledChannelsService,
   ) {}
 
   // Injetado por propriedade: o construtor de DI já passava do limite de
@@ -124,14 +106,18 @@ export class WhatsappProvidersController {
    * (env group incomplete) never appears here, even if the DB happens to
    * hold channel rows for it.
    *
+   * `disabledChannels` (C3): os números ativos de provedor desligado, para o
+   * ADMIN removê-los. Só o ADMIN os recebe; os demais papéis recebem `[]`.
+   *
    * Response shape is a hard contract with the frontend's useProviders()
    * (frontend/src/features/whatsapp/api.ts, providersResponseSchema) — do
    * not change it without updating that schema.
    */
   @Get('providers')
-  async providers(): Promise<ProvidersResponse> {
+  async providers(@Req() req: AuthRequest): Promise<ProvidersResponse> {
+    const disabledChannels = await this.disabledChannelsFor(req.user);
     const configured = this.wa.configuredProviders();
-    if (configured.length === 0) return { providers: [] };
+    if (configured.length === 0) return { providers: [], disabledChannels };
 
     const channels = await this.instancesRepo.listAll();
     // Estado de conexão mais recente de cada canal, num round trip só — ver o
@@ -167,7 +153,17 @@ export class WhatsappProvidersController {
           channels: byProvider.get(provider) ?? [],
         };
       }),
+      disabledChannels,
     };
+  }
+
+  /** Só o ADMIN vê os números desligados (GC8); os demais papéis recebem `[]`. */
+  private disabledChannelsFor(
+    user: JwtPayload,
+  ): Promise<DisabledChannelContract[]> {
+    return user.role === 'ADMIN'
+      ? this.disabledChannels.listDisabled()
+      : Promise.resolve([]);
   }
 
   /**
@@ -305,181 +301,25 @@ export class WhatsappProvidersController {
   }
 
   /**
-   * As contas WhatsApp conectadas na conta Zernio do cliente — o que o seletor
-   * do form de canal ZERNIO oferece, para que o operador ESCOLHA a conta em vez
-   * de digitar o `_id` à mão (foi um id digitado errado que causou a perda
-   * silenciosa de um disparo inteiro em produção).
-   *
-   * Nunca 5xx: com o Zernio fora do ar devolve `unavailable: true` + lista
-   * vazia, e o form cai no input manual em vez de travar a configuração.
-   */
-  @Roles('ADMIN')
-  @Get('zernio/accounts')
-  async zernioAccountsList(): Promise<ZernioAccountsResponse> {
-    try {
-      const accounts = await this.zernioAccounts.listAccounts();
-      return { accounts, unavailable: false };
-    } catch (err) {
-      this.logger.warn(
-        `GET /whatsapp/zernio/accounts: Zernio indisponível (${
-          err instanceof Error ? err.message : String(err)
-        })`,
-      );
-      return { accounts: [], unavailable: true };
-    }
-  }
-
-  /**
-   * ZB — SAÚDE DO CANAL: o que o operador precisa ver ANTES de disparar.
-   *
-   * Hoje ele dispara às cegas. Aqui vêm, por canal ZERNIO: o tier da Meta e
-   * QUANTO dele já foi gasto nas últimas 24h ROLANTES (a mesma contagem de
-   * usuários únicos pela qual a guarda do worker o bloqueia), o quality rating,
-   * e o `nameStatus` — que no cliente está **DECLINED**, ou seja, o destinatário
-   * vê o número em vez do nome do negócio.
-   *
-   * Leitura AO VIVO no Zernio, e por isso NÃO é polling: o balde é de 60 req/min
-   * por chave e é o mesmo do envio. O frontend consome sob demanda.
-   */
-  @Roles('ADMIN')
-  @Get('channels/health')
-  async channelsHealth(): Promise<ChannelHealthResponse> {
-    return this.health.list();
-  }
-
-  /**
-   * Creates a cloud-provider (TWILIO/ZERNIO/META) channel row directly — no
-   * external provisioning happens here (unlike EVOLUTION, cloud providers
-   * have nothing to provision: the number is already live on the provider's
-   * side). EVOLUTION is rejected: those channels are created through the
-   * existing instance-provisioning flow (POST /whatsapp/instances), which
-   * actually creates the Baileys session.
-   *
-   * ZERNIO tem um guard-rail extra: o `zernioAccountId` é validado contra a API
-   * do Zernio antes de virar linha no banco (ver abaixo).
+   * Só a Evolution está ligada (R4): criar canal de qualquer outro provedor é
+   * 422 `channel.provider_disabled`, ANTES de qualquer outra checagem (o
+   * registry só conhece a Evolution, então `isProviderConfigured` daria um 400
+   * enganoso). EVOLUTION nasce pelo fluxo de instância (QR Code), nunca por
+   * aqui: continua a recusa 400 de sempre.
    */
   @Roles('ADMIN')
   @Post('channels')
-  async createChannel(@Body() body: CreateChannelDto, @Req() req: AuthRequest) {
-    this.assertNotEvolution(body);
-    if (!this.wa.isProviderConfigured(body.provider)) {
-      throw new ProviderNotConfiguredError(body.provider);
+  createChannel(@Body() body: CreateChannelDto): never {
+    if (!isEnabledChannelProvider(body.provider)) {
+      throw new ChannelProviderDisabledError(body.provider, 422);
     }
-    this.assertSectorsOnlyForGozap(body);
-
-    // GOZAP: ao contrário dos outros provedores cloud (TWILIO/ZERNIO/META,
-    // que só persistem uma row — o número já está vivo do lado do provedor),
-    // GOZAP tem PROVISÃO EXTERNA: cria a instância no GoZap (POST
-    // /instance/create), cifra o token da instância e arma o webhook. Todo
-    // esse ciclo vive em GozapInstancesService (F-A Task 7) — retorna cedo
-    // porque os guardas de duplicata abaixo (phoneE164/zernioAccountId) não
-    // se aplicam: o número só é conhecido depois do pareamento por QR.
-    if (body.provider === 'GOZAP') {
-      return this.createGozapChannel(body, req.user.sub);
-    }
-
-    // App-level duplicate guard (no DB-level unique constraint on
-    // provider+phoneE164 — see whatsapp-instances.repository.ts). A second
-    // ACTIVE channel with the same provider+phone would silently split a
-    // campaign's delivery across two rows. ZERNIO carries no phone here (its
-    // identity is zernioAccountId, guarded below), so skip the phone check.
-    if (body.phoneE164) {
-      const duplicate = await this.instancesRepo.findActiveByProviderAndPhone(
-        body.provider,
-        body.phoneE164,
-      );
-      if (duplicate) {
-        throw new DomainError({
-          code: 'channel.duplicate_phone',
-          message: `Já existe um canal ativo ${body.provider} com o número ${body.phoneE164}.`,
-          status: 400,
-          detail: `channelId=${duplicate.id}`,
-        });
-      }
-    }
-
-    // Z3: same app-level guard as above, scoped to Zernio's own account id —
-    // a second ACTIVE channel reusing the same zernioAccountId would let a
-    // campaign silently split delivery across two rows for that account.
-    if (body.provider === 'ZERNIO' && body.zernioAccountId) {
-      const duplicateAccount = await this.instancesRepo.findActiveByZernioAccountId(
-        body.zernioAccountId,
-      );
-      if (duplicateAccount) {
-        throw new DomainError({
-          code: 'channel.duplicate_zernio_account',
-          message: `Já existe um canal ativo com a conta Zernio ${body.zernioAccountId}.`,
-          status: 400,
-          detail: `channelId=${duplicateAccount.id}`,
-        });
-      }
-    }
-
-    // A conta Zernio informada existe MESMO? Este é o guard-rail do incidente:
-    // um `zernioAccountId` errado passava por aqui sem nenhum atrito e só se
-    // manifestava depois, como silêncio — os webhooks daquela conta chegavam,
-    // autenticavam, não resolviam canal nenhum e eram descartados com um warn.
-    // Um disparo inteiro (~100 mensagens) sumiu assim, sem nenhum sinal na UI.
-    //
-    // A checagem NÃO pode virar um ponto de indisponibilidade: se o Zernio
-    // estiver fora do ar, criamos o canal mesmo assim (degradação) e o deixamos
-    // com `zernioAccountVerifiedAt = null`, ou seja, pendente de revalidação.
-    let phoneE164 = body.phoneE164;
-    let zernioAccountVerifiedAt: Date | null = null;
-    if (body.provider === 'ZERNIO' && body.zernioAccountId) {
-      const lookup = await this.zernioAccounts.lookup(body.zernioAccountId);
-      if (lookup.status === 'not_found') {
-        const disponiveis = lookup.accounts.length
-          ? lookup.accounts.map((a) => `• ${describeAccount(a)}`).join('\n')
-          : '(nenhuma conta WhatsApp conectada na sua conta Zernio)';
-        throw new DomainError({
-          code: 'channel.zernio_account_not_found',
-          message:
-            `A conta Zernio "${body.zernioAccountId}" não existe. Um ID errado faz o orgamind ` +
-            `descartar TODAS as mensagens e status recebidos dessa conta, em silêncio. ` +
-            `Contas disponíveis:\n${disponiveis}`,
-          status: 400,
-          detail: `zernioAccountId=${body.zernioAccountId}`,
-        });
-      }
-      if (lookup.status === 'found') {
-        zernioAccountVerifiedAt = new Date();
-        // Bônus: o canal ZERNIO ganha o número da própria conta (antes ficava
-        // null, o que atrapalhava o inbox). Um valor explícito no body vence.
-        phoneE164 = phoneE164 ?? lookup.account.phoneE164 ?? undefined;
-      } else {
-        this.logger.warn(
-          `criando canal ZERNIO sem validar o accountId=${body.zernioAccountId} ` +
-            `(Zernio indisponível: ${lookup.reason}) — pendente de revalidação`,
-        );
-      }
-    }
-
-    // Reactivate a soft-deleted channel holding the same globally-unique key
-    // instead of a raw-P2002 500 (see createOrReactivateCloudChannel). Active
-    // clashes were already rejected above.
-    const channel = await this.instancesRepo.createOrReactivateCloudChannel({
-      provider: body.provider,
-      name: body.name,
-      phoneE164,
-      twilioMessagingServiceSid: body.twilioMessagingServiceSid,
-      zernioAccountId: body.zernioAccountId,
-      zernioAccountVerifiedAt,
+    throw new DomainError({
+      code: 'channel.evolution_via_instance_flow',
+      message:
+        'Canais EVOLUTION são criados pelo fluxo de instância existente (conectar via QR Code), não por este endpoint.',
+      status: 400,
+      detail: 'POST /whatsapp/instances',
     });
-
-    // F6-style audit trail (best-effort — AuditService swallows its own
-    // errors), mirrors WhatsappInstancesService.create()'s 'instance.create'.
-    await this.audit.log('instance.create', 'WhatsappInstance', channel.id, {
-      name: channel.name,
-      provider: channel.provider,
-      phoneE164: channel.phoneE164,
-    });
-
-    // A5: never expose the apiKey column, even though cloud channels never
-    // populate it. gozapInstanceToken never populates on THIS path either
-    // (GOZAP branched out above) — stripped anyway as defense in depth.
-    const { apiKey: _apiKey, gozapInstanceToken: _t, ...safe } = channel;
-    return safe;
   }
 
   /**
@@ -527,56 +367,6 @@ export class WhatsappProvidersController {
     };
   }
 
-  /** EVOLUTION nasce pelo fluxo de instância (QR Code), nunca por aqui. */
-  private assertNotEvolution(body: CreateChannelDto): void {
-    if (body.provider === 'EVOLUTION') {
-      throw new DomainError({
-        code: 'channel.evolution_via_instance_flow',
-        message:
-          'Canais EVOLUTION são criados pelo fluxo de instância existente (conectar via QR Code), não por este endpoint.',
-        status: 400,
-        detail: 'POST /whatsapp/instances',
-      });
-    }
-  }
-
-  /**
-   * Áreas só fazem sentido num número da equipe (GOZAP/EVOLUTION). Pedir áreas
-   * para TWILIO/ZERNIO/META é recusado ANTES de criar qualquer coisa, em vez de
-   * ignorar o pedido em silêncio.
-   */
-  private assertSectorsOnlyForGozap(body: CreateChannelDto): void {
-    if (body.provider !== 'GOZAP' && body.sectorIds?.length) {
-      throw new DomainError({
-        code: 'channel.sectors_not_team',
-        message:
-          'Só um número do GoZap ou da Evolution pode atender áreas da equipe.',
-        status: 422,
-      });
-    }
-  }
-
-  /**
-   * GOZAP com áreas: valida as áreas ANTES de provisionar a instância no GoZap
-   * (uma área inválida não pode deixar uma conexão paga órfã) e grava a
-   * associação depois, com o canal já criado.
-   */
-  private async createGozapChannel(body: CreateChannelDto, actorId: string) {
-    if (!body.sectorIds?.length) {
-      return this.gozapInstances.createChannel({ name: body.name });
-    }
-    const sectorIds = await this.sectorChannel.assertAssignable(body.sectorIds);
-    const channel = await this.gozapInstances.createChannel({
-      name: body.name,
-    });
-    const sectors = await assignToCreatedChannel(
-      this.sectorChannel,
-      this.logger,
-      { channelId: channel.id, sectorIds, actorId },
-    );
-    return { ...channel, sectors };
-  }
-
   /**
    * Associa o número às áreas que ele atende (só ADMIN, como conectar número).
    * A lista é o estado final: áreas ausentes saem do número e a que já estava
@@ -598,35 +388,20 @@ export class WhatsappProvidersController {
   }
 
   /**
-   * QR do canal GOZAP — análogo a `GET /whatsapp/instances/:id/qr`
-   * (Evolution-only, ver whatsapp-instances.controller.ts), mas num endpoint
-   * próprio: GOZAP não é uma "instância" Evolution, é um `Channel` cloud com
-   * sessionBased=true. Delega inteiramente a GozapInstancesService —
-   * getConnectionInfo já resolve a chamada certa (status vs. connect) e
-   * nunca devolve o token, só `{ state, qrBase64? }`.
-   */
-  @Roles('ADMIN')
-  @Get('channels/:id/qr')
-  async gozapQr(@Param('id') id: string) {
-    return this.gozapInstances.getConnectionInfo(id);
-  }
-
-  /**
-   * F-A Task 7 (review fix): sem esta rota não havia NENHUM jeito de remover
-   * um canal GOZAP — o único DELETE alcançável hoje (`DELETE
-   * /whatsapp/instances/:id`) é Evolution-only e, se apontado a um canal
-   * GOZAP, só faz soft-delete da row: nunca chama `DELETE /instance` no
-   * GoZap, deixando a instância viva (e pareada) do lado do provedor, com o
-   * token cifrado preso numa row inativa e sem faxina possível.
-   *
-   * Escopo: só GOZAP — delega inteiramente a GozapInstancesService.remove
-   * (que valida `channel.provider === 'GOZAP'` e lança InstanceNotFoundError
-   * caso contrário). TWILIO/ZERNIO/META não têm limpeza externa e continuam
-   * sem rota própria de remoção; isso fica para quando precisarem de uma.
+   * Remove um número de provedor desligado (R6, só ADMIN): inativa, solta as
+   * áreas e falha as mensagens paradas dele, tudo local, sem chamar o provedor.
+   * Número Evolution dá 422 `channel.not_disabled`: ele sai pelo menu da conexão.
    */
   @Roles('ADMIN')
   @Delete('channels/:id')
-  async removeChannel(@Param('id') id: string): Promise<void> {
-    await this.gozapInstances.remove(id);
+  @HttpCode(204)
+  async removeChannel(
+    @Param('id') id: string,
+    @Req() req: AuthRequest,
+  ): Promise<void> {
+    await this.disabledChannels.remove({
+      channelId: id,
+      actorId: req.user.sub,
+    });
   }
 }

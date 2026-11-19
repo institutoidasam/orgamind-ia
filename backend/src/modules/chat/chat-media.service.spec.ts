@@ -7,6 +7,7 @@ import { ChatEventsService } from './chat-events.service';
 import { WhatsappProvidersService } from '../whatsapp-providers/whatsapp-providers.service';
 import type { MediaStore } from '../../shared/media/media-store.port';
 import { NotFoundError, ConflictError } from '../../shared/errors/domain.error';
+import { ChannelProviderDisabledError } from '../../shared/errors/channel-provider-disabled.error';
 
 describe('ChatMediaService.getReadyMedia', () => {
   let prisma: MockProxy<PrismaService>; let store: MockProxy<MediaStore>;
@@ -33,5 +34,72 @@ describe('ChatMediaService.getReadyMedia', () => {
     expect(store.getStream).toHaveBeenCalledWith('conv/c/m.jpg');
     expect(r.mimeType).toBe('image/jpeg');
     expect(r.stream).toBe('STREAM');
+  });
+});
+const file = {
+  buffer: Buffer.from('x'),
+  mimetype: 'image/png',
+  originalname: 'a.png',
+  size: 1,
+} as Express.Multer.File;
+
+const convOf = (provider: 'GOZAP' | 'EVOLUTION') => ({
+  id: 'c1',
+  instanceId: 'i1',
+  contactId: 'ct1',
+  phoneE164: '+5511999990000',
+  remoteJid: null,
+  instance: {
+    id: 'i1',
+    provider,
+    evolutionInstanceName: provider === 'EVOLUTION' ? 'evo-1' : null,
+  },
+});
+
+describe('ChatMediaService.sendMediaReply — guard de provedor desligado', () => {
+  let store: MockProxy<MediaStore>;
+  let repo: MockProxy<ChatRepository>;
+  let wa: MockProxy<WhatsappProvidersService>;
+  let svc: ChatMediaService;
+  beforeEach(() => {
+    store = mockDeep<MediaStore>();
+    repo = mockDeep<ChatRepository>();
+    wa = mockDeep<WhatsappProvidersService>();
+    svc = new ChatMediaService(
+      mockDeep<PrismaService>(),
+      store,
+      repo,
+      mockDeep<ChatEventsService>(),
+      wa,
+    );
+  });
+
+  it('conversa de canal GoZap: 409 channel.provider_disabled antes de gravar arquivo ou mensagem', async () => {
+    repo.getConversationForSend.mockResolvedValue(convOf('GOZAP') as never);
+    const err: unknown = await svc
+      .sendMediaReply('c1', 'u1', file)
+      .catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ChannelProviderDisabledError);
+    expect(err).toMatchObject({
+      code: 'channel.provider_disabled',
+      status: 409,
+    });
+    expect(store.put.mock.calls).toHaveLength(0);
+    expect(repo.createOutboundMediaMessage.mock.calls).toHaveLength(0);
+    expect(wa.sendMedia.mock.calls).toHaveLength(0);
+  });
+
+  it('conversa de canal Evolution segue o caminho atual: grava, cria a mensagem e envia', async () => {
+    repo.getConversationForSend.mockResolvedValue(convOf('EVOLUTION') as never);
+    repo.createOutboundMediaMessage.mockResolvedValue('m1');
+    wa.sendMedia.mockResolvedValue({
+      providerMessageId: 'wa1',
+      acceptedAt: new Date(),
+    });
+    repo.getMessageById.mockResolvedValue({ id: 'm1' } as never);
+    await svc.sendMediaReply('c1', 'u1', file);
+    expect(store.put.mock.calls).toHaveLength(1);
+    expect(repo.createOutboundMediaMessage.mock.calls).toHaveLength(1);
+    expect(wa.sendMedia.mock.calls).toHaveLength(1);
   });
 });

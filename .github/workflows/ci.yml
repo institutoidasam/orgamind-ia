@@ -34,8 +34,9 @@ jobs:
       REDIS_HOST: localhost
       REDIS_PORT: 6379
       JWT_SECRET: ci-test-secret-with-at-least-32-chars!!
-      # Mirror production, which runs on the Evolution provider. Env validation
-      # fails fast at boot without a fully-configured provider group (schema
+      # Mirror production, which runs only on the Evolution provider (Meta,
+      # Twilio, Zernio and GoZap are switched off since 2026-11). Env validation
+      # fails fast at boot without the full Evolution group (schema
       # superRefine), and ConfigModule validates eagerly at module-definition
       # time, so even importing AppModule/WorkerModule needs them. Dummy
       # values — no real Evolution server is contacted by the unit/integration
@@ -43,13 +44,6 @@ jobs:
       EVOLUTION_BASE_URL: http://localhost:8080
       EVOLUTION_API_KEY: ci-test-evolution-key
       EVOLUTION_INSTANCE_NAME: ci-test-instance
-      # GOZAP_* is an all-or-nothing group too (env.schema superRefine); dummy
-      # values here so any test that exercises GoZap registration/env parsing
-      # sees a complete group. No real GoZap host is contacted.
-      GOZAP_BASE_URL: https://dummy.gozap.dev
-      GOZAP_ADMIN_TOKEN: dummy
-      GOZAP_WEBHOOK_TOKEN: dummy
-      GOZAP_TOKEN_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
       APP_BASE_URL: http://localhost:5173
       WEBHOOK_BASE_URL: http://localhost:3000
       CORS_ORIGIN: http://localhost:5173

@@ -90,7 +90,7 @@ describe('Setores BDD (Postgres exclusivo)', () => {
       prisma.channel.create({
         data: {
           name: 'Compras Zap',
-          provider: 'GOZAP',
+          provider: 'EVOLUTION',
           phoneE164: '+5592999990001',
           isActive: true,
           sectors: { connect: { id: created.id } },

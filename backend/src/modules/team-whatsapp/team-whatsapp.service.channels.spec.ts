@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LiveState } from '../whatsapp-providers/channel-live-state.service';
 import type { ScheduleExceptionInput } from '../staff-schedule/schedule-resolver';
 import { createTeamDispatchSchema } from './dto/create-team-dispatch.dto';
+import { effectiveChannel, type SectorChannelRow } from './sector-channel';
 import {
   ADMIN,
   SHIFT_FIRST,
@@ -211,6 +212,64 @@ describe('área sem número trava o envio inteiro (422, GC7)', () => {
       h.service.dispatch(ADMIN.id, input),
       'team_whatsapp.sector_without_number',
     );
+  });
+});
+
+const rawChannel = (
+  provider: SectorChannelRow['provider'],
+): SectorChannelRow => ({
+  id: `raw-${provider}`,
+  name: `Canal ${provider}`,
+  phoneE164: '+559233334444',
+  provider,
+  isActive: true,
+});
+// O canal chega como o banco o guarda e passa pela regra real do número efetivo.
+const givenRawChannels = (byArea: Record<string, SectorChannelRow>) => {
+  h.repo.findSectorChannels.mockImplementation((ids) =>
+    Promise.resolve(
+      new Map(
+        ids.map((id) => {
+          const ref = effectiveChannel(byArea[id] ?? null);
+          return [id, ref && { ...ref, evolutionInstanceName: null }];
+        }),
+      ),
+    ),
+  );
+  givenLive(h);
+};
+
+describe('canal de provedor desligado = área sem número (R10)', () => {
+  it('prévia com área ligada a canal GOZAP ativo → sem número (channel null) e nenhuma consulta ao provedor', async () => {
+    givenRawChannels({
+      log: rawChannel('GOZAP'),
+      exp: rawChannel('EVOLUTION'),
+    });
+    const out = await h.service.roster(ADMIN.id, {
+      sectorIds: ['log', 'exp'],
+      date: DATE,
+    });
+    expect(out.sectors.map((s) => [s.sectorId, s.channel?.id ?? null])).toEqual(
+      [
+        ['exp', 'raw-EVOLUTION'],
+        ['log', null],
+      ],
+    );
+    expect(h.live.checkMany.mock.calls[0][0].map((c) => c.id)).toEqual([
+      'raw-EVOLUTION',
+    ]);
+  });
+
+  it('POST com área ligada a canal GOZAP ativo → 422 team_whatsapp.sector_without_number e nada é gravado', async () => {
+    givenRawChannels({
+      log: rawChannel('GOZAP'),
+      exp: rawChannel('EVOLUTION'),
+    });
+    await refused(
+      h.service.dispatch(ADMIN.id, toSectors()),
+      'team_whatsapp.sector_without_number',
+    );
+    expect(h.live.checkMany.mock.calls).toHaveLength(0);
   });
 });
 

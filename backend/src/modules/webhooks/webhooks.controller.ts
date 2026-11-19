@@ -1,13 +1,12 @@
 import {
   Body,
   Controller,
-  Get,
   Headers,
   HttpCode,
   HttpStatus,
   Logger,
+  NotFoundException,
   Post,
-  Query,
   Req,
 } from '@nestjs/common';
 import type { RawBodyRequest } from '@nestjs/common';
@@ -37,11 +36,22 @@ function timingSafeStrEqual(a: string, b: string): boolean {
 }
 
 /**
- * Detect which provider's shape a `/webhooks/whatsapp` payload matches — instead
- * of trusting the env-selected `this.wa.providerName`, which is a single global
- * value and breaks the moment a deploy runs BOTH an Evolution and a Meta channel
- * at once (each inbound webhook must be parsed with the adapter matching its OWN
- * shape, not whichever provider happens to be "the" legacy active one).
+ * `true` only when `candidate` is a non-empty string equal (constant-time) to a
+ * configured `expected` string. Anything else (missing, non-string, empty,
+ * different) is a non-match.
+ */
+function matchesExpectedApikey(candidate: unknown, expected: unknown): boolean {
+  return (
+    typeof expected === 'string' &&
+    typeof candidate === 'string' &&
+    candidate.length > 0 &&
+    timingSafeStrEqual(candidate, expected)
+  );
+}
+
+/**
+ * Detect which provider's shape a `/webhooks/whatsapp` payload matches. Only
+ * Evolution is enabled, so Meta is detected solely to be rejected with 404.
  *  - Meta Cloud API envelopes always carry `object: 'whatsapp_business_account'`.
  *  - Evolution envelopes always carry a string `event`
  *    (e.g. 'messages.upsert', 'connection.update', 'qrcode.updated'); `instance`
@@ -91,7 +101,7 @@ export class WebhooksController {
    * route.
    */
   private async auditRejection(
-    action: 'webhook.signature_invalid' | 'webhook.apikey_invalid',
+    action: 'webhook.apikey_invalid',
     req: RawBodyRequest<Request>,
   ): Promise<void> {
     const ip = req.ip ?? 'unknown';
@@ -117,14 +127,38 @@ export class WebhooksController {
     });
   }
 
-  @Public()
-  @Get()
-  verify(
-    @Query('hub.mode') mode: string,
-    @Query('hub.verify_token') token: string,
-    @Query('hub.challenge') challenge: string,
-  ): string {
-    return this.webhooks.verifyChallenge(mode, token, challenge);
+  /**
+   * Evolution doesn't sign — instead we accept the same APIKEY we use to call
+   * Evolution, which the operator can configure as the webhook's header in the
+   * Evolution UI. Without this guard the endpoint is `@Public()` +
+   * `@SkipThrottle()`, so anyone reachable on the network could trigger
+   * opt-outs and status writes.
+   */
+  private async assertEvolutionApikey(
+    req: RawBodyRequest<Request>,
+    apikey: string | undefined,
+    body: unknown,
+  ): Promise<void> {
+    const expected = this.config.get('EVOLUTION_API_KEY', { infer: true });
+    // Evolution v2 echoes a per-instance HASH (not the global key) in
+    // `body.apikey`. We configure the webhook with custom `headers.apikey`
+    // set to OUR global EVOLUTION_API_KEY (see EvolutionApiAdapter
+    // .ensureWebhookConfigured), so the header is the credential we trust.
+    // Body falls back ONLY if it happens to match — stock containers without
+    // custom headers won't be authorised, which is the correct security
+    // posture: the operator must re-arm the webhook (POST /whatsapp/connection/restart).
+    const bodyApikey = (body as { apikey?: unknown } | null)?.apikey;
+    // Constant-time compare (timingSafeStrEqual) instead of `===` — the apikey
+    // is a credential, so we don't want to leak how many leading bytes matched.
+    const headerOk = matchesExpectedApikey(apikey, expected);
+    const bodyOk = matchesExpectedApikey(bodyApikey, expected);
+    if (!expected || !(headerOk || bodyOk)) {
+      await this.auditRejection('webhook.apikey_invalid', req);
+      throw new UnauthorizedError(
+        'Invalid webhook apikey',
+        'webhook.invalid_apikey',
+      );
+    }
   }
 
   @Public()
@@ -132,7 +166,6 @@ export class WebhooksController {
   @HttpCode(HttpStatus.OK)
   async receive(
     @Req() req: RawBodyRequest<Request>,
-    @Headers('x-hub-signature-256') signature: string,
     @Headers('apikey') apikey: string | undefined,
     @Body() body: unknown,
   ) {
@@ -141,63 +174,20 @@ export class WebhooksController {
     this.logger.log(
       `Webhook received provider=${provider ?? 'unknown'} event=${eventType ?? '?'} correlationId=${req.headers['x-request-id']}`,
     );
-    if (eventType === 'qrcode.updated' || eventType === 'connection.update') {
-      // Surface raw payload only for connection-lifecycle events to debug QR flow
-      this.logger.log(
-        `[diag] ${eventType} body=${JSON.stringify(body).slice(0, 1500)}`,
-      );
+    if (provider === 'META') {
+      // Webhook da Meta deixou de ser suportado (só Evolution está ligada, R5).
+      // 404 ANTES de qualquer checagem de assinatura ou auditoria: a rota é
+      // pública, então uma rejeição auditada aqui seria amplificação de escrita.
+      throw new NotFoundException();
     }
-
     if (provider === undefined) {
-      // Neither Evolution nor Meta shape — don't 500 trying to parse it, and
+      // Not an Evolution shape — don't 500 trying to parse it, and
       // don't process it either. Just ack so nothing retries forever.
       this.logger.warn('webhook payload format not recognized, ignoring');
       return { ok: true };
     }
 
-    // Meta signs payloads with HMAC-SHA256. Evolution doesn't sign — instead
-    // we accept the same APIKEY we use to call Evolution, which the operator
-    // can configure as the webhook's Authorization header in the Evolution UI.
-    // Without this guard the endpoint is `@Public()` + `@SkipThrottle()`, so
-    // anyone reachable on the network could trigger opt-outs and status writes.
-    if (provider === 'META') {
-      if (!req.rawBody || !this.webhooks.verifySignature(req.rawBody, signature)) {
-        await this.auditRejection('webhook.signature_invalid', req);
-        throw new UnauthorizedError(
-          'Invalid webhook signature',
-          'webhook.invalid_signature',
-        );
-      }
-    } else if (provider === 'EVOLUTION') {
-      const expected = this.config.get('EVOLUTION_API_KEY', { infer: true });
-      // Evolution v2 echoes a per-instance HASH (not the global key) in
-      // `body.apikey`. We configure the webhook with custom `headers.apikey`
-      // set to OUR global EVOLUTION_API_KEY (see EvolutionApiAdapter
-      // .ensureWebhookConfigured), so the header is the credential we trust.
-      // Body falls back ONLY if it happens to match — stock containers without
-      // custom headers won't be authorised, which is the correct security
-      // posture: the operator must re-arm the webhook (POST /whatsapp/connection/restart).
-      const bodyApikey = (body as { apikey?: unknown } | null)?.apikey;
-      // Constant-time compare (timingSafeStrEqual) instead of `===` — the apikey
-      // is a credential, so we don't want to leak how many leading bytes matched.
-      const headerOk =
-        typeof expected === 'string' &&
-        typeof apikey === 'string' &&
-        apikey.length > 0 &&
-        timingSafeStrEqual(apikey, expected);
-      const bodyOk =
-        typeof expected === 'string' &&
-        typeof bodyApikey === 'string' &&
-        bodyApikey.length > 0 &&
-        timingSafeStrEqual(bodyApikey, expected);
-      if (!expected || !(headerOk || bodyOk)) {
-        await this.auditRejection('webhook.apikey_invalid', req);
-        throw new UnauthorizedError(
-          'Invalid webhook apikey',
-          'webhook.invalid_apikey',
-        );
-      }
-    }
+    await this.assertEvolutionApikey(req, apikey, body);
 
     // Resolve instance by Evolution instance name from the payload.
     // Evolution sends instanceName inside body.instance.instanceName (object form)
@@ -205,6 +195,18 @@ export class WebhooksController {
     const evoName =
       (body as any)?.instance?.instanceName as string | undefined
       ?? (typeof (body as any)?.instance === 'string' ? (body as any).instance : undefined);
+
+    if (eventType === 'qrcode.updated' || eventType === 'connection.update') {
+      // Diagnóstico só depois da autenticação e sem o body: apikey e QR são segredo.
+      const data = (
+        body as {
+          data?: { state?: string; statusReason?: string | number };
+        } | null
+      )?.data;
+      this.logger.log(
+        `Evolution connection event event=${eventType} instance=${evoName ?? '?'} state=${data?.state ?? '?'} statusReason=${data?.statusReason ?? '?'}`,
+      );
+    }
 
     let instanceId: string | undefined;
     if (evoName) {

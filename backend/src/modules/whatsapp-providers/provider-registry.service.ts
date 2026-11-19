@@ -1,11 +1,13 @@
 import type { Channel, ChannelProvider } from '@prisma/client';
 import type { MessageProvider } from './ports/message-provider.port';
 import { DomainError } from '../../shared/errors/domain.error';
+import { ChannelProviderDisabledError } from '../../shared/errors/channel-provider-disabled.error';
+import { isEnabledChannelProvider } from '../../shared/config/enabled-providers';
 
 /**
- * Raised when code tries to resolve an adapter for a provider whose credential
- * group is not configured in the environment (e.g. a Twilio channel routed on a
- * deploy that only has the Evolution env group). PT-BR user-facing message.
+ * Raised when code tries to resolve an adapter for an ENABLED provider that has
+ * no adapter in the registry. (Provider desligado lança
+ * `ChannelProviderDisabledError`, não este.) PT-BR user-facing message.
  */
 export class ProviderNotConfiguredError extends DomainError {
   constructor(provider: ChannelProvider) {
@@ -19,13 +21,14 @@ export class ProviderNotConfiguredError extends DomainError {
 }
 
 /**
- * Multi-provider adapter registry. Holds ONE adapter instance per configured
- * provider (the module factory only registers the providers whose env group is
- * complete — see `configuredProviderGroups` in env.schema + the module).
+ * Adapter registry. Só a Evolution está ligada (`ENABLED_CHANNEL_PROVIDERS`):
+ * a fábrica do módulo registra apenas o adapter dela e, por defesa em
+ * profundidade, o registry também nunca entrega adapter de provedor desligado,
+ * mesmo que algum chegue ao mapa.
  *
- * This replaces the old single-`MESSAGE_PROVIDER`-per-boot model: callers now
- * resolve the adapter that matches a channel's `provider`, so one deploy can
- * serve Evolution, Twilio and Meta channels side by side.
+ * Quem resolve o adapter pelo `provider` do canal usa `forChannel`; canal de
+ * provedor desligado lança `ChannelProviderDisabledError` (409), o que cobre
+ * todo envio síncrono (D2).
  */
 export class ProviderRegistry {
   constructor(
@@ -33,11 +36,15 @@ export class ProviderRegistry {
   ) {}
 
   /**
-   * Resolve the adapter for a channel by its `provider`. Throws a 400
-   * DomainError (`channel.provider_not_configured`) when that provider's env
-   * group is not configured on this deploy.
+   * Resolve the adapter for a channel by its `provider`. Throws a 409
+   * `ChannelProviderDisabledError` (`channel.provider_disabled`) for a disabled
+   * provider, and a 400 `ProviderNotConfiguredError` when the provider is
+   * enabled but has no adapter in this registry.
    */
   forChannel(ch: Pick<Channel, 'provider'>): MessageProvider {
+    if (!isEnabledChannelProvider(ch.provider)) {
+      throw new ChannelProviderDisabledError(ch.provider);
+    }
     const adapter = this.adapters.get(ch.provider);
     if (!adapter) {
       throw new ProviderNotConfiguredError(ch.provider);
@@ -45,18 +52,19 @@ export class ProviderRegistry {
     return adapter;
   }
 
-  /** Resolve an adapter by provider, or `null` when it isn't configured. */
+  /** Resolve an adapter by provider, or `null` when disabled / not configured. */
   forProvider(provider: ChannelProvider): MessageProvider | null {
+    if (!isEnabledChannelProvider(provider)) return null;
     return this.adapters.get(provider) ?? null;
   }
 
-  /** The providers that have a configured adapter, in insertion order. */
+  /** The enabled providers that have an adapter, in insertion order. */
   configured(): ChannelProvider[] {
-    return [...this.adapters.keys()];
+    return [...this.adapters.keys()].filter(isEnabledChannelProvider);
   }
 
-  /** Whether a given provider has a configured adapter. */
+  /** Whether a given provider is enabled and has an adapter. */
   isConfigured(provider: ChannelProvider): boolean {
-    return this.adapters.has(provider);
+    return this.forProvider(provider) !== null;
   }
 }

@@ -1,7 +1,19 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { mockDeep, type MockProxy } from 'vitest-mock-extended';
+import {
+  mockDeep,
+  type MockProxy,
+  type DeepMockProxy,
+} from 'vitest-mock-extended';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { ReconnectReplayService } from './reconnect-replay.service';
+
+/** svc + Prisma/queue mocks for the sweepParked specs (no shared state between tests). */
+function sweepHarness() {
+  const prisma = mockDeep<PrismaService>();
+  const queue = { add: vi.fn() };
+  const svc = new ReconnectReplayService(prisma, queue as never);
+  return { svc, prisma, queue };
+}
 
 describe('ReconnectReplayService', () => {
   let svc: ReconnectReplayService;
@@ -276,7 +288,7 @@ describe('ReconnectReplayService — adoção de mensagens órfãs', () => {
  */
 describe('ReconnectReplayService — varredura das paradas (message-side)', () => {
   let svc: ReconnectReplayService;
-  let prisma: MockProxy<PrismaService>;
+  let prisma: DeepMockProxy<PrismaService>;
   let queue: { add: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
@@ -303,7 +315,7 @@ describe('ReconnectReplayService — varredura das paradas (message-side)', () =
     prisma.message.findMany.mockResolvedValue([
       { id: 'm1', campaignId: 'c1', contactId: 'co1' },
     ] as never);
-    prisma.message.updateMany.mockResolvedValue({ count: 1 } as never);
+    prisma.message.updateMany.mockResolvedValue({ count: 1 });
     prisma.channel.findMany.mockResolvedValue([] as never);
 
     await svc.sweepParked();
@@ -318,7 +330,7 @@ describe('ReconnectReplayService — varredura das paradas (message-side)', () =
     prisma.channel.findUnique.mockResolvedValue({
       id: 'ch-off',
       name: 'robo',
-      provider: 'GOZAP',
+      provider: 'EVOLUTION',
       isActive: true,
       phoneE164: '+55929',
     } as never);
@@ -378,5 +390,35 @@ describe('ReconnectReplayService — varredura das paradas (message-side)', () =
     await svc.sweepParked();
 
     expect(prisma.channel.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+describe('ReconnectReplayService — varredura das paradas: provedor desligado', () => {
+  it('sweepParked solta WAITING_INSTANCE de canal GOZAP ativo mesmo com último evento close', async () => {
+    const { svc, prisma, queue } = sweepHarness();
+    prisma.message.groupBy.mockResolvedValue([
+      { instanceId: 'ch-gozap', _count: { _all: 4 } },
+    ] as never);
+    prisma.channel.findUnique.mockResolvedValue({
+      id: 'ch-gozap',
+      name: 'robo',
+      provider: 'GOZAP',
+      isActive: true,
+      phoneE164: '+55929',
+    } as never);
+    prisma.whatsappConnectionEvent.findFirst.mockResolvedValue({
+      state: 'close',
+    } as never);
+    prisma.message.findMany.mockResolvedValue([
+      { id: 'm1', campaignId: 'c1', contactId: 'co1' },
+    ] as never);
+    prisma.message.updateMany.mockResolvedValue({ count: 1 });
+    prisma.channel.findMany.mockResolvedValue([] as never);
+
+    await svc.sweepParked();
+
+    // Provedor desligado pula o gate: a parada é solta e o processor a falha.
+    expect(prisma.whatsappConnectionEvent.findFirst.mock.calls).toHaveLength(0);
+    expect(queue.add).toHaveBeenCalled();
   });
 });

@@ -428,7 +428,7 @@ const GBR = {
   id: 'ch-gbr',
   name: 'GBR',
   phoneE164: '+5592999991111',
-  provider: 'GOZAP' as const,
+  provider: 'EVOLUTION' as const,
   evolutionInstanceName: null,
 };
 const OBSERVED_AT = new Date('2026-10-21T15:00:00.000Z');
@@ -454,7 +454,7 @@ const GBR_PREVIEW = {
   id: GBR.id,
   name: 'GBR',
   phoneE164: GBR.phoneE164,
-  provider: 'GOZAP',
+  provider: 'EVOLUTION',
   live: { state: 'open', checkedAt: OBSERVED_AT.toISOString() },
 };
 
@@ -485,7 +485,7 @@ describe('roster — número de cada área (C2)', () => {
     givenChannels({ [LOG]: GBR, [EXP]: GBR });
     const out = await channelsOf([LOG, EXP, PROD]);
     expect(h.live.checkMany.mock.calls).toEqual([
-      [[{ id: GBR.id, provider: 'GOZAP', evolutionInstanceName: null }]],
+      [[{ id: GBR.id, provider: 'EVOLUTION', evolutionInstanceName: null }]],
     ]);
     expect(out.map(([id, c]) => [id, c?.id ?? null])).toEqual([
       [EXP, GBR.id],

@@ -6,7 +6,7 @@
 git clone <repo>
 cd orgamind
 cp .env.example .env
-# Edit .env: set DOMAIN, ACME_EMAIL, JWT_SECRET, META_*, BULL_BOARD_*
+# Edit .env: set DOMAIN, ACME_EMAIL, JWT_SECRET, EVOLUTION_*, BULL_BOARD_*
 docker compose up -d --build
 # Caddy obtains TLS cert automatically; first start may take ~30s
 ```
@@ -31,9 +31,7 @@ docker compose run --rm migrate
 
 ### Manual webhook replay
 
-If you suspect a Meta webhook was missed, re-process the original payload (saved in Sentry/logs) by re-POSTing it to `/webhooks/whatsapp` with a valid HMAC signature.
-
-For HMAC: `echo -n '<body>' | openssl dgst -sha256 -hmac "$META_APP_SECRET"` → prepend `sha256=` and put it in the `X-Hub-Signature-256` header.
+If you suspect an Evolution webhook was missed, re-process the original payload (saved in Sentry/logs) by re-POSTing it to `/webhooks/whatsapp` with the `apikey` header set to `EVOLUTION_API_KEY` (the same header the worker arms on the instance; see "Evolution: versão fixa e troca de versão"). A wrong key is rejected and audited as `webhook.apikey_invalid`.
 
 ### Clear stuck BullMQ jobs
 
@@ -67,90 +65,11 @@ docker compose restart api worker
 
 ### Rotate Meta token
 
-Update `META_ACCESS_TOKEN` in `.env`, then `docker compose restart api worker`.
-
-The token expiry monitor (BullMQ daily job) logs warnings starting 7 days before expiry. Watch for log entries `Meta token expires soon`.
+Desligado em 2026-11; código inativo no repositório.
 
 ### Webhook do GoZap: tirar o segredo da URL
 
-**Por quê.** O GoZap não assina o corpo do webhook: a única defesa de
-`/api/webhooks/gozap` é `GOZAP_WEBHOOK_TOKEN`. Ele nasceu viajando na URL
-(`?t=<segredo>`), e URL vai inteira para o access log de todo proxy no caminho
-— foram encontradas 74 linhas de access log de produção em 52h com o segredo em
-texto claro. Quem lê log de contêiner (a API do Dokploy, por exemplo) passa a
-poder forjar ack de entrega e opt-out de eleitor.
-
-**Estado.** O receptor aceita o segredo por **cabeçalho** (`X-Webhook-Token:
-<segredo>` ou `Authorization: Bearer <segredo>`) **e**, por compatibilidade,
-pela query. As duas formas passam pela mesma comparação em tempo constante.
-Esses **dois nomes de cabeçalho, e só eles**, são apagados do log da aplicação
-(lista `LOG_REDACT_PATHS` em `backend/src/app.module.ts`); um terceiro nome
-qualquer configurado no painel apareceria em texto claro no log da `api`, que é
-o log que o Dokploy expõe.
-
-O nginx já não grava a query de `/api/webhooks/` no access log **nem** a linha
-de requisição no error log (as mensagens de nível `error` desta rota são
-suprimidas; o motivo de um 502 continua sendo logado pela `location /api/`, que
-usa o mesmo upstream). Isso protege só o nosso proxy: enquanto o painel do GoZap
-mandar o segredo na URL, ele atravessa a internet dentro dela e fica no log de
-qualquer CDN/proxy antes do nosso — **por isso a rotação do segredo (passo 1) é
-obrigatória, não opcional**.
-
-Enquanto a query estiver em uso, o log da `api` traz, no máximo 1×/hora:
-`gozap webhook: autenticado pelo segredo na query string (caminho legado)`.
-Quando esse aviso some por 24h, a migração acabou.
-
-**Migração (nesta ordem — fora dela o canal para de receber ack/opt-out em
-silêncio):**
-
-1. Gere um segredo novo — o atual está em log de contêiner há tempo
-   indeterminado e deve ser considerado comprometido:
-   `openssl rand -hex 24`
-2. No painel do GoZap, edite o webhook da instância: URL **sem** `?t=`
-   (`https://SEU-DOMINIO/api/webhooks/gozap`) e um cabeçalho customizado
-   `X-Webhook-Token: <segredo novo>`. Se o painel não aceitar cabeçalho
-   customizado mas aceitar `Authorization`, use `Bearer <segredo novo>`.
-3. Só então troque `GOZAP_WEBHOOK_TOKEN` no ambiente e **redeploy** (mudança de
-   env no Dokploy não chega ao contêiner sem redeploy).
-4. Confirme entrada real: um evento novo tem de aparecer no log da `api` sem
-   `webhook rejected: bad token`. A auditoria (`webhook.apikey_invalid`) grava
-   `sentHeaderToken` / `sentQueryToken` — é assim que se distingue "painel
-   configurado com o cabeçalho errado" de "alguém batendo na porta".
-5. Depois de 24h sem o aviso do caminho legado, feche a porta: defina
-   `GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN=false` **em Environment no Dokploy** e
-   **redeploy** (não basta salvar: env nova só chega ao contêiner no deploy
-   seguinte). Aceita `false`, `0`, `no` ou `off`, em qualquer caixa; qualquer
-   outro valor — inclusive vazio — significa LIGADO.
-   **Confirme que fechou mesmo**, porque o desligamento não tem log próprio:
-
-   ```bash
-   curl -s -o /dev/null -w '%{http_code}\n' -X POST \
-     -H 'Content-Type: application/json' -d '{}' \
-     'https://SEU-DOMINIO/api/webhooks/gozap?t=<segredo novo>'   # tem de dar 401
-   curl -s -o /dev/null -w '%{http_code}\n' -X POST \
-     -H 'Content-Type: application/json' -H 'X-Webhook-Token: <segredo novo>' \
-     -d '{}' 'https://SEU-DOMINIO/api/webhooks/gozap'            # tem de dar 200
-   ```
-
-   Se o primeiro comando devolver 200, a var **não chegou ao contêiner** — foi o
-   que já aconteceu com `GOZAP_WEBHOOK_DEBUG`. Confira se ela está listada no
-   `environment:` dos serviços `api` e `worker` em `docker-compose.prod.yml`
-   (há teste automático disso em `backend/src/shared/config/env.schema.spec.ts`).
-
-Se o painel do GoZap **não** aceitar cabeçalho nenhum, pare no passo 3: rotacione
-o segredo e mantenha `GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN` ligado. O vazamento pelos
-nossos logs já está fechado; o que sobra é a URL guardada no SaaS.
-
-> **Re-pareamento de canal.** Criar ou re-parear um canal GoZap pela UI
-> **substitui a lista inteira de webhooks** da instância pela que o backend
-> monta — apagando o que estiver configurado à mão no painel. O que o backend
-> registra depende do mesmo interruptor: com a compat LIGADA, a URL vai com
-> `?t=`; DESLIGADA, a URL vai limpa e o segredo vai no cabeçalho
-> `X-Webhook-Token`. Como o campo `headers` do `POST /webhook` não é
-> documentado pelo GoZap, **depois de todo re-pareamento com a compat
-> desligada, repita a confirmação do passo 4** — se a entrada parar, reative a
-> compat (`GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN` sem valor) e redeploy para voltar
-> ao estado que funciona.
+Desligado em 2026-11; código inativo no repositório. O webhook do GoZap responde 404 e nenhuma env dele é encaminhada ao contêiner. A `location /api/webhooks/` do `frontend/nginx.conf` continua, porque também serve o `POST /webhooks/whatsapp` da Evolution.
 
 ### Scale workers
 
@@ -354,9 +273,9 @@ código anterior — é o estado seguro. Vá para as seções de falha abaixo.
 # (a) nginx → api → postgres (o /health puro não prova isto)
 curl -s https://<domain>/api/health/ready            # 200 + "database":"up"
 
-# (b) o artefato NOVO está no ar? esta rota só existe nesta versão:
-curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer <token ADMIN>" \
-  https://<domain>/api/whatsapp/zernio/indeterminate-deliveries   # 200 = versão nova, 404 = velha
+# (b) o artefato NOVO está no ar? A rota usada aqui no deploy de 2026-08 era a do
+# Zernio, que está desligada desde 2026-11 (404 em qualquer versão) e não prova
+# mais nada. Confira a versão pelo SHA da imagem no Dokploy → Deployments.
 ```
 
 ### PASSO 5 — conferir o dado depois
@@ -468,15 +387,65 @@ a fusão de contatos (linhas de `Contact` apagadas). Para o primeiro há a tabel
 `_message_dup_neutralized_20260819` (ver acima). Para o segundo, só o snapshot do
 PASSO 0.
 
+## Evolution: versão fixa e troca de versão
+
+Só a Evolution está ligada (`ENABLED_CHANNEL_PROVIDERS`). A imagem, o teto de memória, o webhook e a remoção de conexão têm as regras abaixo.
+
+### Versão fixa (troca de digest)
+
+- `docker-compose.prod.yml` e `docker-compose.dev.yml` usam a mesma imagem, fixa por digest e sem nenhum `latest`: `evoapicloud/evolution-api@sha256:966625532d9076a2381e973a271307d107e6f070450de3abeeea8bd18be07252`.
+- É a Evolution 2.3.7 (Baileys 7.0.0-rc.9, Node 24.15), build de 2026-05-06. Trocar pela 2.3.8 quando publicada (correção de segurança #2435). Não usar a 2.4.0-rc: exige licença.
+- Para trocar:
+  1. Descobrir o digest da tag nova: `docker buildx imagetools inspect evoapicloud/evolution-api:<tag>` (campo `Digest`).
+  2. Trocar o `@sha256:...` nos DOIS composes e atualizar o comentário ao lado (versão, Baileys, data do build).
+  3. Antes do deploy, só leitura: memória livre do host (≥ 2,5 GB), versão atual (`GET /` da Evolution devolve a versão) e instâncias existentes. A Evolution aplica as migrations do banco `evolution` no boot: tire um `pg_dump` desse banco antes, porque voltar a um digest mais antigo depois de uma migration nova pode não subir.
+  4. Deploy do compose. As sessões ficam no volume `evolution_instances` e no banco `evolution`; depois do deploy, conferir que cada conexão volta a "Conectado" e que o log do worker mostra, no máximo, `warn` "Evolution: webhook re-armado" (seção abaixo).
+  5. Reverter = voltar o digest anterior nos dois composes e redeployar.
+
+### Memória (`mem_limit` e `NODE_OPTIONS`)
+
+- Só no serviço `evolution-api` de produção: `mem_limit: 1g` e `NODE_OPTIONS: --max-old-space-size=768`. Nenhum outro serviço recebe `NODE_OPTIONS`.
+- Por quê: o host tem 8 GB sem swap, dividido com outros serviços, e o Baileys 7.0.0-rc.9 vaza memória. O heap de 768 MB fica abaixo do teto de 1 GB para o GC agir antes de o kernel matar o contêiner.
+- Sinal de que o teto foi atingido: o contêiner reinicia (`docker inspect -f '{{.State.OOMKilled}}' <contêiner>` devolve `true`) e as conexões caem e voltam. Não suba o teto sem conferir a memória livre do host; o build da stack exige ≥ 2,5 GB livres.
+- A Evolution continua sem porta e sem domínio público: só os contêineres do compose falam com ela (`http://evolution-api:8080`).
+
+### Webhook sempre armado
+
+- O worker confere o webhook de cada canal Evolution ativo no boot (primeiro ciclo do reconciliador de conexão) e a cada ciclo, no máximo uma vez a cada 10 min por canal.
+- A conferência faz `GET /webhook/find/{instância}`. Se `enabled`, `url`, a lista de `events` ou `headers.apikey` divergirem do esperado, faz `POST /webhook/set/{instância}` e loga um `warn` "Evolution: webhook re-armado" com a instância e os campos divergentes, nunca a chave.
+- Falha da Evolution nessa conferência só é logada ("Evolution: falha ao conferir o webhook") e não derruba o ciclo nem o reconcile de estado.
+- Se o `warn` de re-arme aparecer a cada 10 min para a mesma instância, o `find` não está devolvendo o que o `set` grava (re-arme em laço): não é preciso mexer na instância; abra um chamado com a resposta de `GET /webhook/find/{instância}` (sem a chave).
+
+### Remover uma conexão apaga a instância
+
+- `DELETE /whatsapp/instances/:id` faz o logout e depois `DELETE /instance/delete/{instância}` na Evolution, em best-effort. Isso libera a sessão pareada.
+- Se a chamada à Evolution falhar, o log traz `warn` "Evolution: instance/delete falhou; conexão removida só no OrgaMind" e o soft-delete acontece do mesmo jeito; a auditoria `instance.delete` registra `evolutionDeleted: false`. A instância sobra na Evolution: apague-a à mão pela API da Evolution (`DELETE /instance/delete/{instância}` com o header `apikey`).
+
+### Virada em produção (só com pedido explícito)
+
+Roteiro da spec `docs/superpowers/specs/2026-11-10-orgamind-somente-evolution.md` §7. **Não executar sem pedido explícito do usuário.**
+
+1. Antes, só leitura:
+   - memória do host ≥ 2,5 GB livres;
+   - versão da Evolution do GBR (`GET /` da Evolution devolve a versão);
+   - instâncias existentes na Evolution do GBR;
+   - canais e áreas: `SELECT s.name, w.name, w.provider FROM "Sector" s LEFT JOIN "WhatsappInstance" w ON w.id = s."channelId" WHERE s."isActive";`
+   - contagem de mensagens `WAITING_INSTANCE` por canal (`groupBy instanceId`): a varredura não desperta paradas de canal GoZap que já estava inativo antes da virada; se houver, levar ao backlog.
+2. Deploy do compose inteiro.
+3. A partir daqui, o envio da equipe para áreas ligadas ao GoZap fica bloqueado e o webhook do GoZap passa a responder 404. Fazer em horário sem escala.
+4. ADMIN em Conexões → nova conexão Evolution com as áreas → QR ou código no celular. O mesmo número do GoZap pode ser pareado como mais um aparelho conectado. Aguardar "Conectado".
+5. Conferir: aviso de áreas vazio; envio de teste para uma pessoa da equipe com status "Entregue".
+6. Esperar uma volta da varredura de mensagens paradas (5 min): o log `paradas:` do GBR zerado. A varredura falha as paradas pelo processor e adota as de canais GoZap inativos do mesmo número. Se "GBR" era a conexão padrão, marcar a conexão Evolution como padrão **antes** de remover "GBR" em "Números desligados". Só depois remover "GBR" ali: as mensagens paradas nele viram falha com `channel.provider_disabled`.
+7. Fora do OrgaMind, por decisão do usuário: apagar a instância "GBR" no painel do GoZap (devolve a vaga ao Picoa).
+
 ## Incident response
 
-### Meta returns 5xx for all sends
+### Sends failing for all channels (Evolution)
 
-1. Check Meta status: https://metastatus.com/whatsapp-business
+1. Check the Evolution container: `docker compose logs --tail 100 evolution-api`; a container reiniciado por falta de memória (`docker inspect -f '{{.State.OOMKilled}}' <container>`) aponta para o teto de `mem_limit` (ver "Evolution: versão fixa e troca de versão").
 2. Open Bull Board → confirm jobs are queued, not running
 3. Tail worker logs: `docker compose logs -f worker`
-4. The MetaCloudAdapter has a circuit breaker (50% failure threshold over a 1-min window) that auto-opens and pauses sends. When OPEN, log line: `Circuit breaker OPEN — Meta sends paused`. Failed jobs are retried with backoff by BullMQ; once the breaker half-opens (30s) and a probe succeeds, sends resume.
-5. If the outage is prolonged, manually pause the queue from a node shell:
+4. Failed jobs are retried with backoff by BullMQ. If the outage is prolonged, manually pause the queue from a node shell:
    ```js
    const { Queue } = require('bullmq');
    const q = new Queue('whatsapp.send-message', { connection: { host: 'redis' } });
@@ -484,9 +453,17 @@ PASSO 0.
    await q.close();
    ```
 
+### Meta returns 5xx for all sends
+
+Desligado em 2026-11; código inativo no repositório.
+
+### Webhook apikey failures spike
+
+The Evolution webhook is authenticated by the `apikey` header (`webhook.apikey_invalid` audit events). Verify `EVOLUTION_API_KEY` is the same in the `api`, `worker` and `evolution-api` services. The worker re-arms the webhook headers on the instance at most every 10 min when they diverge (log `warn` "Evolution: webhook re-armado").
+
 ### Webhook signature failures spike
 
-Verify `META_APP_SECRET` matches the value in Meta Business Manager. If recently rotated on Meta side, re-sync `.env`. The audit log table records every signature failure (`webhook.signature_invalid` events).
+Desligado em 2026-11; código inativo no repositório (era a assinatura HMAC da Meta).
 
 ### Database disk full
 
@@ -519,23 +496,29 @@ ORDER BY "createdAt" DESC;
 
 ## Validação ativa de números (spec B.5)
 
-A validação ativa consulta o WhatsApp número a número (`/chat/check` do GoZap)
-para descobrir quem não tem WhatsApp. **Consulta de existência em massa por um
-cliente NÃO OFICIAL é sinal conhecido de bloqueio** — este cliente já perdeu um
+A validação ativa consulta o WhatsApp número a número (o `/chat/check` era o do
+GoZap, desligado em 2026-11; código inativo no repositório) para descobrir
+quem não tem WhatsApp. **Consulta de existência em massa por um cliente NÃO
+OFICIAL é sinal conhecido de bloqueio** — este cliente já perdeu um
 número por isso. Por decisão de produto, o caminho normal é EXPLÍCITO: o
 operador clica em **"Validar não validados (N)"** depois de ler o aviso de
 risco na tela. Nada valida sozinho.
 
 ### Variáveis de ambiente (serviços `api` **e** `worker`)
 
-Todas precisam estar nos DOIS serviços. Quem executa a validação é o `worker`; o
-`api` valida o mesmo schema no boot, e uma env presente num serviço e ausente
-no outro produz dois processos com crenças diferentes sobre a mesma coisa.
+`GOZAP_CHECK_RATE_PER_MIN` e `GOZAP_MAX_INSTANCES`: desligados em 2026-11 junto
+com o GoZap; o compose não as encaminha mais. O ritmo de 40 consultas por minuto
+era só do GoZap: na Evolution a validação **não tem ritmo próprio** (o adapter não
+lê essa variável). Por isso o clique em "Validar não validados" deve ser usado com
+parcimônia, em lotes pequenos, até existir um limite de ritmo para a Evolution.
+
+A que resta precisa estar nos DOIS serviços. Quem executa a validação é o
+`worker`; o `api` valida o mesmo schema no boot, e uma env presente num serviço
+e ausente no outro produz dois processos com crenças diferentes sobre a mesma
+coisa.
 
 | Variável | Padrão | O que faz |
 | --- | --- | --- |
-| `GOZAP_CHECK_RATE_PER_MIN` | `40` | Ritmo das consultas, por minuto. 40 é lento **de propósito** (1 a cada 1500 ms). Subir aumenta o risco de perder o canal. |
-| `GOZAP_MAX_INSTANCES` | `1` | Não é da validação: é o número de instâncias que o plano do GoZap permite. Antes de criar uma "Nova conexão GoZap", a `api` conta as instâncias da **conta inteira** — inclusive as desconectadas e as de outro sistema que divida a conta (hoje, o Picoa) — e recusa se já chegou neste número. Depois de aumentar o plano no GoZap, suba este valor em Environment no Dokploy e faça redeploy; senão a recusa continua. |
 | `CONTACT_SYNC_CRON_ENABLED` | `false` | **Validação automática diária — desligada por padrão.** Ligar só com decisão explícita de quem responde pelo número. |
 
 Valores que LIGAM o cron: `true` ou `1`. Qualquer outra coisa (incluindo vazio,
@@ -544,8 +527,7 @@ Valores que LIGAM o cron: `true` ou `1`. Qualquer outra coisa (incluindo vazio,
 ### O que o cron faz quando está ligado
 
 Roda uma vez por dia (13:00 UTC = 09:00 em Manaus), seleciona contatos com
-validação vencida (até 5000 por execução), e os enfileira em lotes de 50 no
-ritmo de `GOZAP_CHECK_RATE_PER_MIN` — **só dentro da janela de envio do canal**.
+validação vencida (até 5000 por execução), e os enfileira em lotes de 50, **sem limite de ritmo na Evolution** — **só dentro da janela de envio do canal**.
 Fora da janela — ou com a sessão do canal offline — ele PULA em silêncio
 (eventos de auditoria `contact.sync_skipped_outside_window` e
 `contact.sync_skipped_channel_offline`) em vez de encher o Bull Board de jobs
@@ -553,7 +535,7 @@ vermelhos. O clique do operador, esse sim, recusa alto: um pedido explícito que
 não fez nada merece um erro visível.
 
 Antes da Fase B esse cron era um no-op em produção **por acidente** (só sabia
-validar por canal EVOLUTION, e produção só tem GoZap). Ao fazer a validação
+validar por canal EVOLUTION, e a produção só tinha GoZap). Ao fazer a validação
 funcionar por canal de sessão, ele passaria a varrer a base inteira toda noite
 sem ninguém pedir — daí o opt-in.
 

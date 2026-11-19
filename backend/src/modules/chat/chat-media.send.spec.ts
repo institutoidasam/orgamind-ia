@@ -7,7 +7,15 @@ import { ChatEventsService } from './chat-events.service';
 import { WhatsappProvidersService } from '../whatsapp-providers/whatsapp-providers.service';
 import type { MediaStore } from '../../shared/media/media-store.port';
 
-const conv = { id: 'c1', instanceId: 'i1', phoneE164: '+5592', remoteJid: '55@s.whatsapp.net', contactId: null, unreadCount: 0, instance: { id: 'i1', evolutionInstanceName: 'picoa' } };
+const conv = {
+  id: 'c1',
+  instanceId: 'i1',
+  phoneE164: '+5592',
+  remoteJid: '55@s.whatsapp.net',
+  contactId: null,
+  unreadCount: 0,
+  instance: { id: 'i1', provider: 'EVOLUTION', evolutionInstanceName: 'picoa' },
+};
 
 describe('ChatMediaService.sendMediaReply', () => {
   let prisma: MockProxy<PrismaService>; let store: MockProxy<MediaStore>; let repo: MockProxy<ChatRepository>;

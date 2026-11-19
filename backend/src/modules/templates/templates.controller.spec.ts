@@ -4,6 +4,7 @@ import { Reflector } from '@nestjs/core';
 import { TemplatesController } from './templates.controller';
 import { TemplatesService } from './templates.service';
 import { ROLES_KEY } from '../auth/decorators/roles.decorator';
+import { routesOf } from '../../../test/routes-of';
 
 /**
  * Each route is a thin pass-through to TemplatesService — verify dispatch.
@@ -17,6 +18,34 @@ describe('TemplatesController', () => {
     controller = new TemplatesController(templates);
   });
 
+  // R5: criar/sincronizar/enviar templates de Twilio, Zernio e Meta saiu do HTTP.
+  it('não expõe as rotas de Meta, Twilio e Zernio', () => {
+    const routes = routesOf(TemplatesController);
+    for (const removed of [
+      'POST /sync',
+      'POST /sync/zernio',
+      'POST /zernio',
+      'POST /twilio',
+      'POST /:id/twilio-submit',
+      'PATCH /:id/twilio-draft',
+    ]) {
+      expect(routes).not.toContain(removed);
+    }
+  });
+
+  it('mantém as rotas de Evolution (listar, criar, editar, apagar)', () => {
+    expect(routesOf(TemplatesController)).toEqual(
+      expect.arrayContaining([
+        'GET /',
+        'POST /',
+        'PATCH /:id',
+        'DELETE /:id',
+        'GET /consent-buttons',
+        'PATCH /:id/consent-buttons',
+      ]),
+    );
+  });
+
   it('list delegates to templates.list', () => {
     templates.list.mockResolvedValue([] as never);
     controller.list({} as never);
@@ -26,8 +55,8 @@ describe('TemplatesController', () => {
 
   it('list forwards a provider filter from the query to templates.list', () => {
     templates.list.mockResolvedValue([] as never);
-    controller.list({ provider: 'TWILIO' } as never);
-    expect(templates.list).toHaveBeenCalledWith('TWILIO');
+    controller.list({ provider: 'EVOLUTION' } as never);
+    expect(templates.list.mock.calls).toEqual([['EVOLUTION']]);
   });
 
   // twilio-platform T3 — the controller must not strip the approval-sync
@@ -54,33 +83,6 @@ describe('TemplatesController', () => {
       twilioRejectionReason: 'Pausado pela Meta',
       lastTwilioSyncAt: syncedAt,
     });
-  });
-
-  it('sync delegates to templates.syncFromMeta', () => {
-    templates.syncFromMeta.mockResolvedValue({ synced: 0, skipped: 0 } as never);
-    controller.sync();
-    expect(templates.syncFromMeta).toHaveBeenCalledTimes(1);
-  });
-
-  it('sync is gated to ADMIN via @Roles', () => {
-    const reflector = new Reflector();
-    const roles = reflector.get<string[]>(ROLES_KEY, controller.sync);
-    expect(roles).toEqual(['ADMIN']);
-  });
-
-  it('syncZernio delegates to templates.syncFromZernio', () => {
-    templates.syncFromZernio.mockResolvedValue({
-      synced: 0,
-      skipped: 0,
-    } as never);
-    controller.syncZernio();
-    expect(templates.syncFromZernio).toHaveBeenCalledTimes(1);
-  });
-
-  it('syncZernio is gated to ADMIN via @Roles', () => {
-    const reflector = new Reflector();
-    const roles = reflector.get<string[]>(ROLES_KEY, controller.syncZernio);
-    expect(roles).toEqual(['ADMIN']);
   });
 
   it('list is not role-gated (stays open)', () => {
@@ -112,60 +114,5 @@ describe('TemplatesController', () => {
     templates.delete.mockResolvedValue({ id: 't1' } as never);
     controller.delete('t1');
     expect(templates.delete).toHaveBeenCalledWith('t1');
-  });
-
-  // twilio-platform T4 — criar/submeter/editar rascunho Twilio.
-  it('createTwilio delegates body to templates.createTwilio', () => {
-    templates.createTwilio.mockResolvedValue({ id: 't1' } as never);
-    const body = {
-      contentType: 'twilio/text',
-      name: 'aviso',
-      language: 'pt_BR',
-      category: 'MARKETING',
-      body: 'Olá {{1}}, tudo bem?',
-      variables: { '1': 'João' },
-    } as never;
-    controller.createTwilio(body);
-    expect(templates.createTwilio).toHaveBeenCalledWith(body);
-  });
-
-  it('createTwilio is gated to ADMIN via @Roles', () => {
-    const reflector = new Reflector();
-    const roles = reflector.get<string[]>(ROLES_KEY, controller.createTwilio);
-    expect(roles).toEqual(['ADMIN']);
-  });
-
-  it('submitTwilio forwards id to templates.submitTwilioApproval', () => {
-    templates.submitTwilioApproval.mockResolvedValue({ id: 't1' } as never);
-    controller.submitTwilio('t1');
-    expect(templates.submitTwilioApproval).toHaveBeenCalledWith('t1');
-  });
-
-  it('submitTwilio is gated to ADMIN via @Roles', () => {
-    const reflector = new Reflector();
-    const roles = reflector.get<string[]>(ROLES_KEY, controller.submitTwilio);
-    expect(roles).toEqual(['ADMIN']);
-  });
-
-  it('updateTwilioDraft forwards id + body to templates.updateTwilioDraft', () => {
-    templates.updateTwilioDraft.mockResolvedValue({ id: 't1' } as never);
-    const body = {
-      contentType: 'twilio/text',
-      language: 'pt_BR',
-      category: 'MARKETING',
-      body: 'Novo corpo, ok.',
-      variables: {},
-    } as never;
-    controller.updateTwilioDraft('t1', body);
-    expect(templates.updateTwilioDraft).toHaveBeenCalledWith('t1', body);
-  });
-
-  it('updateTwilioDraft is gated to ADMIN via @Roles', () => {
-    const reflector = new Reflector();
-    const roles = reflector.get<string[]>(
-      ROLES_KEY,
-      controller.updateTwilioDraft,
-    );
-    expect(roles).toEqual(['ADMIN']);
   });
 });

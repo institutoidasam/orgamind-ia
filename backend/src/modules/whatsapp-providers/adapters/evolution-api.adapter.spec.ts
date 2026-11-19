@@ -7,12 +7,19 @@ import {
   afterEach,
   beforeEach,
   vi,
+  type MockInstance,
 } from 'vitest';
 import { setupServer } from 'msw/node';
 import { http, HttpResponse } from 'msw';
+import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { EvolutionApiAdapter } from './evolution-api.adapter';
 import { WhatsappSendError } from '../errors/whatsapp.errors';
+import {
+  EVOLUTION_CREATE_SETTINGS,
+  EVOLUTION_WEBHOOK_EVENTS,
+  buildWebhookSetBody,
+} from './evolution-webhook-config';
 
 const server = setupServer();
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
@@ -27,6 +34,12 @@ const config = {
       EVOLUTION_INSTANCE_NAME: 'picoa-test',
     })[k],
 } as unknown as ConfigService;
+
+const PICOA_CREATE_BODY = {
+  instanceName: 'picoa-test',
+  integration: 'WHATSAPP-BAILEYS',
+  ...EVOLUTION_CREATE_SETTINGS,
+};
 
 describe('EvolutionApiAdapter', () => {
   const adapter = new EvolutionApiAdapter(config);
@@ -603,7 +616,7 @@ describe('EvolutionApiAdapter — extended coverage', () => {
 
       const createCall = post.mock.calls.find((c: unknown[]) => c[0] === '/instance/create');
       expect(createCall).toBeDefined();
-      expect(createCall![1]).toMatchObject({ instanceName: 'picoa-test', integration: 'WHATSAPP-BAILEYS' });
+      expect(createCall![1]).toMatchObject(PICOA_CREATE_BODY);
       const webhookCall = post.mock.calls.find((c: unknown[]) => c[0] === '/webhook/set/picoa-test');
       expect(webhookCall).toBeDefined();
       expect((webhookCall![1] as { webhook: { events: string[] } }).webhook.events).toContain('CONNECTION_UPDATE');
@@ -1188,31 +1201,33 @@ describe('EvolutionApiAdapter — extended coverage', () => {
 // The proxy lives on the Evolution INSTANCE (Postgres) and is dropped whenever
 // the instance is deleted+recreated, so without re-arming, a fresh instance
 // would silently pair the next WhatsApp session from the VPS datacenter IP.
-describe('EvolutionApiAdapter — declarative proxy', () => {
-  const PROXY_ENV: Record<string, string | undefined> = {
-    EVOLUTION_BASE_URL: 'http://evolution:8080',
-    EVOLUTION_API_KEY: 'KEY',
-    EVOLUTION_INSTANCE_NAME: 'picoa-test',
-    EVOLUTION_PROXY_HOST: '203.0.113.77',
-    EVOLUTION_PROXY_PORT: '10527',
-    EVOLUTION_PROXY_PROTOCOL: 'socks5',
-    EVOLUTION_PROXY_USERNAME: 'u1',
-    EVOLUTION_PROXY_PASSWORD: 'p1',
-  };
-  const mkConfig = (o: Record<string, string | undefined> = {}) =>
-    ({ get: (k: string) => ({ ...PROXY_ENV, ...o })[k] }) as unknown as ConfigService;
+const PROXY_ENV: Record<string, string | undefined> = {
+  EVOLUTION_BASE_URL: 'http://evolution:8080',
+  EVOLUTION_API_KEY: 'KEY',
+  EVOLUTION_INSTANCE_NAME: 'picoa-test',
+  EVOLUTION_PROXY_HOST: '203.0.113.77',
+  EVOLUTION_PROXY_PORT: '10527',
+  EVOLUTION_PROXY_PROTOCOL: 'socks5',
+  EVOLUTION_PROXY_USERNAME: 'u1',
+  EVOLUTION_PROXY_PASSWORD: 'p1',
+};
+const mkProxyConfig = (o: Record<string, string | undefined> = {}) =>
+  ({
+    get: (k: string) => ({ ...PROXY_ENV, ...o })[k],
+  }) as unknown as ConfigService;
 
-  function stub(a: EvolutionApiAdapter) {
-    const post = vi.fn().mockResolvedValue({ data: {} });
-    const get = vi.fn().mockResolvedValue({ data: [] });
-    const del = vi.fn().mockResolvedValue({ data: {} });
-    (a as unknown as { http: unknown }).http = { post, get, delete: del };
-    return { post, get, del };
-  }
+function stubProxyHttp(a: EvolutionApiAdapter) {
+  const post = vi.fn().mockResolvedValue({ data: {} });
+  const get = vi.fn().mockResolvedValue({ data: [] });
+  const del = vi.fn().mockResolvedValue({ data: {} });
+  (a as unknown as { http: unknown }).http = { post, get, delete: del };
+  return { post, get, del };
+}
 
+describe('EvolutionApiAdapter — declarative proxy: arming', () => {
   it('arms the proxy using Evolution ProxyDto shape (host/port/protocol + creds)', async () => {
-    const a = new EvolutionApiAdapter(mkConfig());
-    const { post } = stub(a);
+    const a = new EvolutionApiAdapter(mkProxyConfig());
+    const { post } = stubProxyHttp(a);
     await a.ensureProxyConfigured('picoa-test');
     expect(post).toHaveBeenCalledWith('/proxy/set/picoa-test', {
       enabled: true,
@@ -1224,28 +1239,14 @@ describe('EvolutionApiAdapter — declarative proxy', () => {
     });
   });
 
-  it.each(['EVOLUTION_PROXY_HOST', 'EVOLUTION_PROXY_PORT', 'EVOLUTION_PROXY_PROTOCOL'])(
-    'is a no-op when %s is missing (proxy stays unconfigured)',
-    async (key) => {
-      const a = new EvolutionApiAdapter(mkConfig({ [key]: undefined }));
-      const { post } = stub(a);
-      await a.ensureProxyConfigured('picoa-test');
-      expect(post).not.toHaveBeenCalled();
-    },
-  );
-
-  it('treats the compose empty-string default as absent', async () => {
-    const a = new EvolutionApiAdapter(mkConfig({ EVOLUTION_PROXY_HOST: '' }));
-    const { post } = stub(a);
-    await a.ensureProxyConfigured('picoa-test');
-    expect(post).not.toHaveBeenCalled();
-  });
-
   it('omits username/password when they are blank (unauthenticated proxy)', async () => {
     const a = new EvolutionApiAdapter(
-      mkConfig({ EVOLUTION_PROXY_USERNAME: '', EVOLUTION_PROXY_PASSWORD: '   ' }),
+      mkProxyConfig({
+        EVOLUTION_PROXY_USERNAME: '',
+        EVOLUTION_PROXY_PASSWORD: '   ',
+      }),
     );
-    const { post } = stub(a);
+    const { post } = stubProxyHttp(a);
     await a.ensureProxyConfigured('picoa-test');
     expect(post).toHaveBeenCalledWith('/proxy/set/picoa-test', {
       enabled: true,
@@ -1255,18 +1256,57 @@ describe('EvolutionApiAdapter — declarative proxy', () => {
     });
   });
 
+  it('arms the proxy on a brand-new instance (Nova conexão)', async () => {
+    const a = new EvolutionApiAdapter(mkProxyConfig());
+    const { post } = stubProxyHttp(a);
+    await a.adminCreateInstance({ instanceName: 'picoa-novo' });
+    expect(post).toHaveBeenCalledWith(
+      '/proxy/set/picoa-novo',
+      expect.objectContaining({ host: '203.0.113.77' }),
+    );
+  });
+});
+
+describe('EvolutionApiAdapter — declarative proxy: no-op when unconfigured', () => {
+  it.each([
+    'EVOLUTION_PROXY_HOST',
+    'EVOLUTION_PROXY_PORT',
+    'EVOLUTION_PROXY_PROTOCOL',
+  ])(
+    'is a no-op when %s is missing (proxy stays unconfigured)',
+    async (key) => {
+      const a = new EvolutionApiAdapter(mkProxyConfig({ [key]: undefined }));
+      const { post } = stubProxyHttp(a);
+      await a.ensureProxyConfigured('picoa-test');
+      expect(post).not.toHaveBeenCalled();
+    },
+  );
+
+  it('treats the compose empty-string default as absent', async () => {
+    const a = new EvolutionApiAdapter(
+      mkProxyConfig({ EVOLUTION_PROXY_HOST: '' }),
+    );
+    const { post } = stubProxyHttp(a);
+    await a.ensureProxyConfigured('picoa-test');
+    expect(post).not.toHaveBeenCalled();
+  });
+});
+
+describe('EvolutionApiAdapter — declarative proxy: provisioning', () => {
   it('is best-effort: a failing /proxy/set never blocks provisioning', async () => {
-    const a = new EvolutionApiAdapter(mkConfig());
+    const a = new EvolutionApiAdapter(mkProxyConfig());
     (a as unknown as { http: unknown }).http = {
       post: vi.fn().mockRejectedValue(new Error('evolution down')),
       get: vi.fn(),
       delete: vi.fn(),
     };
-    await expect(a.ensureProxyConfigured('picoa-test')).resolves.toBeUndefined();
+    await expect(
+      a.ensureProxyConfigured('picoa-test'),
+    ).resolves.toBeUndefined();
   });
 
   it('re-arms the proxy on an ALREADY provisioned instance (self-heal on Conectar/QR)', async () => {
-    const a = new EvolutionApiAdapter(mkConfig());
+    const a = new EvolutionApiAdapter(mkProxyConfig());
     const post = vi.fn().mockResolvedValue({ data: {} });
     // instanceExists -> true
     const get = vi.fn().mockResolvedValue({ data: [{ name: 'picoa-test' }] });
@@ -1275,21 +1315,233 @@ describe('EvolutionApiAdapter — declarative proxy', () => {
     await a.ensureProvisioned('picoa-test');
 
     // It must NOT recreate the instance...
-    expect(post).not.toHaveBeenCalledWith('/instance/create', expect.anything());
+    expect(post).not.toHaveBeenCalledWith(
+      '/instance/create',
+      expect.anything(),
+    );
     // ...but it MUST re-arm the proxy before the next socket is spawned.
     expect(post).toHaveBeenCalledWith(
       '/proxy/set/picoa-test',
       expect.objectContaining({ enabled: true, protocol: 'socks5' }),
     );
   });
+});
 
-  it('arms the proxy on a brand-new instance (Nova conexão)', async () => {
-    const a = new EvolutionApiAdapter(mkConfig());
-    const { post } = stub(a);
-    await a.adminCreateInstance({ instanceName: 'picoa-novo' });
-    expect(post).toHaveBeenCalledWith(
-      '/proxy/set/picoa-novo',
-      expect.objectContaining({ host: '203.0.113.77' }),
+// -------------- webhook armed / created with settings / delete (somente-evolution B9) --------------
+
+const SECRET = 'SEGREDO-GLOBAL-9f3a';
+const WEBHOOK_URL = 'https://orgamind.example.com/webhooks/whatsapp';
+const LOGGER_METHODS = ['log', 'warn', 'error', 'debug', 'verbose'] as const;
+
+/** An axios-like failure carrying the global key in the request config. */
+const axiosError = (status: number, code: string) =>
+  Object.assign(new Error(`Request failed with status code ${status}`), {
+    code,
+    response: { status },
+    config: { headers: { apikey: SECRET } },
+  });
+
+const liveWebhook = (over: Record<string, unknown> = {}) => ({
+  data: {
+    enabled: true,
+    url: WEBHOOK_URL,
+    events: [...EVOLUTION_WEBHOOK_EVENTS],
+    headers: { apikey: SECRET },
+    ...over,
+  },
+});
+
+interface SecretAdapterCtx {
+  adapter: EvolutionApiAdapter;
+  post: ReturnType<typeof vi.fn>;
+  get: ReturnType<typeof vi.fn>;
+  del: ReturnType<typeof vi.fn>;
+  warnSpy: MockInstance;
+  loggerCalls: () => string;
+}
+
+function buildSecretAdapterCtx(): SecretAdapterCtx {
+  const cfg = {
+    get: (k: string) =>
+      ({
+        EVOLUTION_BASE_URL: 'https://evolution.example.com',
+        EVOLUTION_API_KEY: SECRET,
+        EVOLUTION_INSTANCE_NAME: 'picoa-test',
+        EVOLUTION_WEBHOOK_URL: WEBHOOK_URL,
+      })[k],
+  } as unknown as ConfigService;
+  const adapter = new EvolutionApiAdapter(cfg);
+  const [post, get, del, put] = [vi.fn(), vi.fn(), vi.fn(), vi.fn()];
+  (adapter as unknown as { http: unknown }).http = {
+    post,
+    get,
+    delete: del,
+    put,
+  };
+  const logger = (adapter as unknown as { logger: Logger }).logger;
+  const spies: MockInstance[] = LOGGER_METHODS.map((m) =>
+    vi.spyOn(logger, m).mockImplementation(() => undefined),
+  );
+  return {
+    adapter,
+    post,
+    get,
+    del,
+    warnSpy: spies[1],
+    loggerCalls: () => JSON.stringify(spies.map((s) => s.mock.calls)),
+  };
+}
+
+/** Registers a fresh adapter (global key = SECRET) per test and returns the live ctx. */
+function useSecretAdapter(): SecretAdapterCtx {
+  const ctx = {} as SecretAdapterCtx;
+  beforeEach(() => {
+    vi.useRealTimers();
+    Object.assign(ctx, buildSecretAdapterCtx());
+  });
+  return ctx;
+}
+
+describe('EvolutionApiAdapter — ensureWebhookArmed: confere e diverge', () => {
+  const t = useSecretAdapter();
+
+  it('ensureWebhookArmed: configuração confere → não chama set', async () => {
+    t.get.mockResolvedValueOnce(liveWebhook());
+
+    const r = await t.adapter.ensureWebhookArmed('picoa-test');
+
+    expect(r).toEqual({ status: 'ok', fields: [] });
+    expect(t.get).toHaveBeenCalledWith('/webhook/find/picoa-test');
+    expect(t.post).not.toHaveBeenCalled();
+  });
+
+  it('ensureWebhookArmed: diverge → set com o corpo de C5 e warn com os campos; nenhum log contém a apikey', async () => {
+    t.get.mockResolvedValueOnce(
+      liveWebhook({ enabled: false, headers: { apikey: 'OUTRA-CHAVE' } }),
     );
+    t.post.mockResolvedValueOnce({ data: {} });
+
+    const r = await t.adapter.ensureWebhookArmed('picoa-test');
+
+    expect(r).toEqual({
+      status: 'rearmed',
+      fields: ['enabled', 'headers.apikey'],
+    });
+    expect(t.post).toHaveBeenCalledTimes(1);
+    expect(t.post).toHaveBeenCalledWith(
+      '/webhook/set/picoa-test',
+      buildWebhookSetBody({ url: WEBHOOK_URL, apikey: SECRET }),
+    );
+    expect(t.warnSpy).toHaveBeenCalledWith(
+      { instanceName: 'picoa-test', fields: ['enabled', 'headers.apikey'] },
+      'Evolution: webhook re-armado',
+    );
+    expect(t.loggerCalls()).not.toContain(SECRET);
+    expect(t.loggerCalls()).not.toContain('OUTRA-CHAVE');
+  });
+});
+
+describe('EvolutionApiAdapter — ensureWebhookArmed: falhas', () => {
+  const t = useSecretAdapter();
+
+  it('ensureWebhookArmed: find falha → failed, sem lançar, log sem o objeto de erro', async () => {
+    t.get.mockRejectedValueOnce(axiosError(503, 'ERR_BAD_RESPONSE'));
+
+    const r = await t.adapter.ensureWebhookArmed('picoa-test');
+
+    expect(r).toEqual({ status: 'failed', fields: [] });
+    expect(t.post).not.toHaveBeenCalled();
+    expect(t.warnSpy).toHaveBeenCalledWith(
+      {
+        instanceName: 'picoa-test',
+        httpStatus: 503,
+        code: 'ERR_BAD_RESPONSE',
+      },
+      'Evolution: falha ao conferir o webhook',
+    );
+    expect(t.loggerCalls()).not.toContain(SECRET);
+  });
+
+  it('ensureWebhookArmed: set falha → failed com os campos divergentes, sem lançar e sem vazar a apikey', async () => {
+    t.get.mockResolvedValueOnce(
+      liveWebhook({ url: 'https://velho.example.com/webhooks' }),
+    );
+    t.post.mockRejectedValueOnce(axiosError(401, 'ERR_BAD_REQUEST'));
+
+    const r = await t.adapter.ensureWebhookArmed('picoa-test');
+
+    expect(r).toEqual({ status: 'failed', fields: ['url'] });
+    expect(t.warnSpy).toHaveBeenCalledWith(
+      {
+        instanceName: 'picoa-test',
+        httpStatus: 401,
+        code: 'ERR_BAD_REQUEST',
+      },
+      'Evolution: falha ao conferir o webhook',
+    );
+    expect(t.loggerCalls()).not.toContain(SECRET);
+  });
+});
+
+describe('EvolutionApiAdapter — webhook na criação da instância', () => {
+  const t = useSecretAdapter();
+
+  it('ensureWebhookConfigured: set falha → warn só com instanceName, httpStatus e code; nenhum log contém a apikey', async () => {
+    // 1ª chamada: /instance/create; 2ª: /webhook/set (falha).
+    t.post
+      .mockResolvedValueOnce({ data: {} })
+      .mockRejectedValueOnce(axiosError(401, 'ERR_BAD_REQUEST'));
+
+    await t.adapter.adminCreateInstance({ instanceName: 'picoa-test' });
+
+    expect(t.warnSpy).toHaveBeenCalledTimes(1);
+    expect(t.warnSpy).toHaveBeenCalledWith(
+      {
+        instanceName: 'picoa-test',
+        httpStatus: 401,
+        code: 'ERR_BAD_REQUEST',
+      },
+      expect.any(String),
+    );
+    expect(t.loggerCalls()).not.toContain(SECRET);
+  });
+
+  it('adminCreateInstance envia EVOLUTION_CREATE_SETTINGS e arma o webhook no corpo novo', async () => {
+    t.post.mockResolvedValue({ data: {} });
+
+    await t.adapter.adminCreateInstance({ instanceName: 'picoa-novo' });
+
+    const createCall = t.post.mock.calls.find(
+      (c: unknown[]) => c[0] === '/instance/create',
+    );
+    expect(createCall![1]).toEqual({
+      instanceName: 'picoa-novo',
+      integration: 'WHATSAPP-BAILEYS',
+      qrcode: true,
+      ...EVOLUTION_CREATE_SETTINGS,
+    });
+    expect(t.post).toHaveBeenCalledWith(
+      '/webhook/set/picoa-novo',
+      buildWebhookSetBody({ url: WEBHOOK_URL, apikey: SECRET }),
+    );
+  });
+});
+
+describe('EvolutionApiAdapter — adminDeleteInstance', () => {
+  const t = useSecretAdapter();
+
+  it('adminDeleteInstance chama DELETE /instance/delete/x', async () => {
+    t.del.mockResolvedValueOnce({ data: {} });
+
+    await t.adapter.adminDeleteInstance('x');
+
+    expect(t.del).toHaveBeenCalledWith('/instance/delete/x');
+  });
+
+  it('adminDeleteInstance propaga o erro para quem chama decidir', async () => {
+    const boom = axiosError(404, 'ERR_BAD_REQUEST');
+    t.del.mockRejectedValueOnce(boom);
+
+    await expect(t.adapter.adminDeleteInstance('x')).rejects.toBe(boom);
   });
 });

@@ -1,6 +1,19 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import {
+  describe,
+  it,
+  expect,
+  beforeEach,
+  afterEach,
+  vi,
+  type Mock,
+} from 'vitest';
+import { Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import { mockDeep, type MockProxy } from 'vitest-mock-extended';
+import {
+  mockDeep,
+  type MockProxy,
+  type DeepMockProxy,
+} from 'vitest-mock-extended';
 import { WhatsappInstancesService, EVOLUTION_ADMIN_CLIENT } from './whatsapp-instances.service';
 import { WhatsappInstancesRepository } from './whatsapp-instances.repository';
 import { EvolutionApiAdapter } from '../whatsapp-providers/adapters/evolution-api.adapter';
@@ -33,7 +46,12 @@ async function buildHarness() {
   };
   // Default: Evolution knows no live states → list() falls back to DB state.
   evolution.listConnectionStates.mockResolvedValue(new Map());
-  const evo = { createInstance: vi.fn(), logout: vi.fn(), restart: vi.fn() };
+  const evo = {
+    createInstance: vi.fn(),
+    logout: vi.fn(),
+    restart: vi.fn(),
+    deleteInstance: vi.fn(),
+  };
   const mod = await Test.createTestingModule({
     providers: [
       WhatsappInstancesService,
@@ -68,6 +86,15 @@ async function arrangeCreate(): Promise<Harness> {
   h.repo.create.mockResolvedValue(createdInstance);
   return h;
 }
+
+// E3: a sessão some da Evolution (libera a vaga do plano) depois do logout;
+// o delete da Evolution é best-effort e nunca impede a remoção no OrgaMind.
+const instanceRow = {
+  id: 'i',
+  name: 'Vendas',
+  evolutionInstanceName: 'evo-1',
+  isActive: true,
+} as never;
 
 const ASSIGN_FAILURES: [string, Error, string][] = [
   [
@@ -231,7 +258,7 @@ describe('WhatsappInstancesService — número por área (list)', () => {
 describe('WhatsappInstancesService', () => {
   let svc: WhatsappInstancesService;
   let repo: MockProxy<WhatsappInstancesRepository>;
-  let prisma: MockProxy<PrismaService>;
+  let prisma: DeepMockProxy<PrismaService>;
   let evolution: MockProxy<EvolutionApiAdapter>;
   let audit: MockProxy<AuditService>;
   let evo: Harness['evo'];
@@ -254,9 +281,7 @@ describe('WhatsappInstancesService', () => {
     expect(evo.createInstance).toHaveBeenCalledWith(
       expect.objectContaining({ instanceName: expect.stringMatching(/^picoa-vendas-/) }),
     );
-    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'Vendas',
-    }));
+    expect(repo.create.mock.calls[0]?.[0]).toMatchObject({ name: 'Vendas' });
     expect(result.id).toBe('inst1');
   });
 
@@ -343,24 +368,6 @@ describe('WhatsappInstancesService', () => {
     expect(evo.logout).toHaveBeenCalledWith('evo-1');
     expect(repo.softDelete).toHaveBeenCalledWith('i');
     expect(prisma.message.updateMany).toHaveBeenCalled();
-  });
-
-  it('delete bulk-fails WAITING_INSTANCE messages for the removed instance', async () => {
-    repo.findById.mockResolvedValue({
-      id: 'i', evolutionInstanceName: 'evo-1', isActive: true,
-    } as any);
-    repo.softDelete.mockResolvedValue({ id: 'i' } as any);
-    prisma.message.updateMany.mockResolvedValue({ count: 3 });
-
-    await svc.delete('i');
-
-    expect(prisma.message.updateMany).toHaveBeenCalledWith({
-      where: { instanceId: 'i', status: 'WAITING_INSTANCE' },
-      data: expect.objectContaining({
-        status: 'FAILED',
-        errorCode: 'antiban.instance_deleted',
-      }),
-    });
   });
 
   it('restart resolves by id then calls evolution restart', async () => {
@@ -528,17 +535,17 @@ describe('WhatsappInstancesService', () => {
       profilePictureUrl: null,
       ...over,
     });
+    const ownerSnap = (profilePicUrl: string | null) =>
+      snap('open', {
+        ownerJid: '559231550102@s.whatsapp.net',
+        profileName: 'ORGAMIND',
+        profilePicUrl,
+      });
 
     it('persists + returns phone/name/photo derived from ownerJid when they drift', async () => {
       repo.listActiveWithState.mockResolvedValue([row()] as any);
       evolution.listConnectionStates.mockResolvedValue(
-        new Map([
-          ['evo-1', snap('open', {
-            ownerJid: '559231550102@s.whatsapp.net',
-            profileName: 'ORGAMIND',
-            profilePicUrl: 'https://pps.whatsapp.net/pic.jpg',
-          })],
-        ]),
+        new Map([['evo-1', ownerSnap('https://pps.whatsapp.net/pic.jpg')]]),
       );
 
       const result = await svc.list({ activeOnly: true });
@@ -642,13 +649,7 @@ describe('WhatsappInstancesService', () => {
         }),
       ] as any);
       evolution.listConnectionStates.mockResolvedValue(
-        new Map([
-          ['evo-1', snap('open', {
-            ownerJid: '559231550102@s.whatsapp.net',
-            profileName: 'ORGAMIND',
-            profilePicUrl: 'https://pps.whatsapp.net/pic.jpg',
-          })],
-        ]),
+        new Map([['evo-1', ownerSnap('https://pps.whatsapp.net/pic.jpg')]]),
       );
 
       await svc.list({ activeOnly: true });
@@ -659,13 +660,7 @@ describe('WhatsappInstancesService', () => {
     it('still returns the fresh profile when the persist fails', async () => {
       repo.listActiveWithState.mockResolvedValue([row()] as any);
       evolution.listConnectionStates.mockResolvedValue(
-        new Map([
-          ['evo-1', snap('open', {
-            ownerJid: '559231550102@s.whatsapp.net',
-            profileName: 'ORGAMIND',
-            profilePicUrl: null,
-          })],
-        ]),
+        new Map([['evo-1', ownerSnap(null)]]),
       );
       repo.updateDeviceProfile.mockRejectedValue(new Error('db down'));
 
@@ -683,13 +678,7 @@ describe('WhatsappInstancesService', () => {
         row({ lastConnectionState: 'close' }),
       ] as any);
       evolution.listConnectionStates.mockResolvedValue(
-        new Map([
-          ['evo-1', snap('open', {
-            ownerJid: '559231550102@s.whatsapp.net',
-            profileName: 'ORGAMIND',
-            profilePicUrl: null,
-          })],
-        ]),
+        new Map([['evo-1', ownerSnap(null)]]),
       );
 
       const result = await svc.list({ activeOnly: true });
@@ -848,5 +837,82 @@ describe('WhatsappInstancesService', () => {
       await expect(svc.setDefault('missing')).rejects.toThrow(InstanceNotFoundError);
       expect(audit.log).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('WhatsappInstancesService — delete: logout e deleteInstance', () => {
+  let h: Harness;
+  beforeEach(async () => {
+    h = await buildHarness();
+  });
+
+  it('delete: logout e deleteInstance, nessa ordem', async () => {
+    h.repo.findById.mockResolvedValue(instanceRow);
+    h.repo.softDelete.mockResolvedValue({ id: 'i' } as never);
+
+    await h.svc.delete('i');
+
+    expect(h.evo.deleteInstance).toHaveBeenCalledWith('evo-1');
+    expect(h.evo.logout.mock.invocationCallOrder[0]).toBeLessThan(
+      h.evo.deleteInstance.mock.invocationCallOrder[0],
+    );
+    expect(h.audit.log.mock.calls[0]?.[3]).toMatchObject({
+      evolutionDeleted: true,
+    });
+  });
+
+  it('delete bulk-fails WAITING_INSTANCE messages for the removed instance', async () => {
+    h.repo.findById.mockResolvedValue({
+      id: 'i', evolutionInstanceName: 'evo-1', isActive: true,
+    } as any);
+    h.repo.softDelete.mockResolvedValue({ id: 'i' } as any);
+    h.prisma.message.updateMany.mockResolvedValue({ count: 3 });
+
+    await h.svc.delete('i');
+
+    expect(h.prisma.message.updateMany).toHaveBeenCalledWith({
+      where: { instanceId: 'i', status: 'WAITING_INSTANCE' },
+      data: expect.objectContaining({
+        status: 'FAILED',
+        errorCode: 'antiban.instance_deleted',
+        failedAt: expect.any(Date) as Date,
+        failureReason: 'CANAL_FORA',
+      }),
+    });
+  });
+});
+
+describe('WhatsappInstancesService — delete: instance/delete falha', () => {
+  let h: Harness;
+  beforeEach(async () => {
+    h = await buildHarness();
+  });
+  afterEach(() => vi.restoreAllMocks());
+
+  it('delete: deleteInstance rejeita → soft-delete e auditoria com evolutionDeleted false', async () => {
+    const warn = vi
+      .spyOn(Logger.prototype, 'warn')
+      .mockImplementation(() => {});
+    h.repo.findById.mockResolvedValue(instanceRow);
+    // Forma do erro do axios: carrega a apikey em config.headers.
+    h.evo.deleteInstance.mockRejectedValue(
+      Object.assign(new Error('Request failed'), {
+        response: { status: 500 },
+        config: { headers: { apikey: 'SEGREDO-123' } },
+      }),
+    );
+    h.repo.softDelete.mockResolvedValue({ id: 'i' } as never);
+
+    await expect(h.svc.delete('i')).resolves.toBeUndefined();
+
+    expect(h.repo.softDelete.mock.calls).toEqual([['i']]);
+    expect(h.audit.log.mock.calls[0]?.[3]).toMatchObject({
+      evolutionDeleted: false,
+    });
+    expect(warn).toHaveBeenCalledWith(
+      { instanceId: 'i', httpStatus: 500 },
+      'Evolution: instance/delete falhou; conexão removida só no OrgaMind',
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('SEGREDO-123');
   });
 });

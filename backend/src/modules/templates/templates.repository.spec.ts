@@ -95,20 +95,11 @@ describe('TemplatesRepository', () => {
     });
   });
 
-  it('listAll orders by createdAt desc', async () => {
+  it('listAll filtra pelos provedores dados, ordenando por createdAt desc', async () => {
     prisma.template.findMany.mockResolvedValue([] as never);
-    await repo.listAll();
+    await repo.listAll(['EVOLUTION']);
     expect(prisma.template.findMany).toHaveBeenCalledWith({
-      where: undefined,
-      orderBy: { createdAt: 'desc' },
-    });
-  });
-
-  it('listAll filters by provider when given', async () => {
-    prisma.template.findMany.mockResolvedValue([] as never);
-    await repo.listAll('TWILIO' as never);
-    expect(prisma.template.findMany).toHaveBeenCalledWith({
-      where: { provider: 'TWILIO' },
+      where: { provider: { in: ['EVOLUTION'] } },
       orderBy: { createdAt: 'desc' },
     });
   });

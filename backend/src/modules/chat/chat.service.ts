@@ -7,6 +7,8 @@ import {
   TWILIO_WINDOW_CLOSED_MESSAGE,
 } from '../../shared/errors/domain.error';
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { ChannelProviderDisabledError } from '../../shared/errors/channel-provider-disabled.error';
+import { isEnabledChannelProvider } from '../../shared/config/enabled-providers';
 import { AuditService } from '../../shared/audit/audit.service';
 import { ChatRepository } from './chat.repository';
 import { ChatEventsService } from './chat-events.service';
@@ -465,6 +467,12 @@ export class ChatService {
    * quando o provider não está configurado neste deploy.
    */
   private assertChatSendSupported(conv: OutboundConversation): void {
+    // Primeira checagem: canal de provedor DESLIGADO (só a Evolution está
+    // ligada) é 409 `channel.provider_disabled`, antes do helper GOZAP e de
+    // `supportsInboxChatFor` — que daria "sem resposta" ou erro de registry.
+    if (!isEnabledChannelProvider(conv.instance.provider)) {
+      throw new ChannelProviderDisabledError(conv.instance.provider);
+    }
     if (!this.wa.supportsInboxChatFor(conv.instance.provider)) {
       throw new ChatProviderNoReplyError(conv.instance.provider);
     }

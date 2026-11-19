@@ -13,10 +13,7 @@ import { TemplatesService } from './templates.service';
 import { CreateTemplateDto } from './dto/create-template.dto';
 import { UpdateTemplateDto } from './dto/update-template.dto';
 import { ListTemplatesDto } from './dto/list-templates.dto';
-import { CreateTwilioTemplateDto } from './dto/create-twilio-template.dto';
-import { CreateZernioTemplateDto } from './dto/create-zernio-template.dto';
 import { DeclareConsentButtonsDto } from './dto/declare-consent-buttons.dto';
-import { UpdateTwilioDraftDto } from './dto/update-twilio-draft.dto';
 import { Roles } from '../auth/decorators/roles.decorator';
 
 @ApiTags('templates')
@@ -30,20 +27,6 @@ export class TemplatesController {
     return this.templates.list(query.provider);
   }
 
-  @ApiOperation({ summary: 'Sync template catalog from Meta Cloud API' })
-  @Roles('ADMIN')
-  @Post('sync')
-  sync() {
-    return this.templates.syncFromMeta();
-  }
-
-  @ApiOperation({ summary: 'Sync template catalog from Zernio' })
-  @Roles('ADMIN')
-  @Post('sync/zernio')
-  syncZernio() {
-    return this.templates.syncFromZernio();
-  }
-
   @ApiOperation({ summary: 'Create a new template (Evolution mode / manual)' })
   @Roles('ADMIN')
   @Post()
@@ -51,7 +34,7 @@ export class TemplatesController {
     return this.templates.create(body);
   }
 
-  // ── ZB: criar template COM BOTÕES no Zernio ──────────────────────────────
+  // ── rótulos de consentimento dos botões ──────────────────────────────────
 
   /**
    * A lista fechada de rótulos de consentimento que o form pode oferecer.
@@ -68,15 +51,6 @@ export class TemplatesController {
   @Get('consent-buttons')
   consentButtons() {
     return this.templates.consentButtonChoices();
-  }
-
-  @ApiOperation({
-    summary: 'Create a WhatsApp template (with buttons) on Meta, via Zernio',
-  })
-  @Roles('ADMIN')
-  @Post('zernio')
-  createZernio(@Body() body: CreateZernioTemplateDto) {
-    return this.templates.createZernio(body);
   }
 
   /**
@@ -114,37 +88,5 @@ export class TemplatesController {
   @Delete(':id')
   delete(@Param('id') id: string) {
     return this.templates.delete(id);
-  }
-
-  // ── twilio-platform T4: Content API (criar/submeter/editar rascunho) ──────
-
-  @ApiOperation({
-    summary: 'Create a Twilio Content template draft (Content API)',
-  })
-  @Roles('ADMIN')
-  @Post('twilio')
-  createTwilio(@Body() body: CreateTwilioTemplateDto) {
-    return this.templates.createTwilio(body);
-  }
-
-  @ApiOperation({
-    summary: 'Submit a Twilio draft for WhatsApp approval (draft only)',
-  })
-  @Roles('ADMIN')
-  @Post(':id/twilio-submit')
-  submitTwilio(@Param('id') id: string) {
-    return this.templates.submitTwilioApproval(id);
-  }
-
-  @ApiOperation({
-    summary: 'Update a Twilio Content draft (pre-submission only)',
-  })
-  @Roles('ADMIN')
-  @Patch(':id/twilio-draft')
-  updateTwilioDraft(
-    @Param('id') id: string,
-    @Body() body: UpdateTwilioDraftDto,
-  ) {
-    return this.templates.updateTwilioDraft(id, body);
   }
 }

@@ -16,20 +16,10 @@ import { SendMessageProcessor } from './modules/queue/send-message.processor';
 import { SendingReconcilerProcessor } from './modules/queue/sending-reconciler.processor';
 import { SchedulerProcessor } from './modules/queue/scheduler.processor';
 import { CleanupEventsProcessor } from './modules/queue/cleanup-events.processor';
-import { CheckTokenExpiryProcessor } from './modules/whatsapp-providers/jobs/check-token-expiry.processor';
 import { ContactSyncProcessor } from './modules/contacts/contact-sync.processor';
 import { ContactSyncCronProcessor } from './modules/contacts/contact-sync-cron.processor';
 import { ChatMediaDownloadProcessor } from './modules/chat/chat-media-download.processor';
 import { ChatHistorySyncProcessor } from './modules/chat/chat-history-sync.processor';
-import { ZernioInboxSyncProcessor } from './modules/chat/zernio-inbox-sync.processor';
-import { ZernioTierSyncProcessor } from './modules/whatsapp-providers/zernio-tier-sync.processor';
-import { ZernioBroadcastSendService } from './modules/whatsapp-providers/zernio-broadcast-send.service';
-import { ZernioBroadcastPollService } from './modules/whatsapp-providers/zernio-broadcast-poll.service';
-import {
-  ZernioBroadcastDispatchProcessor,
-  ZernioBroadcastPollProcessor,
-  ZernioBroadcastCancelProcessor,
-} from './modules/whatsapp-providers/zernio-broadcast-send.processor';
 import { ExcelImportModule } from './modules/excel-import/excel-import.module';
 import { ExcelImportProcessor } from './modules/excel-import/excel-import.processor';
 import { BotsModule } from './modules/bots/bots.module';
@@ -86,36 +76,10 @@ import { serializeErrorForLog } from './shared/logging/pino-error-serializer';
     SendingReconcilerProcessor,
     SchedulerProcessor,
     CleanupEventsProcessor,
-    CheckTokenExpiryProcessor,
     ContactSyncProcessor,
     ContactSyncCronProcessor,
     ChatMediaDownloadProcessor,
     ChatHistorySyncProcessor,
-    // ZERNIO_INBOX_SYNC consumer — como os demais, registrado SÓ aqui (um
-    // @Processor duplicado em módulo de feature derruba o worker inteiro).
-    ZernioInboxSyncProcessor,
-    // ZA2/ZA3 — tier-sync do Zernio. Registrado AQUI (e não no
-    // WhatsappProvidersModule, como o gêmeo do Twilio) porque ele precisa do
-    // CampaignsService para pausar as campanhas do canal quando a qualidade
-    // cai, e WhatsappProvidersModule → CampaignsModule fecharia um ciclo
-    // (CampaignsModule → TemplatesModule → WhatsappProvidersModule).
-    ZernioTierSyncProcessor,
-    // ★ ZB — o BROADCAST do Zernio (o caminho de ESCRITA: a campanha do orgamind
-    // vira um disparo de verdade no painel do cliente).
-    //
-    // Registrado AQUI pelo MESMO motivo do ZernioTierSyncProcessor acima: os
-    // serviços precisam do CampaignsRepository (claim atômico, releaseClaim,
-    // createSkippedMessage — as MESMAS operações do envio 1-a-1, porque as
-    // invariantes são as mesmas), e `WhatsappProvidersModule → CampaignsModule`
-    // fecharia o ciclo. Aqui os dois módulos já estão em escopo.
-    //
-    // O ZernioBroadcastClient vem exportado do WhatsappProvidersModule; o
-    // ConsentService, do ConsentModule (@Global); as filas, do QueueModule.
-    ZernioBroadcastSendService,
-    ZernioBroadcastPollService,
-    ZernioBroadcastDispatchProcessor,
-    ZernioBroadcastPollProcessor,
-    ZernioBroadcastCancelProcessor,
     // EXCEL_IMPORT consumer — registered ONLY here (never also in a feature
     // module; a duplicate @Processor crashes the whole worker).
     ExcelImportProcessor,

@@ -8,6 +8,16 @@ import { WhatsappSendError } from '../whatsapp-providers/errors/whatsapp.errors'
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { AuditService } from '../../shared/audit/audit.service';
 
+// O envio por GOZAP/ZERNIO/TWILIO é código inativo (GC5): esta suíte segue
+// cobrindo-o com todo provedor "ligado". O guard de provedor desligado do chat
+// tem o seu teste em chat.service.spec.ts.
+vi.mock('../../shared/config/enabled-providers', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('../../shared/config/enabled-providers')
+  >()),
+  isEnabledChannelProvider: () => true,
+}));
+
 /**
  * O bug vivido em produção: o único canal do cliente é ZERNIO e o inbox NÃO
  * deixava responder — 16 pessoas que responderam à campanha ficaram falando

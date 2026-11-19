@@ -1,8 +1,11 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
+import type { ChannelProvider } from '@prisma/client';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { NotFoundError, ConflictError, ChannelNotEvolutionError } from '../../shared/errors/domain.error';
+import { ChannelProviderDisabledError } from '../../shared/errors/channel-provider-disabled.error';
+import { isEnabledChannelProvider } from '../../shared/config/enabled-providers';
 import { MEDIA_STORE, type MediaStore } from '../../shared/media/media-store.port';
 import { ChatRepository } from './chat.repository';
 import { ChatEventsService } from './chat-events.service';
@@ -37,9 +40,17 @@ export class ChatMediaService {
     return mt === 'image' ? 'IMAGE' : mt === 'video' ? 'VIDEO' : mt === 'audio' ? 'AUDIO' : 'DOCUMENT';
   }
 
+  // Canal de provedor desligado: recusa 409 ANTES de gravar o arquivo e de
+  // criar a Message (senão sobraria bolha FAILED + arquivo órfão no storage).
+  private assertProviderEnabled(provider: ChannelProvider): void {
+    if (!isEnabledChannelProvider(provider))
+      throw new ChannelProviderDisabledError(provider);
+  }
+
   async sendMediaReply(conversationId: string, userId: string, file: Express.Multer.File, caption?: string) {
     const conv = await this.repo.getConversationForSend(conversationId);
     if (!conv) throw new NotFoundError('Conversation', conversationId);
+    this.assertProviderEnabled(conv.instance.provider);
     const cappedCaption = caption?.slice(0, 4096);
     const mt = this.mediatypeFor(file.mimetype);
     const kind = this.kindFor(mt);

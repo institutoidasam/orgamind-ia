@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  dispatchDetailSchema, dispatchListSchema, dispatchRecipientPageSchema, retryResultSchema, teamPersonRouteSchema,
-  teamRosterSchema,
+  dispatchDetailSchema, dispatchListSchema, dispatchRecipientPageSchema, retryResultSchema, rosterMemberSchema,
+  teamPersonRouteSchema, teamRosterSchema,
 } from './schemas';
 
 const base = {
@@ -18,6 +18,22 @@ const ZERO = {
 const page = { total: 2, page: 1, pageSize: 20 };
 const shift = { id: 'sh1', name: 'Noite', startTime: '22:00', endTime: '6h' };
 const target = (label: string) => ({ type: 'sector', id: 's1', label, shift });
+
+describe('rosterMemberSchema: telefone (CB5)', () => {
+  const rosterMember = {
+    id: 'u1', name: 'Ana', email: null, phoneE164: null, hasPhone: true, phoneMasked: '•••• 7777', isActive: true,
+    jobTitle: null, fromOtherSector: false, situation: { kind: 'NONE' }, level: null,
+  };
+
+  it('lê hasPhone e phoneMasked, com phoneE164 nulo (sem a chave)', () => {
+    expect(rosterMemberSchema.parse(rosterMember)).toMatchObject({ phoneE164: null, hasPhone: true, phoneMasked: '•••• 7777' });
+  });
+
+  it('resposta no formato antigo (sem hasPhone e phoneMasked) é recusada', () => {
+    const antigo = { ...rosterMember, hasPhone: undefined, phoneMasked: undefined };
+    expect(rosterMemberSchema.safeParse(antigo).success).toBe(false);
+  });
+});
 
 describe('dispatchListSchema', () => {
   it('lê a página com um envio agendado e um cancelado, os números usados e o total', () => {

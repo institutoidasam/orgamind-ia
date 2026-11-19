@@ -72,8 +72,9 @@ describe('Setores — trilha na transação (A5, GC1; Postgres exclusivo)', () =
     const created = await sectors.create(
       { name: 'Compras', code: 'COM', managerId: manager.id },
       ACTOR,
+      'ADMIN',
     );
-    await sectors.update(created.id, { managerId: null }, ACTOR);
+    await sectors.update(created.id, { managerId: null }, ACTOR, 'ADMIN');
 
     const events = await prisma.auditEvent.findMany({
       where: { entity: 'Sector', entityId: created.id },
@@ -102,16 +103,20 @@ describe('Setores — trilha na transação (A5, GC1; Postgres exclusivo)', () =
 
 describe('Setores — falha da trilha desfaz a escrita (GC1)', () => {
   it('se a trilha falhar, a criação e a edição não ficam', async () => {
-    const kept = await sectors.create({ name: 'Mantido', code: 'MAN' }, ACTOR);
+    const kept = await sectors.create(
+      { name: 'Mantido', code: 'MAN' },
+      ACTOR,
+      'ADMIN',
+    );
     const failure = new Error('audit offline');
     const failing = vi.spyOn(audit, 'recordChange').mockRejectedValue(failure);
 
     try {
       await expect(
-        sectors.create({ name: 'Perdido', code: 'PER' }, ACTOR),
+        sectors.create({ name: 'Perdido', code: 'PER' }, ACTOR, 'ADMIN'),
       ).rejects.toBe(failure);
       await expect(
-        sectors.update(kept.id, { name: 'Renomeado' }, ACTOR),
+        sectors.update(kept.id, { name: 'Renomeado' }, ACTOR, 'ADMIN'),
       ).rejects.toBe(failure);
     } finally {
       failing.mockRestore();
@@ -158,16 +163,18 @@ describe('Setores — edições concorrentes do mesmo setor (A5, GC1)', () => {
     const sector = await sectors.create(
       { name: 'Original', code: 'ORI' },
       ACTOR,
+      'ADMIN',
     );
     const { firstInside, release, stalled } = stallFirstAuditRecord();
 
     try {
-      const first = sectors.update(sector.id, { name: 'Alfa' }, ACTOR);
+      const first = sectors.update(sector.id, { name: 'Alfa' }, ACTOR, 'ADMIN');
       await firstInside.promise;
       const second = sectors.update(
         sector.id,
         { isActive: false },
         OTHER_ACTOR,
+        'ADMIN',
       );
       try {
         await waitForBlockedWriter();

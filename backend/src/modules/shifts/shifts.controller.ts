@@ -9,7 +9,7 @@ import {
   Req,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { RequirePermission } from '../auth/decorators/require-permission.decorator';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { CreateShiftDto } from './dto/create-shift.dto';
 import { ReorderShiftsDto } from './dto/reorder-shifts.dto';
@@ -18,9 +18,9 @@ import { ShiftsService } from './shifts.service';
 
 type AuthRequest = { user: JwtPayload };
 
-/** Cadastro de turnos: todas as rotas só ADMIN (papel no controller, sem override por rota). */
+/** Cadastro de turnos: todas as rotas pela permissão estrutura.manter (na classe, sem override por rota). */
 @ApiTags('shifts')
-@Roles('ADMIN')
+@RequirePermission('estrutura.manter')
 @Controller('internal/shifts')
 export class ShiftsController {
   constructor(private readonly shifts: ShiftsService) {}

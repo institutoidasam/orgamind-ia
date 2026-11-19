@@ -9,6 +9,7 @@ vi.mock('../api', () => ({
   useCancelDispatch: () => ({ mutateAsync, isPending: false }),
 }));
 
+import { useAuthStore, type AuthUser } from '@/stores/auth.store';
 import { ScheduledDispatches } from './scheduled-dispatches';
 import type { ScheduledDispatch } from '../schemas';
 
@@ -40,7 +41,29 @@ async function confirmCancel() {
   await user.click(screen.getByRole('button', { name: 'Cancelar envio' }));
 }
 
-beforeEach(() => { mutateAsync.mockClear(); onPageChange.mockClear(); });
+const OPERATOR: AuthUser = { id: 'u1', email: 'o@x.test', name: 'Olga', role: 'OPERATOR' };
+
+beforeEach(() => {
+  mutateAsync.mockClear();
+  onPageChange.mockClear();
+  useAuthStore.setState({ user: OPERATOR });
+});
+
+describe('ScheduledDispatches: permissão (DB6, DB10)', () => {
+  it('sem equipe.enviar some o Cancelar e o agendado continua na lista', () => {
+    useAuthStore.setState({ user: { ...OPERATOR, permissions: ['trilha.consultar'] } });
+    renderList([item]);
+    expect(screen.getByText('Produção · Noite · 21/10')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancelar' })).not.toBeInTheDocument();
+  });
+
+  it('403 auth.permission_denied mostra o detail do servidor', async () => {
+    const body = JSON.stringify({ code: 'auth.permission_denied', detail: 'Texto do servidor.' });
+    mutateAsync.mockRejectedValue(new HTTPError(new Response(body, { status: 403 }), new Request('https://x'), {} as never));
+    await confirmCancel();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Texto do servidor.');
+  });
+});
 
 describe('ScheduledDispatches', () => {
   it('lista data e hora gravadas, rótulo e quantidade de pessoas', () => {

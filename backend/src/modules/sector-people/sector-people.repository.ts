@@ -5,18 +5,26 @@ import type {
   SectorPeopleCandidate,
   SectorPerson,
 } from '../../schemas/contracts/sector-people.schema';
+import { hasPermission } from '../../shared/authz/permissions';
+import {
+  nameSearchAllowed,
+  nameView,
+  phoneView,
+} from '../../shared/authz/phone-visibility';
 import { escapeLike } from '../../shared/prisma/escape-like';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { buildContactListWhere } from '../contacts/contacts.repository';
+import { findEffectivePermissions } from '../permissions/permissions.query';
 import {
   SECTOR_CHANNEL_SELECT,
   type SectorChannelRow,
 } from '../team-whatsapp/sector-channel';
 import { toContactAuthorization } from '../users/person-record';
-import type {
-  PeopleActor,
-  PeoplePerson,
-  PeopleSector,
+import {
+  isSectorAdmin,
+  type PeopleActor,
+  type PeoplePerson,
+  type PeopleSector,
 } from './sector-people.policy';
 
 const CANDIDATES_LIMIT = 20;
@@ -62,9 +70,30 @@ export type BatchContact = {
   personId: string | null;
 };
 
+/**
+ * Quem lê a página do setor: `isAdmin` (regra GC8 do setor) e `fullPhone` (chave
+ * `telefone.ver_completo`, DB8). Sem `fullPhone` só a máscara sai e a busca ignora o telefone.
+ */
+export type PeopleViewer = { isAdmin: boolean; fullPhone: boolean };
+
+export function peopleViewer(actor: PeopleActor): PeopleViewer {
+  return {
+    isAdmin: isSectorAdmin(actor),
+    fullPhone: hasPermission(actor, 'telefone.ver_completo'),
+  };
+}
+
+/** Pessoa lida para decidir; `hasPhone` evita levar o número (nem a máscara) à regra. */
+export type PersonWithPhone = PeoplePerson & {
+  name: string | null;
+  hasPhone: boolean;
+};
+
 export type CandidatesArgs = {
   sectorId: string;
   q: string;
+  /** Busca também por telefone: só com a chave `telefone.ver_completo` (DB8). */
+  searchPhone: boolean;
   /** Gestor (D6): só `sectorId` NULL e `hasAccess` false. */
   onlyUnassignedWithoutAccess: boolean;
 };
@@ -74,22 +103,76 @@ function displayName(user: { name: string | null; email: string | null }) {
   return user.name ?? user.email ?? '';
 }
 
-/** Ordem pt-BR feita aqui: a collation do banco não ordena acentos como o pt-BR. */
-function sortByName<T>(items: T[], nameOf: (item: T) => string): T[] {
-  return items.sort((a, b) => nameOf(a).localeCompare(nameOf(b), 'pt-BR'));
+/** Chave de ordem: o nome EXIBIDO a quem lê e o id da linha. */
+export type NameSortKey = { name: string | null; id: string };
+
+/** pt-BR, nulo por último (como o `nulls: 'last'` dos contatos). */
+function compareNames(a: string | null, b: string | null): number {
+  if (a === null || b === null) return Number(a === null) - Number(b === null);
+  return a.localeCompare(b, 'pt-BR');
 }
 
-/** Nome, telefone e matrícula (A1): a matrícula casa pela chave em minúsculas. */
-function nameOrPhoneWhere(q: string): Prisma.UserWhereInput {
+/** Pelo nome; no empate, pelo id (fixo, sem depender do que o leitor não vê). */
+function compareNameKeys(a: NameSortKey, b: NameSortKey): number {
+  const byName = compareNames(a.name, b.name);
+  if (byName !== 0 || a.id === b.id) return byName;
+  return a.id < b.id ? -1 : 1;
+}
+
+/**
+ * Ordem pt-BR feita aqui: a collation do banco não ordena acentos como o pt-BR.
+ * I2: `keyOf` dá o nome EXIBIDO a quem lê, e o empate é pelo id. Ordenar pelo
+ * nome real (ou desempatar pelo telefone) deixaria quem não vê o telefone achar
+ * o número de um nome-telefone (D11) pela posição dele na lista.
+ */
+export function sortByName<T>(
+  items: T[],
+  keyOf: (item: T) => NameSortKey,
+): T[] {
+  return items.sort((a, b) => compareNameKeys(keyOf(a), keyOf(b)));
+}
+
+/**
+ * Nome, matrícula (A1: casa pela chave em minúsculas) e, só com a chave, telefone:
+ * quem não a tem não descobre o número por tentativa (DB8). Sem a chave, termo
+ * sem letra também não busca por nome: casaria o nome-telefone da D11.
+ */
+function personSearchWhere(
+  q: string,
+  searchPhone: boolean,
+): Prisma.UserWhereInput {
   if (!q) return {};
   const text = escapeLike(q);
+  const byName: Prisma.UserWhereInput = {
+    name: { contains: text, mode: 'insensitive' },
+  };
   return {
     OR: [
-      { name: { contains: text, mode: 'insensitive' } },
-      { phoneE164: { contains: text } },
+      ...(nameSearchAllowed(q, { full: searchPhone }) ? [byName] : []),
+      ...(searchPhone ? [{ phoneE164: { contains: text } }] : []),
       { registrationKey: { contains: text.toLowerCase() } },
     ],
   };
+}
+
+/**
+ * Sem a chave a busca de contatos usa só o nome, e termo sem letra não casa nada
+ * (`null`: só acharia nome-telefone, D11); com ela, o mesmo filtro de `GET /contacts`.
+ */
+function contactSearchWhere(
+  q: string,
+  fullPhone: boolean,
+): Prisma.ContactWhereInput | null {
+  if (fullPhone) {
+    return buildContactListWhere({
+      page: 1,
+      pageSize: CONTACT_CANDIDATES_LIMIT,
+      search: q,
+    });
+  }
+  if (!q) return {};
+  if (!nameSearchAllowed(q, { full: false })) return null;
+  return { name: { contains: escapeLike(q), mode: 'insensitive' } };
 }
 
 function candidatesScope(args: CandidatesArgs): Prisma.UserWhereInput {
@@ -100,19 +183,45 @@ function candidatesScope(args: CandidatesArgs): Prisma.UserWhereInput {
   return { OR: [{ sectorId: null }, { sectorId: { not: args.sectorId } }] };
 }
 
+/** GC8: o telefone de pessoa com login fica oculto para quem não é ADMIN. */
+function phoneHidden(viewer: PeopleViewer, hasAccess: boolean): boolean {
+  return !viewer.isAdmin && hasAccess;
+}
+
 /**
- * GC8: o gestor não recebe o telefone de quem tem acesso (só o ADMIN o edita).
+ * D11: nome que é telefone segue a regra do telefone desta pessoa — completo só
+ * com a chave e sem a ocultação da GC8. Só a resposta muda; o banco guarda o real.
+ */
+export function personNameView(
+  name: string,
+  hasAccess: boolean,
+  viewer: PeopleViewer,
+): string {
+  const full = viewer.fullPhone && !phoneHidden(viewer, hasAccess);
+  return nameView(name, { full });
+}
+
+/** O `name` que `toSectorPerson` devolve; a lista do setor ordena por ele (I2). */
+function shownPersonName(row: SectorPersonRow, viewer: PeopleViewer): string {
+  return personNameView(displayName(row), row.hasAccess, viewer);
+}
+
+/**
+ * GC8: o gestor não recebe o telefone de quem tem acesso (só o ADMIN o edita);
+ * DB8: o número completo só vai a quem tem a chave, os demais recebem a máscara.
  * `role` só faz sentido com acesso (o VIEWER da D1 não é exibido).
  */
 export function toSectorPerson(
   row: SectorPersonRow,
-  viewer: { isAdmin: boolean },
+  viewer: PeopleViewer,
 ): SectorPerson {
-  const showPhone = viewer.isAdmin || !row.hasAccess;
   return {
     id: row.id,
-    name: displayName(row),
-    phoneE164: showPhone ? row.phoneE164 : null,
+    name: shownPersonName(row, viewer),
+    ...phoneView(row.phoneE164, {
+      full: viewer.fullPhone,
+      hidden: phoneHidden(viewer, row.hasAccess),
+    }),
     hasAccess: row.hasAccess,
     role: row.hasAccess ? row.role : null,
     level: row.level,
@@ -125,15 +234,66 @@ export function toSectorPerson(
   };
 }
 
+/** O contato sempre tem número: a máscara sai sempre e o completo só com a chave. */
+function contactPhone(
+  phoneE164: string,
+  viewer: Pick<PeopleViewer, 'fullPhone'>,
+): { phoneE164: string | null; phoneMasked: string } {
+  const view = phoneView(phoneE164, { full: viewer.fullPhone });
+  return { phoneE164: view.phoneE164, phoneMasked: view.phoneMasked ?? '' };
+}
+
+const contactCandidateSelect = {
+  id: true,
+  name: true,
+  phoneE164: true,
+  user: {
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      hasAccess: true,
+      sector: { select: { name: true } },
+    },
+  },
+} satisfies Prisma.ContactSelect;
+
+type ContactCandidateRow = Prisma.ContactGetPayload<{
+  select: typeof contactCandidateSelect;
+}>;
+
+/** Nome do contato e da pessoa ligada passam por `nameView` (D11), como o telefone. */
+function toContactCandidate(
+  { id, name, phoneE164, user }: ContactCandidateRow,
+  viewer: PeopleViewer,
+): SectorContactCandidate {
+  return {
+    contactId: id,
+    name: nameView(name, { full: viewer.fullPhone }),
+    ...contactPhone(phoneE164, viewer),
+    person: user
+      ? {
+          userId: user.id,
+          name: personNameView(displayName(user), user.hasAccess, viewer),
+          sectorName: user.sector?.name ?? null,
+        }
+      : null,
+  };
+}
+
 @Injectable()
 export class SectorPeopleRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  findActor(id: string): Promise<PeopleActor | null> {
-    return this.prisma.user.findUnique({
+  /** Ator com o papel e as permissões efetivas lidos do banco a cada chamada (GB3). */
+  async findActor(id: string): Promise<PeopleActor | null> {
+    const user = await this.prisma.user.findUnique({
       where: { id },
       select: { id: true, role: true, isActive: true, hasAccess: true },
     });
+    if (!user) return null;
+    const permissions = await findEffectivePermissions(this.prisma, user.role);
+    return { ...user, permissions };
   }
 
   findSector(id: string): Promise<SectorDetail | null> {
@@ -151,10 +311,8 @@ export class SectorPeopleRepository {
     });
   }
 
-  findPerson(
-    id: string,
-  ): Promise<(PeoplePerson & { name: string | null }) | null> {
-    return this.prisma.user.findUnique({
+  async findPerson(id: string): Promise<PersonWithPhone | null> {
+    const row = await this.prisma.user.findUnique({
       where: { id },
       select: {
         id: true,
@@ -162,8 +320,12 @@ export class SectorPeopleRepository {
         sectorId: true,
         hasAccess: true,
         isActive: true,
+        phoneE164: true,
       },
     });
+    if (!row) return null;
+    const { phoneE164, ...person } = row;
+    return { ...person, hasPhone: Boolean(phoneE164) };
   }
 
   /** Pessoas do `move`, ativas ou não (o serviço devolve 404 às inativas). */
@@ -225,23 +387,33 @@ export class SectorPeopleRepository {
     return count > 0;
   }
 
-  /** Com `sectorId` = este, nome asc pt-BR; os inativos só entram com `includeInactive` (A3). */
+  /**
+   * Com `sectorId` = este, pelo nome exibido a `viewer` asc pt-BR e empate pelo id
+   * (I2); os inativos só entram com `includeInactive` (A3).
+   */
   async listPeople(
     sectorId: string,
     includeInactive: boolean,
+    viewer: PeopleViewer,
   ): Promise<SectorPersonRow[]> {
     const rows = await this.prisma.user.findMany({
       where: { sectorId, ...(includeInactive ? {} : { isActive: true }) },
       select: sectorPersonSelect,
     });
-    return sortByName<SectorPersonRow>(rows, displayName);
+    return sortByName(rows, (row) => ({
+      name: shownPersonName(row, viewer),
+      id: row.id,
+    }));
   }
 
   async listCandidates(args: CandidatesArgs): Promise<SectorPeopleCandidate[]> {
     const rows = await this.prisma.user.findMany({
       where: {
         isActive: true,
-        AND: [candidatesScope(args), nameOrPhoneWhere(args.q)],
+        AND: [
+          candidatesScope(args),
+          personSearchWhere(args.q, args.searchPhone),
+        ],
       },
       orderBy: { name: 'asc' },
       take: CANDIDATES_LIMIT,
@@ -258,44 +430,34 @@ export class SectorPeopleRepository {
       ...row,
       name: displayName({ name: row.name, email }),
     }));
-    return sortByName(items, (item) => item.name);
+    // Nome real aqui: o serviço mascara (D11) e reordena pelo nome exibido (I2).
+    return sortByName(items, ({ name, id }) => ({ name, id }));
   }
 
   /** Mesmo `where` de `GET /contacts` (D8) com a busca; `person` pela relação `UserContact`. */
-  async listContactCandidates(q: string): Promise<SectorContactCandidate[]> {
+  async listContactCandidates(
+    q: string,
+    viewer: PeopleViewer,
+  ): Promise<SectorContactCandidate[]> {
+    const where = contactSearchWhere(q, viewer.fullPhone);
+    if (!where) return [];
     const rows = await this.prisma.contact.findMany({
-      where: buildContactListWhere({
-        page: 1,
-        pageSize: CONTACT_CANDIDATES_LIMIT,
-        search: q,
-      }),
-      orderBy: [{ name: { sort: 'asc', nulls: 'last' } }, { phoneE164: 'asc' }],
+      where,
+      // Sem a chave o desempate é o id: ordenar pelo número também o revelaria.
+      orderBy: [
+        { name: { sort: 'asc', nulls: 'last' } },
+        viewer.fullPhone ? { phoneE164: 'asc' } : { id: 'asc' },
+      ],
       take: CONTACT_CANDIDATES_LIMIT,
-      select: {
-        id: true,
-        name: true,
-        phoneE164: true,
-        user: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            sector: { select: { name: true } },
-          },
-        },
-      },
+      select: contactCandidateSelect,
     });
-    return rows.map(({ id, name, phoneE164, user }) => ({
-      contactId: id,
-      name,
-      phoneE164,
-      person: user
-        ? {
-            userId: user.id,
-            name: displayName(user),
-            sectorName: user.sector?.name ?? null,
-          }
-        : null,
+    const items = rows.map((row) => toContactCandidate(row, viewer));
+    // I2: sem a chave o nome do contato pode ser um número (D11, WhatsApp) e sai
+    // mascarado; a página volta na ordem do nome exibido. Com a chave, a do banco.
+    if (viewer.fullPhone) return items;
+    return sortByName(items, (item) => ({
+      name: item.name,
+      id: item.contactId,
     }));
   }
 }

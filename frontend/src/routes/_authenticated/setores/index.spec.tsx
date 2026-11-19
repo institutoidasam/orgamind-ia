@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const auth = vi.hoisted(() => ({ user: { id: "admin", role: "ADMIN" } as { id: string; role: string } }));
+const auth = vi.hoisted(() => ({ user: { id: "admin", role: "ADMIN" } as { id: string; role: string; permissions?: string[] } }));
 const sectors = vi.hoisted(() => ({ current: { data: { items: [] }, isLoading: false, isError: false, refetch: vi.fn() } }));
 
 vi.mock("@tanstack/react-router", () => ({
@@ -19,6 +19,22 @@ function renderSectors() {
   const route = Route as unknown as { component: React.ComponentType };
   return render(<route.component />);
 }
+
+describe("/setores: estrutura por estrutura.manter", () => {
+  it("SUPERVISOR com a chave vê todos os setores, com a mensagem e o botão de ADMIN", () => {
+    auth.user = { id: "m1", role: "SUPERVISOR", permissions: ["estrutura.manter"] };
+    const item = (id: string, name: string, managerId: string) => ({ id, name, code: id, isActive: true, manager: { id: managerId, name: "X" }, memberCount: 1, channel: null });
+    sectors.current = { data: { items: [item("s1", "Engenharia", "m1"), item("s2", "Vendas", "outro")] }, isLoading: false, isError: false, refetch: vi.fn() };
+    const { unmount } = renderSectors();
+    expect(screen.getByRole("link", { name: "Engenharia" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Vendas" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Novo setor/ })).toBeInTheDocument();
+    unmount();
+    sectors.current = { data: { items: [] }, isLoading: false, isError: false, refetch: vi.fn() };
+    renderSectors();
+    expect(screen.getByText("Nenhum setor cadastrado.")).toBeInTheDocument();
+  });
+});
 
 describe("/setores", () => {
   beforeEach(() => {

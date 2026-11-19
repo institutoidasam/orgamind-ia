@@ -1,6 +1,11 @@
 import type { Role } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
+import type { AuditTrailPage } from '../../schemas/contracts/audit-trail.schema';
 import type { TeamActor } from '../team-whatsapp/team-whatsapp.policy';
+import {
+  actorWith,
+  type PermissionChange,
+} from '../../shared/authz/actor.test-fixtures';
 import type {
   AuditTrailRepository,
   AuditTrailRow,
@@ -9,12 +14,13 @@ import { AuditTrailService } from './audit-trail.service';
 
 const SECTOR = 'sector_operation';
 
-function actor(role: Role, managedSectorIds: string[] = []): TeamActor {
+function actor(
+  role: Role,
+  managedSectorIds: string[] = [],
+  change: PermissionChange = {},
+): TeamActor {
   return {
-    id: `user_${role.toLowerCase()}`,
-    role,
-    isActive: true,
-    hasAccess: true,
+    ...actorWith(role, { ...change, id: `user_${role.toLowerCase()}` }),
     managedSectorIds,
   };
 }
@@ -59,6 +65,130 @@ function setup(
 
 const PAGE = { page: 1, pageSize: 20 };
 const FORBIDDEN = { status: 403, code: 'audit_trail.forbidden' };
+
+const PHONE_SUBJECT = '+5592988887777';
+const PHONE_ACTOR = '+5592977776666';
+
+/** Pessoa e autor cujo nome é o telefone (D11), mais uma pessoa de nome normal. */
+function withPhoneNames(repo: ReturnType<typeof setup>['repo']): void {
+  const rename = [{ field: 'name', before: PHONE_SUBJECT, after: 'Ana Souza' }];
+  const created = [{ field: 'name', before: null, after: PHONE_SUBJECT }];
+  const phone = { subjectUserId: 'user_phone', actorId: 'user_boss' };
+  repo.findPage.mockResolvedValue({
+    rows: [
+      row({ id: 'evt_1', ...phone, changes: rename }),
+      row({ id: 'evt_2', ...phone, changes: created }),
+      row({ id: 'evt_3' }),
+    ],
+    total: 3,
+  });
+  repo.findPeopleByIds.mockResolvedValue([
+    { id: ADMIN.id, name: 'Admin', registration: null },
+    { id: 'user_ana', name: 'Ana', registration: 'A-1' },
+    { id: 'user_phone', name: PHONE_SUBJECT, registration: null },
+    { id: 'user_boss', name: PHONE_ACTOR, registration: null },
+  ]);
+}
+
+const nameParts = (page: AuditTrailPage) =>
+  page.items.map((item) => [
+    item.subject?.name,
+    item.actor?.name,
+    item.changes?.[0]?.before,
+    item.changes?.[0]?.after,
+  ]);
+
+describe('AuditTrailService.personHistory — nome que é telefone (D11)', () => {
+  it('sem telefone.ver_completo: pessoa, autor e valores do campo name saem mascarados; nome normal intacto', async () => {
+    const who = actor('OPERATOR', [SECTOR], {
+      grant: ['trilha.consultar'],
+      revoke: ['telefone.ver_completo'],
+    });
+    const { repo, service } = setup({ actor: who });
+    withPhoneNames(repo);
+
+    const page = await service.personHistory(who.id, 'user_phone', PAGE);
+
+    expect(nameParts(page)).toEqual([
+      ['•••• 7777', '•••• 6666', '•••• 7777', 'Ana Souza'],
+      ['•••• 7777', '•••• 6666', null, '•••• 7777'],
+      ['Ana', 'Admin', 'Ana', 'Ana Souza'],
+    ]);
+    expect(JSON.stringify(page)).not.toMatch(/988887777|977776666/);
+  });
+});
+
+describe('AuditTrailService — nome que é telefone com a matriz inicial', () => {
+  const recorded = [
+    [PHONE_SUBJECT, PHONE_ACTOR, PHONE_SUBJECT, 'Ana Souza'],
+    [PHONE_SUBJECT, PHONE_ACTOR, null, PHONE_SUBJECT],
+    ['Ana', 'Admin', 'Ana', 'Ana Souza'],
+  ];
+
+  it('ADMIN na consulta geral recebe como gravado', async () => {
+    const { repo, service } = setup();
+    withPhoneNames(repo);
+
+    const page = await service.list(ADMIN.id, PAGE);
+
+    expect(nameParts(page)).toEqual(recorded);
+  });
+
+  it.each([
+    ['SUPERVISOR do setor', SUPERVISOR],
+    [
+      'OPERATOR com trilha.consultar',
+      actor('OPERATOR', [SECTOR], { grant: ['trilha.consultar'] }),
+    ],
+  ])('%s no histórico da pessoa recebe como gravado', async (_l, who) => {
+    const { repo, service } = setup({ actor: who });
+    withPhoneNames(repo);
+
+    const page = await service.personHistory(who.id, 'user_phone', PAGE);
+
+    expect(nameParts(page)).toEqual(recorded);
+  });
+});
+
+describe('AuditTrailService.personHistory — por permissão', () => {
+  it('OPERATOR com trilha.consultar no alcance recebe só PERSON, ASSIGNMENT e SCHEDULE', async () => {
+    const operator = actor('OPERATOR', [SECTOR], {
+      grant: ['trilha.consultar'],
+    });
+    const { repo, service } = setup({ actor: operator });
+
+    await service.personHistory(operator.id, 'user_ana', PAGE);
+
+    expect(repo.findPage).toHaveBeenCalledWith(
+      {
+        subjectUserId: 'user_ana',
+        category: { in: ['PERSON', 'ASSIGNMENT', 'SCHEDULE'] },
+      },
+      1,
+      20,
+    );
+  });
+
+  it.each([
+    [
+      'OPERATOR com a chave, pessoa fora do alcance',
+      actor('OPERATOR', [SECTOR], { grant: ['trilha.consultar'] }),
+      'sector_it',
+    ],
+    [
+      'SUPERVISOR sem a chave, pessoa no alcance',
+      actor('SUPERVISOR', [SECTOR], { revoke: ['trilha.consultar'] }),
+      SECTOR,
+    ],
+  ])('%s → 403 audit_trail.forbidden', async (_, who, sectorId) => {
+    const { repo, service } = setup({ actor: who, sectorId });
+
+    await expect(
+      service.personHistory(who.id, 'user_ana', PAGE),
+    ).rejects.toMatchObject(FORBIDDEN);
+    expect(repo.findPage).not.toHaveBeenCalled();
+  });
+});
 
 describe('AuditTrailService.list — filtros', () => {
   it('monta where com categoria, período em Manaus (fim exclusivo no dia seguinte) e q → subjectUserId in', async () => {

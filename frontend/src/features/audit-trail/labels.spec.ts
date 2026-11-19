@@ -7,6 +7,30 @@ import {
   formatAuditValue,
 } from './labels';
 
+describe('rótulos da trilha: permissões por papel', () => {
+  it('campo <chave>:<PAPEL> vira "<nome da permissão> (<Papel>)", sem chave nem papel crus', () => {
+    expect(fieldLabel('escala.alterar:OPERATOR')).toBe('Alterar a escala (Operador)');
+    expect(fieldLabel('estrutura.manter:SUPERVISOR')).toBe('Manter setores, turnos e níveis (Supervisor)');
+  });
+
+  it('chave ou papel desconhecido mantém o texto como veio, sem quebrar', () => {
+    expect(fieldLabel('escala.alterar:ROOT')).toBe('escala.alterar:ROOT');
+    expect(fieldLabel('chave.nova:OPERATOR')).toBe('chave.nova:OPERATOR');
+    expect(fieldLabel('toString:OPERATOR')).toBe('toString:OPERATOR');
+    expect(fieldLabel('escala.alterar:OPERATOR:x')).toBe('escala.alterar:OPERATOR:x');
+  });
+
+  it('valor da célula alterada vira Sim ou Não', () => {
+    expect(formatAuditValue('escala.alterar:OPERATOR', true)).toBe('Sim');
+    expect(formatAuditValue('escala.alterar:OPERATOR', false)).toBe('Não');
+  });
+
+  it('ações da matriz em português', () => {
+    expect(actionLabel('permission.matrix_updated')).toBe('Permissões alteradas');
+    expect(actionLabel('permission.matrix_restored')).toBe('Permissões restauradas ao padrão');
+  });
+});
+
 describe('rótulos da trilha: ação, tipo e campo', () => {
   it('ação conhecida vira texto; desconhecida mostra o próprio código', () => {
     expect(actionLabel('user.profile_updated')).toBe('Dados da pessoa alterados');

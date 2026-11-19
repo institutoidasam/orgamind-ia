@@ -3,6 +3,7 @@ import { Brand } from '@/components/brand';
 import { initials } from '@/lib/initials';
 import { WORKSPACE_NAME } from '@/lib/brand';
 import { useInternalUnreadCount } from '@/lib/internal-unread';
+import { usePermissions } from '@/features/permissions/use-permission';
 import { isNavActive, navSection, type NavItem, type NavRole } from '@/lib/nav';
 
 type Props = {
@@ -31,11 +32,12 @@ export function Sidebar({ collapsed, user, onNavigate }: Props) {
   const isActive = (to: string) => isNavActive(path, to);
 
   const role = user?.role as NavRole | undefined;
+  const permissions = usePermissions();
   const unread = useInternalUnreadCount({ role: user?.role, userKey: user?.email });
   const unreadTotal = unread.data?.count ?? 0;
-  const work = navSection('ops', role);
-  const followUp = navSection('sys', role);
-  const administration = navSection('admin', role);
+  const work = navSection('ops', role, permissions);
+  const followUp = navSection('sys', role, permissions);
+  const administration = navSection('admin', role, permissions);
 
   return (
     <div

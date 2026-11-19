@@ -3,11 +3,11 @@ import type { LeftOutPerson, RecipientPreview, RosterMember, SendTarget, TeamLev
 
 export const memberName = (m: RosterMember): string => m.name ?? m.email ?? 'Sem nome';
 
-/** Tem telefone e não está `NAO_AUTORIZADO` (C8); `contactAuthorization` ausente = autorizado. */
-export const canReceive = (m: RosterMember): boolean => !!m.phoneE164 && m.contactAuthorization !== 'NAO_AUTORIZADO';
+/** Tem telefone (`hasPhone`, DB8) e não está `NAO_AUTORIZADO` (C8); `contactAuthorization` ausente = autorizado. */
+export const canReceive = (m: RosterMember): boolean => m.hasPhone && m.contactAuthorization !== 'NAO_AUTORIZADO';
 
 /** Tem telefone, mas está `NAO_AUTORIZADO`: fica de fora, em "Contato não autorizado". Sem telefone vale "Sem telefone". */
-export const isNotAuthorized = (m: RosterMember): boolean => !!m.phoneE164 && m.contactAuthorization === 'NAO_AUTORIZADO';
+export const isNotAuthorized = (m: RosterMember): boolean => m.hasPhone && m.contactAuthorization === 'NAO_AUTORIZADO';
 
 /** Filtro de nível do envio: vazio e sem `withoutLevel` = todos (C5). */
 export type LevelFilter = { levelIds: readonly string[]; withoutLevel: boolean };
@@ -82,7 +82,7 @@ export function leftOutPeople(
   selectedIds: readonly string[] | null,
 ): LeftOutPerson[] {
   return members.flatMap((m): LeftOutPerson[] => {
-    if (!m.phoneE164) return [{ name: memberName(m), reason: 'no_phone' }];
+    if (!m.hasPhone) return [{ name: memberName(m), reason: 'no_phone' }];
     if (isNotAuthorized(m)) return [{ name: memberName(m), reason: 'not_authorized' }];
     return selectedIds && !selectedIds.includes(m.id) ? [{ name: memberName(m), reason: 'unselected' }] : [];
   });

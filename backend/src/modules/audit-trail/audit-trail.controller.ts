@@ -1,5 +1,6 @@
 import { Controller, Get, Param, Query, Req } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { RequirePermission } from '../auth/decorators/require-permission.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { AuditTrailService } from './audit-trail.service';
@@ -11,9 +12,10 @@ import {
 type AuthRequest = { user: JwtPayload };
 
 /**
- * Trilha de alterações (C7). O `@Roles` de cada rota espelha a matriz de
- * `person-actions.policy` (sem ele a rota abriria a ADMIN e OPERATOR); quem
- * pode qual pessoa é decidido no serviço.
+ * Trilha de alterações (C7). A consulta geral é fixa do ADMIN (`@Roles`); o
+ * histórico da pessoa exige `trilha.consultar` (`@RequirePermission`, sem
+ * `@Roles`); quem pode qual pessoa é decidido no serviço
+ * (`person-actions.policy`).
  */
 @ApiTags('audit-trail')
 @Controller('audit-trail')
@@ -28,7 +30,7 @@ export class AuditTrailController {
   }
 
   @Get('people/:userId')
-  @Roles('ADMIN', 'SUPERVISOR')
+  @RequirePermission('trilha.consultar')
   @ApiOperation({ summary: 'Histórico de uma pessoa, mais recentes primeiro' })
   personHistory(
     @Param('userId') userId: string,

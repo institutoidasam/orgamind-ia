@@ -31,6 +31,20 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.11.19.1',
+    date: '2026-11-19',
+    title: 'Permissões por ação',
+    items: [
+      {
+        text: 'O administrador agora define, em Configurações → Permissões, o que Supervisor e Operador podem fazer: cadastrar pessoas, inativar, alterar a escala, manter setores, ver o telefone completo, enviar WhatsApp à equipe, enviar a todos os setores de uma vez e consultar o histórico das pessoas.',
+        where: '/configuracoes',
+      },
+      {
+        text: 'Nada mudou para quem já usava o sistema: cada um continua podendo fazer o mesmo que antes.',
+      },
+    ],
+  },
+  {
     version: '2026.11.19',
     date: '2026-11-19',
     title: 'Ficha da pessoa e trilha de alterações',

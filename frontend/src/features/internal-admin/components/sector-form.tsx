@@ -13,6 +13,8 @@ import {
 } from "@/components/ui/select";
 import { sectorInputSchema, type Sector, type SectorInput } from "../schemas";
 import { useAllUsers } from "@/features/users/api";
+import { useAuthStore } from "@/stores/auth.store";
+import { canSetSectorManagerUi } from "../sector-policy";
 import { FormField } from "./form-field";
 
 type Props = {
@@ -34,12 +36,18 @@ export function SectorForm({ sector, pending, onSubmit, onCancel }: Props) {
     resolver: zodResolver(sectorInputSchema) as never,
     defaultValues: EMPTY,
   });
-  const users = useAllUsers();
+  const role = useAuthStore((state) => state.user?.role);
   useEffect(() => form.reset(toValues(sector)), [sector, form]);
   return (
     <form className="space-y-4" onSubmit={form.handleSubmit(onSubmit)}>
       <SectorIdentity form={form} />
-      <SectorManager form={form} users={users.data ?? []} />
+      {canSetSectorManagerUi(role) ? (
+        <SectorManager form={form} />
+      ) : (
+        <p className="text-sm text-muted-foreground">
+          Gestor: {sector?.manager?.name ?? "A definir"}
+        </p>
+      )}
       <SectorState form={form} />
       <div className="flex gap-2">
         <Button type="button" variant="outline" onClick={onCancel}>
@@ -83,20 +91,13 @@ function SectorIdentity({
   );
 }
 
+/** DB20: só o ADMIN escolhe o gestor; a leitura de `GET /users` fica aqui dentro, só para ele. */
 function SectorManager({
   form,
-  users,
 }: {
   form: ReturnType<typeof useForm<SectorInput>>;
-  users: Array<{
-    id: string;
-    name: string | null;
-    email: string | null;
-    hasAccess: boolean;
-    isActive: boolean;
-    role: "ADMIN" | "SUPERVISOR" | "OPERATOR" | "VIEWER";
-  }>;
 }) {
+  const users = useAllUsers().data ?? [];
   const managerId = useWatch({ control: form.control, name: "managerId" });
   return (
     <FormField id="sector-manager" label="Gestor">

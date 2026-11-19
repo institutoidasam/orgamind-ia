@@ -13,6 +13,7 @@ import {
   useOrganization,
   useUpdateOrganization,
 } from '@/features/organization/api';
+import { PermissionsCard } from '@/features/permissions/components/permissions-card';
 
 /**
  * Configurações → a identidade da organização titular deste deploy.
@@ -33,7 +34,14 @@ export const Route = createFileRoute('/_authenticated/configuracoes')({
       throw redirect({ to: '/dashboard' });
     }
   },
-  component: ConfiguracoesPage,
+  // O card Permissões fica fora de ConfiguracoesPage (identidade da organização):
+  // um erro ao ler a organização não esconde a matriz, e vice-versa.
+  component: () => (
+    <div className="space-y-6">
+      <ConfiguracoesPage />
+      <PermissionsCard />
+    </div>
+  ),
 });
 
 function ConfiguracoesPage() {

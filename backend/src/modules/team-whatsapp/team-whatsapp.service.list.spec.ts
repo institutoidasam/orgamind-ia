@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { TeamDispatchRow } from './team-whatsapp.repository';
+import { actorWith } from '../../shared/authz/actor.test-fixtures';
 import {
   teamDispatchListResponseSchema,
   teamTargetsResponseSchema,
@@ -98,7 +99,7 @@ describe('TeamWhatsappService.targets — connectionState e acesso', () => {
   it.each([
     null,
     { ...MANAGER, managedSectorIds: [] },
-    { ...MANAGER, role: 'VIEWER' as const },
+    { ...MANAGER, ...actorWith('VIEWER', { id: MANAGER.id }) },
   ])('quem não é ADMIN nem gestor recebe 403 #%#', async (actor) => {
     h.repo.findActor.mockResolvedValue(actor);
     await expect(h.service.targets('x')).rejects.toMatchObject({

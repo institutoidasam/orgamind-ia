@@ -151,13 +151,17 @@ export const teamRosterQuerySchema = z.preprocess(
 /**
  * C6: escala de um setor na data. Ativos do setor principal, menos quem
  * trabalha em outro setor no dia, mais ativos de fora com WORK aqui
- * (`fromOtherSector`). `phoneE164` = o que o envio usaria (contato ligado, senão
- * o do usuário), para o grupo "Sem telefone". `level` = nível do cadastro (C4).
+ * (`fromOtherSector`). O telefone é o que o envio usaria (contato ligado, senão
+ * o do usuário), como CB5/DB8: `phoneE164` só vem com `telefone.ver_completo`;
+ * `hasPhone` e `phoneMasked` vêm sempre, e `hasPhone` (não `phoneE164`) decide o
+ * grupo "Sem telefone". `level` = nível do cadastro (C4).
  * `contactAuthorization` agrupa a prévia (C8/D11); `authorizationUnverified` =
  * autorizada pela migração (`CADASTRO_ANTERIOR`): ainda recebe, com aviso.
  */
 const teamRosterMemberSchema = personSchema.extend({
   phoneE164: z.string().nullable(),
+  hasPhone: z.boolean(),
+  phoneMasked: z.string().nullable(),
   isActive: z.boolean(),
   jobTitle: z.string().nullable(),
   fromOtherSector: z.boolean(),

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
 import { AuditService } from '../../shared/audit/audit.service';
+import { nameView } from '../../shared/authz/phone-visibility';
 import {
   QUEUE_NAMES,
   type TeamWhatsappSendJob,
@@ -12,6 +13,7 @@ import type {
 } from '../../schemas/contracts/team-whatsapp.schema';
 import { fromDbDate } from '../staff-schedule/civil-date';
 import type { PageQuery } from './dto/page-query.dto';
+import { authorView, seesFullPhone } from './team-whatsapp.name-view';
 import {
   canSendToSector,
   isTeamSender,
@@ -128,7 +130,12 @@ export class TeamWhatsappScheduleService {
       actor.role === 'ADMIN' ? null : actor.managedSectorIds,
       page,
     );
-    return { items: rows.flatMap(toScheduledItem), total, ...page };
+    const full = seesFullPhone(actor);
+    return {
+      items: rows.flatMap((row) => toScheduledItem(row, full)),
+      total,
+      ...page,
+    };
   }
 
   private async requireSender(actorId: string): Promise<TeamActor> {
@@ -159,7 +166,7 @@ export class TeamWhatsappScheduleService {
 }
 
 /** Agendado sem snapshot do turno, data ou hora não é exibível: fica de fora. */
-function toScheduledItem(row: ScheduledRow): ScheduledItem[] {
+function toScheduledItem(row: ScheduledRow, full: boolean): ScheduledItem[] {
   const shift = shiftSnapshotOf(row);
   if (!shift || !row.scheduledFor || !row.rosterDate) return [];
   return [
@@ -168,10 +175,10 @@ function toScheduledItem(row: ScheduledRow): ScheduledItem[] {
       scheduledFor: row.scheduledFor.toISOString(),
       rosterDate: fromDbDate(row.rosterDate),
       shift,
-      label: row.targetLabel,
+      label: nameView(row.targetLabel, { full }),
       recipientCount: row.recipientCount,
       channel: row.channel,
-      author: row.author,
+      author: authorView(row.author, full),
     },
   ];
 }

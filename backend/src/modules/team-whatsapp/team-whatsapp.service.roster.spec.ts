@@ -8,6 +8,7 @@ import type { ScheduleExceptionInput } from '../staff-schedule/schedule-resolver
 import type { CreateTeamDispatchInput } from './dto/create-team-dispatch.dto';
 import { RosterQueryDto } from './dto/roster-query.dto';
 import type { TeamActor } from './team-whatsapp.policy';
+import { actorWith } from '../../shared/authz/actor.test-fixtures';
 import {
   ADMIN,
   NO_SNAPSHOT,
@@ -35,10 +36,7 @@ const DATE = '2026-10-21';
 const PROD = 's1';
 const LOG = 's2';
 const LOG_MANAGER: TeamActor = {
-  id: 'g',
-  role: 'OPERATOR',
-  isActive: true,
-  hasAccess: true,
+  ...actorWith('OPERATOR', { id: 'g' }),
   managedSectorIds: [LOG],
 };
 const otherSector = (
@@ -129,6 +127,57 @@ const expectNothingCreated = () => {
   expect(h.audit.log.mock.calls).toHaveLength(0);
 };
 const FORBIDDEN = { code: 'team_whatsapp.forbidden', status: 403 };
+
+describe('roster — telefone pela chave do ator (CB5)', () => {
+  const prodManager = (): TeamActor => ({
+    ...actorWith('OPERATOR', { id: 'pm' }),
+    managedSectorIds: [PROD],
+  });
+  const noKey = (): TeamActor => ({
+    ...actorWith('OPERATOR', { id: 'sk', revoke: ['telefone.ver_completo'] }),
+    managedSectorIds: [PROD],
+  });
+  const semFone = dayPerson({ id: 'sem', name: 'Sem', phoneE164: null });
+  const rosterOf = async (actor: TeamActor, people = [joao, semFone]) => {
+    h.repo.findActor.mockResolvedValue(actor);
+    h.repo.loadDayPeople.mockResolvedValue(people);
+    const out = await h.service.roster(actor.id, {
+      sectorIds: [PROD],
+      date: DATE,
+    });
+    expect(teamRosterResponseSchema.parse(out)).toEqual(out);
+    return out;
+  };
+  const phones = async (actor: TeamActor) =>
+    (await rosterOf(actor)).sectors[0].members.map((m) => [
+      m.id,
+      m.phoneE164,
+      m.hasPhone,
+      m.phoneMasked,
+    ]);
+
+  it.each([
+    ['ADMIN', ADMIN],
+    ['OPERATOR com a matriz inicial (GB1)', prodManager()],
+  ])('%s com a chave: telefone completo e a máscara', async (_ator, actor) => {
+    expect(await phones(actor)).toEqual([
+      ['joao', PHONE, true, '•••• 4567'],
+      ['sem', null, false, null],
+    ]);
+  });
+
+  it('OPERATOR sem a chave: só a máscara, o número completo não sai na resposta', async () => {
+    expect(await phones(noKey())).toEqual([
+      ['joao', null, true, '•••• 4567'],
+      ['sem', null, false, null],
+    ]);
+    // Pessoa cujo nome é o número (D11): a resposta INTEIRA não o traz, nem no nome.
+    const numero = dayPerson({ id: 'num', name: PHONE });
+    const whole = await rosterOf(noKey(), [joao, semFone, numero]);
+    expect(whole.sectors[0].members.map((m) => m.name)).toContain('•••• 4567');
+    expect(JSON.stringify(whole)).not.toContain(PHONE.slice(1));
+  });
+});
 
 describe('targets em Manaus', () => {
   const PRODUCAO = { id: PROD, name: 'Produção', code: 'PRD' };

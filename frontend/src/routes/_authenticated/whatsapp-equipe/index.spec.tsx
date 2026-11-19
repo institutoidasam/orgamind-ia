@@ -31,6 +31,7 @@ vi.mock('@/features/team-whatsapp/components/send-whatsapp-dialog', () => ({
 }));
 
 import type { RosterMember } from '@/features/team-whatsapp/schemas';
+import { useAuthStore, type AuthUser } from '@/stores/auth.store';
 import { Route } from './index';
 
 const Page = (Route as unknown as { component: ComponentType }).component;
@@ -70,16 +71,16 @@ const manha = { id: 'manha', name: 'Manhã', startTime: '06:00', endTime: '14:00
 const noite = { id: 'noite', name: 'Noite', startTime: '22:00', endTime: '06:00' };
 const work = (shiftId: string): RosterMember['situation'] => ({ kind: 'WORK', sectorId: 's1', shiftId, source: 'CYCLE' });
 const member = (id: string, name: string, situation: RosterMember['situation'], extra: Partial<RosterMember> = {}): RosterMember => ({
-  id, name, email: `${id}@x.test`, phoneE164: '+5592991234567', isActive: true, jobTitle: null,
-  fromOtherSector: false, situation, level: null, ...extra,
+  id, name, email: `${id}@x.test`, phoneE164: '+5592991234567', hasPhone: true, phoneMasked: '•••• 4567', isActive: true,
+  jobTitle: null, fromOtherSector: false, situation, level: null, ...extra,
 });
 const members = [
   member('ana', 'Ana', work('manha'), { jobTitle: 'Operadora' }),
   member('joao', 'João', work('noite'), { jobTitle: 'Líder' }),
   member('lia', 'Lia', work('noite'), { isActive: false }),
   member('maria', 'Maria', { kind: 'OFF', reason: 'VACATION', source: 'EXCEPTION' }),
-  member('pedro', 'Pedro', work('noite'), { phoneE164: null }),
-  member('rui', 'Rui', work('noite'), { fromOtherSector: true, phoneE164: '+5592977776666' }),
+  member('pedro', 'Pedro', work('noite'), { phoneE164: null, hasPhone: false, phoneMasked: null }),
+  member('rui', 'Rui', work('noite'), { fromOtherSector: true, phoneE164: '+5592977776666', phoneMasked: '•••• 6666' }),
   member('ze', 'Zé', { kind: 'NONE' }),
 ];
 const sectors = [{ id: 's1', name: 'Produção', code: 'PROD' }, { id: 's2', name: 'Expedição', code: 'EXP' }];
@@ -127,6 +128,8 @@ function httpError(status: number, code?: string) {
   return new HTTPError(new Response(body, { status }), new Request('https://x'), {} as never);
 }
 
+const OPERATOR: AuthUser = { id: 'u1', email: 'o@x.test', name: 'Olga', role: 'OPERATOR' };
+
 function http403() {
   return new HTTPError(new Response('{}', { status: 403 }), new Request('https://x'), {} as never);
 }
@@ -137,6 +140,33 @@ beforeEach(() => {
   useScheduledDispatches.mockReturnValue(query({ items: [], ...meta(0) }));
   membersBySector = { s1: members, s2: [] };
   useTeamRoster.mockImplementation((ids: string[], date: string) => rosterOf(ids, date));
+  useAuthStore.setState({ user: OPERATOR });
+});
+
+describe('WhatsApp da equipe: permissões por ação', () => {
+  const withPermissions = (permissions: AuthUser['permissions']) => useAuthStore.setState({ user: { ...OPERATOR, permissions } });
+  const agendado = {
+    id: 'g1', scheduledFor: '2026-10-22T02:00:00.000Z', rosterDate: '2026-10-21', shift: noite,
+    label: 'Produção · Noite · 21/10', recipientCount: 2, channel: null, author: null,
+  };
+
+  it('sem equipe.enviar some o envio (seletores e Enviar) e o Cancelar, e o histórico continua', () => {
+    useScheduledDispatches.mockReturnValue(query({ items: [agendado], ...meta(1) }));
+    withPermissions(['trilha.consultar']);
+    render(<Page />);
+    expect(screen.getByText('Você não tem permissão para enviar WhatsApp à equipe.')).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Produção' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^Enviar para/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancelar' })).not.toBeInTheDocument();
+    expect(screen.getByText('Agendados')).toBeInTheDocument();
+    expect(screen.getByText('Envios recentes')).toBeInTheDocument();
+  });
+
+  it('sem equipe.disparo_amplo o atalho Todos os setores continua visível', () => {
+    withPermissions(['equipe.enviar']);
+    render(<Page />);
+    expect(screen.getByRole('checkbox', { name: 'Todos os setores' })).toBeInTheDocument();
+  });
 });
 
 describe('WhatsApp da equipe: acesso', () => {

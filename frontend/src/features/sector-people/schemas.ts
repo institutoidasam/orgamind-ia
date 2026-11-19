@@ -18,8 +18,11 @@ const idNameSchema = z.object({ id: z.string(), name: z.string() });
 export const sectorPersonSchema = z.object({
   id: z.string(),
   name: z.string(),
-  // null ao gestor quando `editable` = 'limited' (GC8): a tela mostra "—".
+  // CB5/DB8: `phoneE164` só vem com `telefone.ver_completo`; `hasPhone` e `phoneMasked` ("•••• 1234") vêm sempre.
+  // Pessoa com acesso para quem não é ADMIN (GC8) chega com `hasPhone` true e os dois telefones nulos: a tela mostra "—".
   phoneE164: z.string().nullable(),
+  hasPhone: z.boolean(),
+  phoneMasked: z.string().nullable(),
   hasAccess: z.boolean(),
   role: z.enum(['ADMIN', 'OPERATOR', 'SUPERVISOR', 'VIEWER']).nullable(),
   level: z.object({ id: z.string(), name: z.string(), isActive: z.boolean() }).nullable(),
@@ -95,12 +98,15 @@ export const personFormSchema = z.object({
 });
 export type PersonFormInput = z.infer<typeof personFormSchema>;
 
-/** Sem acesso o nome é obrigatório (o servidor recusa pessoa sem nome). */
-export const personFormSchemaFor = (editable: SectorPerson['editable']) =>
+/**
+ * Sem acesso o nome é obrigatório (o servidor recusa pessoa sem nome). Com o nome mascarado ("•••• 1234") o campo
+ * parte vazio e é opcional (vazio = não mexe no nome); o texto novo não pode carregar os pontos da máscara.
+ */
+export const personFormSchemaFor = (editable: SectorPerson['editable'], maskedName = false) =>
   personFormSchema.superRefine((value, ctx) => {
-    if (editable === 'full' && !value.name?.trim()) {
-      ctx.addIssue({ code: 'custom', path: ['name'], message: 'Informe o nome' });
-    }
+    const name = value.name?.trim() ?? '';
+    const message = maskedName ? name.includes('•') && 'Informe o nome sem os pontos.' : editable === 'full' && !name && 'Informe o nome';
+    if (message) ctx.addIssue({ code: 'custom', path: ['name'], message });
   });
 
 /** Candidatos e escrita do diálogo "Adicionar pessoas" (C3). */
@@ -122,7 +128,9 @@ export const sectorContactCandidatesSchema = z.object({
       contactId: z.string(),
       // D11: contato sem nome aparece pelo número.
       name: z.string().nullable(),
-      phoneE164: z.string(),
+      // CB5: sem `telefone.ver_completo` o número completo vem nulo e a máscara ("•••• 1234") identifica o contato.
+      phoneE164: z.string().nullable(),
+      phoneMasked: z.string(),
       person: z.object({ userId: z.string(), name: z.string(), sectorName: z.string().nullable() }).nullable(),
     })
     .array(),

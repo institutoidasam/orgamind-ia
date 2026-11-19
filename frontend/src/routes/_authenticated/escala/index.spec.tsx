@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import type { ComponentType } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { daysBetween } from '@/lib/civil-date';
+import { useAuthStore, type AuthUser } from '@/stores/auth.store';
 
 const mocks = vi.hoisted(() => ({
   useScheduleOptions: vi.fn(),
@@ -75,6 +76,25 @@ const rowOf = (name: string) => screen.getByRole('row', { name: new RegExp(name)
 beforeEach(() => {
   vi.clearAllMocks();
   mockData();
+});
+
+describe('/escala: texto de ajuda', () => {
+  const BASE = 'Quem trabalha em cada turno, dia a dia.';
+  const user = (permissions: AuthUser['permissions']) =>
+    useAuthStore.setState({ user: { id: 'u1', email: 'a@b.c', name: 'A', role: 'SUPERVISOR', permissions } });
+
+  it('com escala.alterar o texto convida a clicar no dia', () => {
+    user(['escala.alterar']);
+    render(<Page />);
+    expect(screen.getByText(/Quem trabalha em cada turno, dia a dia\. Clique em um dia para marcar folga/)).toBeInTheDocument();
+  });
+
+  it('sem escala.alterar mostra só a primeira frase, sem convite a clicar', () => {
+    user([]);
+    render(<Page />);
+    expect(screen.getByText(BASE)).toBeInTheDocument();
+    expect(screen.queryByText(/Clique em um dia/)).not.toBeInTheDocument();
+  });
 });
 
 describe('/escala: setor e quadro', () => {

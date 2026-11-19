@@ -8,6 +8,7 @@ import { Topbar } from '@/components/layout/topbar';
 import { Footer } from '@/components/layout/footer';
 import { CommandPalette } from '@/components/command-palette';
 import { ProviderScopeProvider } from '@/features/whatsapp/provider-scope';
+import { useSessionSync } from '@/features/permissions/use-session-sync';
 import { canUseLegacyModules, type NavRole } from '@/lib/nav';
 
 export function AuthenticatedLayout() {
@@ -20,6 +21,7 @@ export function AuthenticatedLayout() {
   const mobileOpen = mobileOpenForPath === pathname;
 
   useSessionRedirect(router);
+  useSessionSync();
 
   const shell = (
     <AuthenticatedShell

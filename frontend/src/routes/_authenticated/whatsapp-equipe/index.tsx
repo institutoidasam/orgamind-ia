@@ -3,6 +3,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { HTTPError } from 'ky';
 import { QueryErrorFallback } from '@/components/query-error-fallback';
 import { Skeleton } from '@/components/ui/skeleton';
+import { usePermission } from '@/features/permissions/use-permission';
 import {
   useScheduledDispatches, useTeamDispatches, useTeamRoster, useTeamTargets,
 } from '@/features/team-whatsapp/api';
@@ -28,6 +29,7 @@ const route = createFileRoute('/_authenticated/whatsapp-equipe/')({
 export { route as Route };
 
 const FORBIDDEN_TEXT = 'Só o administrador e o gestor do setor enviam mensagens para a equipe.';
+const NO_SEND_PERMISSION_TEXT = 'Você não tem permissão para enviar WhatsApp à equipe.';
 
 function PageHeader() {
   return (
@@ -43,6 +45,7 @@ function PageHeader() {
 
 function TeamWhatsappPage() {
   const targets = useTeamTargets();
+  const canSend = usePermission('equipe.enviar');
   const [target, setTarget] = useState<SendTarget | null>(null);
   return (
     <div className="space-y-6">
@@ -51,7 +54,11 @@ function TeamWhatsappPage() {
       {targets.isError && <TargetsError error={targets.error} onRetry={targets.refetch} />}
       {targets.data && (
         <>
-          <SendSection targets={targets.data} onSend={setTarget} />
+          {canSend ? (
+            <SendSection targets={targets.data} onSend={setTarget} />
+          ) : (
+            <p className="rounded-md border p-6 text-sm text-muted-foreground">{NO_SEND_PERMISSION_TEXT}</p>
+          )}
           <ScheduledSection />
           <RecentSection />
         </>

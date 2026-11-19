@@ -4,6 +4,7 @@ import type {
   StaffException,
 } from '../../schemas/contracts/staff-schedule.schema';
 import type { TeamActor } from '../team-whatsapp/team-whatsapp.policy';
+import { actorWith } from '../../shared/authz/actor.test-fixtures';
 import { StaffScheduleEditService } from './staff-schedule-edit.service';
 
 const PROD = 'sector-prod';
@@ -12,10 +13,7 @@ const ACTIVE_SHIFTS = ['shift-morning', 'shift-night'];
 
 function actor(role: TeamActor['role'], managed: string[] = []): TeamActor {
   return {
-    id: `actor-${role}`,
-    role,
-    isActive: true,
-    hasAccess: true,
+    ...actorWith(role, { id: `actor-${role}` }),
     managedSectorIds: managed,
   };
 }

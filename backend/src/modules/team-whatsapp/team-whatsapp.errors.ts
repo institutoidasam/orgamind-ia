@@ -12,6 +12,14 @@ export function teamForbidden(): ForbiddenError {
   );
 }
 
+/** Disparo amplo (B4) sem `equipe.disparo_amplo`: nada é criado, imediato ou agendado. */
+export function broadSendDenied(): ForbiddenError {
+  return new ForbiddenError(
+    'Você não tem permissão para enviar a todos os setores de uma vez. Desmarque um setor ou peça ao administrador.',
+    'team_whatsapp.broad_send_denied',
+  );
+}
+
 export function noRecipients(): DomainError {
   return new DomainError({
     code: 'team_whatsapp.no_recipients',

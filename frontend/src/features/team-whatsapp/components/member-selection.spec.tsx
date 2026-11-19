@@ -11,7 +11,8 @@ import type { RosterMember } from '../schemas';
 import { MemberSelection } from './member-selection';
 
 const ana: RosterMember = {
-  id: 'ana', name: 'Ana', email: null, phoneE164: '+5592991234567', isActive: true, jobTitle: null,
+  id: 'ana', name: 'Ana', email: null, phoneE164: '+5592991234567', hasPhone: true, phoneMasked: '•••• 4567',
+  isActive: true, jobTitle: null,
   fromOtherSector: false, situation: { kind: 'WORK', sectorId: 'ti', shiftId: 'noite', source: 'CYCLE' },
   level: { id: 'l1', name: 'Coordenador' },
 };
@@ -28,6 +29,29 @@ function setup(groups: ReturnType<typeof group>[], shiftIds: string[] = ['noite'
     />,
   );
 }
+
+describe('MemberSelection: telefone (DB8)', () => {
+  const dora: RosterMember = { ...ana, id: 'dora', name: 'Dora', level: null, phoneE164: null, phoneMasked: '•••• 7777' };
+
+  it('membro sem phoneE164 mas com hasPhone não cai em Sem telefone e mostra •••• 7777', () => {
+    setup([group('ti', 'TI', [dora])]);
+    expect(screen.queryByRole('list', { name: 'Sem telefone' })).not.toBeInTheDocument();
+    expect(within(screen.getByRole('list', { name: 'Escalados' })).getByText('•••• 7777')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Enviar para todos (1)' })).toBeEnabled();
+  });
+
+  it('membro sem telefone cai em Sem telefone', () => {
+    const eva: RosterMember = { ...dora, id: 'eva', name: 'Eva', hasPhone: false, phoneMasked: null };
+    setup([group('ti', 'TI', [eva])]);
+    expect(within(screen.getByRole('list', { name: 'Sem telefone' })).getByText('Eva')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Enviar para todos (0)' })).toBeDisabled();
+  });
+
+  it('com a chave mostra o telefone formatado', () => {
+    setup([group('ti', 'TI', [ana])]);
+    expect(screen.getByText('(92) 99123-4567')).toBeInTheDocument();
+  });
+});
 
 const bloqueado: RosterMember = { ...ana, id: 'caio', name: 'Caio', level: null, contactAuthorization: 'NAO_AUTORIZADO' };
 const antigo = (id: string, name: string): RosterMember => ({

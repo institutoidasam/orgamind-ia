@@ -30,6 +30,7 @@ vi.mock('@/release-notes', () => ({
         { text: 'Item sem link.' },
         { text: 'Item da visão geral.', where: '/dashboard' },
         { text: 'Item de setores.', where: '/users' },
+        { text: 'Item de turnos.', where: '/turnos' },
       ],
     },
   ],
@@ -70,7 +71,7 @@ describe('ReleaseNotesDialog', () => {
 
   it('mostra "Ver" só nos itens que têm `where`, apontando para a rota', () => {
     render(<ReleaseNotesDialog open onOpenChange={() => {}} />);
-    expect(verHrefs()).toEqual(['/contacts', '/dashboard', '/users']);
+    expect(verHrefs()).toEqual(['/contacts', '/dashboard', '/users', '/turnos']);
   });
 
   it('clicar em "Ver" fecha o diálogo', async () => {
@@ -94,7 +95,7 @@ describe('ReleaseNotesDialog — "Ver" por papel', () => {
   it.each([
     ['VIEWER', ['/dashboard']],
     ['OPERATOR', ['/contacts', '/dashboard']],
-    ['ADMIN', ['/contacts', '/dashboard', '/users']],
+    ['ADMIN', ['/contacts', '/dashboard', '/users', '/turnos']],
   ] as const)('%s vê "Ver" apenas das rotas que acessa', (role, hrefs) => {
     signInAs(role);
     render(<ReleaseNotesDialog open onOpenChange={() => {}} />);
@@ -107,5 +108,25 @@ describe('ReleaseNotesDialog — "Ver" por papel', () => {
     render(<ReleaseNotesDialog open onOpenChange={() => {}} />);
     expect(verHrefs()).toEqual([]);
     expect(screen.getByText(/Item com link\./)).toBeInTheDocument();
+  });
+});
+
+describe('ReleaseNotesDialog — permissões repassadas ao "Ver"', () => {
+  it('OPERATOR com estrutura.manter vê "Ver" para /turnos', () => {
+    useAuthStore.setState({
+      user: { id: 'u1', email: 'u@orgamind.com', name: 'U', role: 'OPERATOR', permissions: ['estrutura.manter'] },
+    });
+    render(<ReleaseNotesDialog open onOpenChange={() => {}} />);
+    expect(screen.getByText('Item de turnos.')).toBeInTheDocument();
+    expect(verHrefs()).toContain('/turnos');
+  });
+
+  it('OPERATOR sem estrutura.manter vê o texto de /turnos, mas sem "Ver"', () => {
+    useAuthStore.setState({
+      user: { id: 'u1', email: 'u@orgamind.com', name: 'U', role: 'OPERATOR', permissions: ['pessoas.editar'] },
+    });
+    render(<ReleaseNotesDialog open onOpenChange={() => {}} />);
+    expect(screen.getByText('Item de turnos.')).toBeInTheDocument();
+    expect(verHrefs()).not.toContain('/turnos');
   });
 });

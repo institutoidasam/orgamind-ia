@@ -5,6 +5,7 @@ import { apiError } from './test-helpers';
 
 const mocks = vi.hoisted(() => ({
   role: 'ADMIN',
+  permissions: undefined as string[] | undefined,
   candidates: vi.fn(),
   move: vi.fn(),
   toastSuccess: vi.fn(),
@@ -12,7 +13,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@/stores/auth.store', () => ({
-  useAuthStore: (select: (s: { user: { role: string } }) => unknown) => select({ user: { role: mocks.role } }),
+  useAuthStore: (select: (s: { user: { role: string; permissions?: string[] } }) => unknown) =>
+    select({ user: { role: mocks.role, permissions: mocks.permissions } }),
 }));
 vi.mock('../api', () => ({
   useSectorPersonCandidates: (sectorId: string, q: string) => mocks.candidates(sectorId, q),
@@ -32,8 +34,26 @@ const check = (name: string) => userEvent.setup().click(screen.getByRole('checkb
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.role = 'ADMIN';
+  mocks.permissions = undefined;
   mocks.candidates.mockReturnValue({ data: { items: [ana, caio] }, isPending: false, isError: false });
   mocks.move.mockResolvedValue({ moved: [{}] });
+});
+
+describe('ExistingPersonTab: busca por permissão', () => {
+  it('placeholder sem a chave fala só de nome e matrícula, sem o texto da busca por telefone', () => {
+    mocks.role = 'SUPERVISOR';
+    mocks.permissions = ['pessoas.editar'];
+    renderTab();
+    expect(screen.getByLabelText('Buscar por nome ou matrícula')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Buscar pessoa por nome')).not.toBeInTheDocument();
+  });
+
+  it('com telefone.ver_completo mantém o texto de hoje', () => {
+    mocks.role = 'SUPERVISOR';
+    mocks.permissions = ['pessoas.editar', 'telefone.ver_completo'];
+    renderTab();
+    expect(screen.getByLabelText('Buscar pessoa por nome')).toBeInTheDocument();
+  });
 });
 
 describe('ExistingPersonTab', () => {

@@ -1,7 +1,13 @@
 import { useMutation } from '@tanstack/react-query';
 import { api, logoutRemote } from '@/lib/api-client';
 import { useAuthStore } from '@/stores/auth.store';
-import { loginResponseSchema, type LoginInput, type LoginResponse } from './schemas';
+import {
+  loginResponseSchema,
+  meResponseSchema,
+  type LoginInput,
+  type LoginResponse,
+  type MeResponse,
+} from './schemas';
 
 export function useLogin() {
   const setSession = useAuthStore((s) => s.setSession);
@@ -29,4 +35,9 @@ export function useChangePassword() {
     },
     onSuccess: () => logoutRemote(),
   });
+}
+
+export async function fetchMe(): Promise<MeResponse> {
+  const raw = await api.get('auth/me').json();
+  return meResponseSchema.parse(raw);
 }

@@ -4,11 +4,12 @@ import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { authorizationChoiceError, toAuthorizationInput, type AuthorizationChoice } from '@/features/people-record/authorization';
+import { usePermission } from '@/features/permissions/use-permission';
 import { AuthorizationField } from '@/features/people-record/components/authorization-field';
 import { LevelSelect } from '@/features/users/components/level-select';
-import { formatPhoneBR } from '@/lib/format-phone';
 import { useAddPeopleFromContacts, useSectorContactCandidates } from '../api';
 import { addedPeopleMessage, FAILURE_REASON_MESSAGES, toastSectorPeopleError } from '../error-messages';
+import { phoneText } from '../phone-text';
 import type { SectorContactCandidate, SectorPeopleFailureReason } from '../schemas';
 import { SearchFallback, SearchField } from './search-field';
 import { toggleBy, useDebouncedSearch } from './search-state';
@@ -18,7 +19,7 @@ import type { AddTabProps } from './new-person-tab';
 type Failure = { contactId: string; reason: SectorPeopleFailureReason };
 
 /** D11: contato sem nome aparece pelo número. */
-const contactTitle = (contact: SectorContactCandidate) => contact.name ?? formatPhoneBR(contact.phoneE164);
+const contactTitle = (contact: SectorContactCandidate) => contact.name ?? phoneText(contact);
 
 function ContactRow({ contact, checked, onToggle }: { contact: SectorContactCandidate; checked: boolean; onToggle: (checked: boolean) => void }) {
   const id = `contact-${contact.contactId}`;
@@ -28,7 +29,7 @@ function ContactRow({ contact, checked, onToggle }: { contact: SectorContactCand
       <Checkbox id={id} checked={checked} disabled={person !== null} onCheckedChange={(value) => onToggle(value === true)} />
       <div className="min-w-0 flex-1">
         <Label htmlFor={id}>{contactTitle(contact)}</Label>
-        {contact.name && <p className="text-xs text-muted-foreground">{formatPhoneBR(contact.phoneE164)}</p>}
+        {contact.name && <p className="text-xs text-muted-foreground">{phoneText(contact)}</p>}
       </div>
       {person && <span className="text-xs text-muted-foreground">já é {person.name} · {person.sectorName ?? 'Sem setor'}</span>}
     </li>
@@ -104,11 +105,13 @@ export function ContactsTab({ sectorId, options, onDone }: AddTabProps) {
   const search = useDebouncedSearch();
   const candidates = useSectorContactCandidates(sectorId, search.q);
   const batch = useContactsBatch(sectorId, onDone);
+  // B3: sem `telefone.ver_completo` a busca é só por nome (a API deixa de casar o número).
+  const searchLabel = usePermission('telefone.ver_completo') ? 'Buscar contato por nome ou número' : 'Buscar contato por nome';
   const items = candidates.data?.items ?? [];
 
   return (
     <div className="space-y-4">
-      <SearchField label="Buscar contato por nome ou número" value={search.text} onChange={search.setText} />
+      <SearchField label={searchLabel} value={search.text} onChange={search.setText} />
       <SearchFallback isError={candidates.isError} isPending={candidates.isPending} count={items.length} emptyText="Nenhum contato encontrado." />
       {items.length > 0 && (
         <ul className="max-h-64 divide-y overflow-y-auto">

@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import { RELEASE_NOTES, type ReleaseNoteItem } from '@/release-notes';
 import { formatDatePtBr } from '@/lib/format-date-ptbr';
 import { PRODUCT_NAME } from '@/lib/brand';
+import { usePermissions } from '@/features/permissions/use-permission';
 import { canAccessPath, type NavRole } from '@/lib/nav';
 import { useAuthStore } from '@/stores/auth.store';
 
@@ -26,12 +27,13 @@ type Props = {
  */
 function ReleaseItem({ item, onNavigate }: { item: ReleaseNoteItem; onNavigate: () => void }) {
   const role = useAuthStore((s) => s.user?.role) as NavRole | undefined;
+  const permissions = usePermissions();
   return (
     <li className="flex items-start gap-2 text-sm text-muted-foreground">
       <span className="mt-1.5 size-1 shrink-0 rounded-full bg-current" aria-hidden />
       <span className="flex-1">
         {item.text}
-        {item.where && canAccessPath(item.where, role) && (
+        {item.where && canAccessPath(item.where, role, permissions) && (
           <>
             {' '}
             <Link

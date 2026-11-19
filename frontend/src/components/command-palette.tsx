@@ -9,6 +9,8 @@ import {
 } from 'lucide-react';
 import { useTheme } from '@/lib/theme';
 import { logoutRemote } from '@/lib/api-client';
+import type { PermissionKey } from '@/features/permissions/keys';
+import { usePermissions } from '@/features/permissions/use-permission';
 import { navItemsForRole, type NavRole } from '@/lib/nav';
 import { useAuthStore } from '@/stores/auth.store';
 
@@ -41,9 +43,14 @@ type PaletteContentProps = {
 
 const GROUPS: CommandGroup[] = ['navegar', 'criar', 'ações', 'sistema'];
 
-function useCommands(router: ReturnType<typeof useRouter>, toggle: () => void, role?: NavRole): Command[] {
+function useCommands(
+  router: ReturnType<typeof useRouter>,
+  toggle: () => void,
+  role?: NavRole,
+  permissions?: readonly PermissionKey[],
+): Command[] {
   return useMemo(() => [
-    ...navItemsForRole(role).map((item) => ({
+    ...navItemsForRole(role, permissions).map((item) => ({
       id: `go-${item.to.replace(/\//g, '')}`,
       label: `Ir para ${item.label}`,
       group: 'navegar' as const,
@@ -52,7 +59,7 @@ function useCommands(router: ReturnType<typeof useRouter>, toggle: () => void, r
       run: () => router.navigate({ to: item.to as never }),
     })),
     ...createCommands(router, toggle),
-  ], [router, toggle, role]);
+  ], [router, toggle, role, permissions]);
 }
 
 function createCommands(
@@ -113,11 +120,12 @@ export function CommandPalette({ open, onOpenChange }: Props) {
 function PaletteDialog({ onOpenChange }: Pick<Props, 'onOpenChange'>) {
   const router = useRouter();
   const role = useAuthStore((state) => state.user?.role) as NavRole | undefined;
+  const permissions = usePermissions();
   const { toggle } = useTheme();
   const [query, setQuery] = useState('');
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const commands = useCommands(router, toggle, role);
+  const commands = useCommands(router, toggle, role, permissions);
   const filtered = useMemo(() => filterCommands(commands, query), [commands, query]);
 
   useFocusTrap(inputRef);

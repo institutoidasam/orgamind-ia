@@ -4,6 +4,7 @@ import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { QueryErrorFallback } from '@/components/query-error-fallback';
 import { useAuthStore } from '@/stores/auth.store';
+import { hasPermission } from '@/features/permissions/access';
 import { useLevels } from '@/features/levels/api';
 import { LevelFormDialog } from '@/features/levels/components/level-form-dialog';
 import { LevelsTable } from '@/features/levels/components/levels-table';
@@ -12,7 +13,7 @@ import type { LevelAdmin } from '@/features/levels/schemas';
 const route = createFileRoute('/_authenticated/niveis/')({
   beforeLoad: () => {
     const { user } = useAuthStore.getState();
-    if (user?.role !== 'ADMIN') {
+    if (!hasPermission(user, 'estrutura.manter')) {
       throw redirect({ to: '/dashboard' });
     }
   },

@@ -8,9 +8,10 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { Pagination } from '@/features/internal-communications/components/pagination';
+import { usePermission } from '@/features/permissions/use-permission';
 import { formatDayMonth } from '@/lib/civil-date';
 import { useCancelDispatch } from '../api';
-import { apiErrorCode, cancelErrorMessage } from '../error-messages';
+import { apiErrorText, cancelErrorMessage } from '../error-messages';
 import type { Paging, ScheduledDispatch } from '../schemas';
 
 /** Data da escala + hora gravada no turno: não passa por conta de fuso (GC5). */
@@ -29,7 +30,7 @@ function useCancelFlow() {
     try {
       await cancel.mutateAsync(asking.id);
     } catch (err) {
-      setError(cancelErrorMessage(await apiErrorCode(err)));
+      setError(await apiErrorText(err, cancelErrorMessage));
     } finally {
       setAsking(null);
     }
@@ -37,7 +38,11 @@ function useCancelFlow() {
   return { asking, setAsking, error, confirm, pending: cancel.isPending };
 }
 
-function ScheduledRow({ item, onCancel, disabled }: { item: ScheduledDispatch; onCancel: () => void; disabled: boolean }) {
+type RowProps = { item: ScheduledDispatch; onCancel: () => void; disabled: boolean };
+
+/** Cancelar é ação de envio (DB6): sem `equipe.enviar` a linha só informa. */
+function ScheduledRow({ item, onCancel, disabled }: RowProps) {
+  const canCancel = usePermission('equipe.enviar');
   return (
     <TableRow>
       <TableCell>{whenText(item)}</TableCell>
@@ -45,7 +50,7 @@ function ScheduledRow({ item, onCancel, disabled }: { item: ScheduledDispatch; o
       <TableCell>{`${item.recipientCount} pessoa(s)`}</TableCell>
       <TableCell>{item.channel?.name ?? '—'}</TableCell>
       <TableCell className="text-right">
-        <Button variant="outline" size="sm" disabled={disabled} onClick={onCancel}>Cancelar</Button>
+        {canCancel && <Button variant="outline" size="sm" disabled={disabled} onClick={onCancel}>Cancelar</Button>}
       </TableCell>
     </TableRow>
   );

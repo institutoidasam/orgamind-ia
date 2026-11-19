@@ -1,3 +1,4 @@
+import { PERMISSION_LABELS } from '@/features/permissions/keys';
 import { AUTHORIZATION_SOURCE_LABEL } from '@/features/people-record/authorization';
 import { ROLE_LABEL } from '@/features/users/role';
 import { formatDatePtBr } from '@/lib/format-date-ptbr';
@@ -69,6 +70,8 @@ const ACTION_LABEL: Record<string, string> = {
   'auth.logout': 'Saída do sistema',
   'auth.refresh': 'Sessão renovada',
   'auth.password_changed': 'Senha alterada',
+  'permission.matrix_updated': 'Permissões alteradas',
+  'permission.matrix_restored': 'Permissões restauradas ao padrão',
 };
 
 const AUTHORIZATION_STATUS_LABEL: Record<string, string> = {
@@ -90,8 +93,19 @@ export function categoryLabel(category: AuditCategory | null): string {
   return category === null ? 'Outros' : CATEGORY_LABEL[category];
 }
 
+function isKeyOf<T extends object>(map: T, key: string): key is Extract<keyof T, string> {
+  return Object.hasOwn(map, key);
+}
+
+/** DB12: a célula da matriz chega como `<chave>:<PAPEL>`; vira "<nome da permissão> (<Papel>)". */
+function permissionCellLabel(field: string): string | undefined {
+  const [key, role, ...rest] = field.split(':');
+  if (rest.length > 0 || !isKeyOf(PERMISSION_LABELS, key) || !isKeyOf(ROLE_LABEL, role)) return undefined;
+  return `${PERMISSION_LABELS[key].name} (${ROLE_LABEL[role]})`;
+}
+
 export function fieldLabel(field: string): string {
-  return lookup(FIELD_LABEL, field);
+  return permissionCellLabel(field) ?? lookup(FIELD_LABEL, field);
 }
 
 export function actionLabel(action: string): string {

@@ -17,6 +17,7 @@ import { AuthorizationField } from '@/features/people-record/components/authoriz
 import { ReasonField } from '@/features/people-record/components/reason-field';
 import { RegistrationField } from '@/features/people-record/components/registration-field';
 import { reasonSchema } from '@/features/people-record/reason';
+import { usePermission } from '@/features/permissions/use-permission';
 import { JobTitleField } from '@/features/users/components/job-title-field';
 import { LevelSelect } from '@/features/users/components/level-select';
 import { PhoneField } from '@/features/users/components/phone-field';
@@ -25,6 +26,7 @@ import { reportUserPhoneError } from '@/features/users/phone-errors';
 import { formatPhoneBR } from '@/lib/format-phone';
 import { useUpdateSectorPerson } from '../api';
 import { toastSectorPeopleError } from '../error-messages';
+import { isMaskedName, phoneText } from '../phone-text';
 import {
   personFormSchemaFor,
   type PersonFormInput,
@@ -51,10 +53,11 @@ function authorizationChoiceOf(authorization: ContactAuthorization): Authorizati
   return { status: 'AUTORIZADO', source, ...(note ? { note } : {}), date: date ?? todayInManaus() };
 }
 
-function initialValues(person: SectorPerson): PersonFormInput {
+/** Sem `telefone.ver_completo` o telefone gravado não é editável (B3): o campo parte vazio e o PATCH não leva `phone`. */
+function initialValues(person: SectorPerson, canSeePhone: boolean): PersonFormInput {
   return {
-    name: person.name,
-    phone: person.phoneE164 ? formatPhoneBR(person.phoneE164) : '',
+    name: isMaskedName(person.name) ? '' : person.name,
+    phone: canSeePhone && person.phoneE164 ? formatPhoneBR(person.phoneE164) : '',
     levelId: person.level?.id ?? null,
     jobTitle: person.jobTitle ?? '',
     shiftId: person.shift?.id ?? null,
@@ -107,8 +110,10 @@ async function reportSubmitError(form: Form, error: unknown) {
 function usePersonForm({ sectorId, person, onOpenChange }: Props) {
   const update = useUpdateSectorPerson(sectorId);
   const full = person.editable === 'full';
-  const initial = useMemo(() => initialValues(person), [person]);
-  const form = useForm<PersonFormInput>({ resolver: zodResolver(personFormSchemaFor(person.editable)) as never, defaultValues: initial });
+  const canSeePhone = usePermission('telefone.ver_completo');
+  const phoneLocked = !canSeePhone && person.hasPhone;
+  const initial = useMemo(() => initialValues(person, canSeePhone), [person, canSeePhone]);
+  const form = useForm<PersonFormInput>({ resolver: zodResolver(personFormSchemaFor(person.editable, isMaskedName(person.name))) as never, defaultValues: initial });
   useEffect(() => form.reset(initial), [initial, form]);
   const submit = async (data: PersonFormInput) => {
     const payload = changedPayload(data, initial, full);
@@ -124,19 +129,50 @@ function usePersonForm({ sectorId, person, onOpenChange }: Props) {
       await reportSubmitError(form, error);
     }
   };
-  return { form, submit, pending: update.isPending, full };
+  return { form, submit, pending: update.isPending, full, phoneLocked };
 }
 
-function IdentityFields({ form, person, full }: { form: Form; person: SectorPerson; full: boolean }) {
+const PHONE_LOCKED_NOTE = 'Você não tem permissão para alterar o telefone já cadastrado.';
+const PHONE_ACCESS_NOTE = 'Nome e telefone de quem tem acesso mudam em Usuários.';
+
+/** Telefone só leitura: a máscara ou "—", nunca o número que a tela não recebeu. */
+function ReadOnlyPhone({ person, note }: { person: SectorPerson; note: string }) {
+  return (
+    <div className="space-y-1">
+      <Label htmlFor="person-phone">Telefone (WhatsApp)</Label>
+      <Input id="person-phone" value={phoneText(person)} disabled readOnly />
+      <p className="text-xs text-muted-foreground">{note}</p>
+    </div>
+  );
+}
+
+const MASKED_NAME_NOTE = 'O nome desta pessoa é o número de telefone. Informe o nome para substituir.';
+
+/** Nome mascarado: campo vazio com a máscara no placeholder; vazio = não mexe no nome. */
+function NameField({ form, person }: { form: Form; person: SectorPerson }) {
+  const masked = isMaskedName(person.name);
+  return (
+    <div className="space-y-1">
+      <Label htmlFor="person-name">Nome</Label>
+      <Input id="person-name" placeholder={masked ? person.name : undefined} {...form.register('name')} />
+      {masked && <p className="text-xs text-muted-foreground">{MASKED_NAME_NOTE}</p>}
+      {form.formState.errors.name && <p className="text-xs text-destructive">{form.formState.errors.name.message}</p>}
+    </div>
+  );
+}
+
+type IdentityProps = { form: Form; person: SectorPerson; full: boolean; phoneLocked: boolean };
+
+function IdentityFields({ form, person, full, phoneLocked }: IdentityProps) {
   if (full) {
     return (
       <>
-        <div className="space-y-1">
-          <Label htmlFor="person-name">Nome</Label>
-          <Input id="person-name" {...form.register('name')} />
-          {form.formState.errors.name && <p className="text-xs text-destructive">{form.formState.errors.name.message}</p>}
-        </div>
-        <PhoneField id="person-phone" registration={form.register('phone')} error={form.formState.errors.phone?.message} />
+        <NameField form={form} person={person} />
+        {phoneLocked ? (
+          <ReadOnlyPhone person={person} note={PHONE_LOCKED_NOTE} />
+        ) : (
+          <PhoneField id="person-phone" registration={form.register('phone')} error={form.formState.errors.phone?.message} />
+        )}
         <RegistrationEdit form={form} />
         <AuthorizationEdit form={form} person={person} />
       </>
@@ -148,11 +184,7 @@ function IdentityFields({ form, person, full }: { form: Form; person: SectorPers
         <Label htmlFor="person-name">Nome</Label>
         <Input id="person-name" value={person.name} disabled readOnly />
       </div>
-      <div className="space-y-1">
-        <Label htmlFor="person-phone">Telefone (WhatsApp)</Label>
-        <Input id="person-phone" value={formatPhoneBR(person.phoneE164)} disabled readOnly />
-        <p className="text-xs text-muted-foreground">Nome e telefone de quem tem acesso mudam em Usuários.</p>
-      </div>
+      <ReadOnlyPhone person={person} note={PHONE_ACCESS_NOTE} />
       <ReadOnlyRecord person={person} />
     </>
   );
@@ -244,7 +276,7 @@ function ReasonEdit({ form }: { form: Form }) {
 }
 
 export function EditPersonDialog(props: Props) {
-  const { form, submit, pending, full } = usePersonForm(props);
+  const { form, submit, pending, full, phoneLocked } = usePersonForm(props);
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent>
@@ -253,7 +285,7 @@ export function EditPersonDialog(props: Props) {
         </DialogHeader>
         {/* noValidate: a validação nativa (`max` da data) bloquearia o envio sem mostrar a nossa mensagem. */}
         <form onSubmit={form.handleSubmit(submit)} noValidate className="space-y-4 py-2">
-          <IdentityFields form={form} person={props.person} full={full} />
+          <IdentityFields form={form} person={props.person} full={full} phoneLocked={phoneLocked} />
           <ClassificationFields form={form} person={props.person} options={props.options} />
           <ReasonEdit form={form} />
           <DialogFooter>

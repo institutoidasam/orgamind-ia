@@ -5,7 +5,7 @@ import type { ComponentType } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  user: { role: 'ADMIN' } as { role: string } | null,
+  user: { role: 'ADMIN' } as { role: string; permissions?: string[] } | null,
   redirect: vi.fn((opts: Record<string, unknown>) => ({ __redirect: opts })),
   useLevels: vi.fn(),
   create: vi.fn(),
@@ -52,6 +52,16 @@ beforeEach(() => {
   mocks.user = { role: 'ADMIN' };
   mocks.useLevels.mockReturnValue({ data: [coordinator, leader, staff, operator], isLoading: false, isError: false });
   for (const fn of [mocks.create, mocks.update, mocks.reorder]) fn.mockResolvedValue(undefined);
+});
+
+describe('/niveis: acesso por permissão', () => {
+  it('OPERATOR com estrutura.manter entra; SUPERVISOR sem a chave é redirecionado', () => {
+    mocks.user = { role: 'OPERATOR', permissions: ['estrutura.manter'] };
+    expect(() => route.beforeLoad()).not.toThrow();
+    mocks.user = { role: 'SUPERVISOR', permissions: ['pessoas.editar'] };
+    expect(() => route.beforeLoad()).toThrow();
+    expect(mocks.redirect).toHaveBeenCalledWith({ to: '/dashboard' });
+  });
 });
 
 describe('/niveis: lista e ações', () => {

@@ -18,7 +18,8 @@ import {
   History,
   type LucideIcon,
 } from 'lucide-react';
-import { canQueryAuditTrailUi } from '@/features/people-record/ui-policy';
+import type { PermissionKey } from '@/features/permissions/keys';
+import { canQueryAuditTrailUi, roleHasPermission } from '@/features/people-record/ui-policy';
 
 /**
  * Single source of truth for the app's authenticated navigation.
@@ -48,6 +49,8 @@ export type NavItem = {
   section: NavSection;
   /** Papéis que podem usar o item; ausência mantém a rota só para breadcrumb. */
   roles?: readonly NavRole[];
+  /** Além do papel, exige esta permissão (sem a lista, vale o padrão do papel). */
+  permission?: PermissionKey;
   /**
    * Route exists and must resolve a breadcrumb label, but is intentionally not
    * listed in the sidebar (reachable from elsewhere). Still shown in the palette.
@@ -86,8 +89,8 @@ export const NAV: NavItem[] = [
   { to: '/demandas', label: 'Demandas', icon: FileText, section: 'sys', roles: ALL_INTERNAL_ROLES },
   { to: '/comunicados', label: 'Comunicados', icon: MessageSquare, section: 'sys', roles: ALL_INTERNAL_ROLES },
   { to: '/setores', label: 'Setores', icon: Users, section: 'admin', roles: WRITE_INTERNAL_ROLES },
-  { to: '/turnos', label: 'Turnos', icon: Clock, section: 'admin', roles: ['ADMIN'] },
-  { to: '/niveis', label: 'Níveis', icon: Layers, section: 'admin', roles: ['ADMIN'] },
+  { to: '/turnos', label: 'Turnos', icon: Clock, section: 'admin', roles: WRITE_INTERNAL_ROLES, permission: 'estrutura.manter' },
+  { to: '/niveis', label: 'Níveis', icon: Layers, section: 'admin', roles: WRITE_INTERNAL_ROLES, permission: 'estrutura.manter' },
   { to: '/users', label: 'Usuários', icon: UserCog, section: 'admin', roles: ['ADMIN'] },
   { to: '/connect', label: 'Conexões', icon: Wifi, section: 'admin', roles: ['ADMIN'] },
   { to: '/trilha', label: 'Trilha de alterações', icon: History, section: 'admin', roles: ALL_INTERNAL_ROLES.filter(canQueryAuditTrailUi) },
@@ -138,6 +141,15 @@ export const NAV: NavItem[] = [
 ];
 
 /**
+ * O item vale para o papel? Exige o papel em `roles` E, se o item tiver
+ * `permission`, a chave; sem `permissions`, vale o padrão do papel.
+ */
+function itemAllows(item: NavItem, role?: NavRole, permissions?: readonly PermissionKey[]): boolean {
+  if (!role || !item.roles?.includes(role)) return false;
+  return !item.permission || roleHasPermission(role, item.permission, permissions);
+}
+
+/**
  * Items rendered in the sidebar for a given section, respecting `hideInSidebar`
  * and `HIDDEN_FROM_SIDEBAR`.
  *
@@ -145,22 +157,21 @@ export const NAV: NavItem[] = [
  * enxergando as entradas escondidas — é o que mantém a rota alcançável e o
  * breadcrumb resolvendo.
  */
-export function navItemsForRole(role?: NavRole): NavItem[] {
-  if (!role) return [];
-  return NAV.filter((item) => item.roles?.includes(role));
+export function navItemsForRole(role?: NavRole, permissions?: readonly PermissionKey[]): NavItem[] {
+  return NAV.filter((item) => itemAllows(item, role, permissions));
 }
 
 export function canUseLegacyModules(role?: NavRole): boolean {
   return role === 'ADMIN' || role === 'OPERATOR';
 }
 
-export function navSection(section: NavSection, role?: NavRole): NavItem[] {
+export function navSection(section: NavSection, role?: NavRole, permissions?: readonly PermissionKey[]): NavItem[] {
   return NAV.filter(
     (n) =>
       n.section === section
       && !n.hideInSidebar
       && !HIDDEN_FROM_SIDEBAR.includes(n.to)
-      && Boolean(role && n.roles?.includes(role)),
+      && itemAllows(n, role, permissions),
   );
 }
 
@@ -178,13 +189,14 @@ function navItemFor(path: string): NavItem | undefined {
 }
 
 /**
- * O papel pode abrir `path`? Decide pelo `roles` da entrada do NAV dona da
- * rota. Rota fora do manifesto ou papel ausente: não — quem chama esconde o
- * atalho em vez de levar a uma tela cujo backend responde 403.
+ * O papel pode abrir `path`? Decide pelo `roles` (e pela `permission`, se
+ * houver) da entrada do NAV dona da rota. Rota fora do manifesto ou papel
+ * ausente: não — quem chama esconde o atalho em vez de levar a uma tela cujo
+ * backend responde 403.
  */
-export function canAccessPath(path: string, role?: NavRole): boolean {
-  if (!role) return false;
-  return Boolean(navItemFor(path)?.roles?.includes(role));
+export function canAccessPath(path: string, role?: NavRole, permissions?: readonly PermissionKey[]): boolean {
+  const item = navItemFor(path);
+  return item !== undefined && itemAllows(item, role, permissions);
 }
 
 /**

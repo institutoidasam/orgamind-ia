@@ -3,7 +3,19 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiError, chooseAuthorization, pickOption, sectorOptions } from './test-helpers';
 
-const mocks = vi.hoisted(() => ({ candidates: vi.fn(), add: vi.fn(), toastSuccess: vi.fn(), toastError: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  role: 'ADMIN',
+  permissions: undefined as string[] | undefined,
+  candidates: vi.fn(),
+  add: vi.fn(),
+  toastSuccess: vi.fn(),
+  toastError: vi.fn(),
+}));
+
+vi.mock('@/stores/auth.store', () => ({
+  useAuthStore: (select: (s: { user: { role: string; permissions?: string[] } }) => unknown) =>
+    select({ user: { role: mocks.role, permissions: mocks.permissions } }),
+}));
 
 vi.mock('../api', () => ({
   useSectorContactCandidates: (sectorId: string, q: string) => mocks.candidates(sectorId, q),
@@ -14,11 +26,13 @@ vi.mock('sonner', () => ({ toast: { success: mocks.toastSuccess, error: mocks.to
 import { ContactsTab } from './contacts-tab';
 
 const items = [
-  { contactId: 'c1', name: 'Bia', phoneE164: '+5592988887771', person: null },
-  { contactId: 'c2', name: 'Caio', phoneE164: '+5592988887772', person: null },
-  { contactId: 'c3', name: null, phoneE164: '+5592988887773', person: null },
-  { contactId: 'c4', name: 'Ana Silva', phoneE164: '+5592988887774', person: { userId: 'u9', name: 'Ana', sectorName: 'TI' } },
+  { contactId: 'c1', name: 'Bia', phoneE164: '+5592988887771', phoneMasked: '•••• 7771', person: null },
+  { contactId: 'c2', name: 'Caio', phoneE164: '+5592988887772', phoneMasked: '•••• 7772', person: null },
+  { contactId: 'c3', name: null, phoneE164: '+5592988887773', phoneMasked: '•••• 7773', person: null },
+  { contactId: 'c4', name: 'Ana Silva', phoneE164: '+5592988887774', phoneMasked: '•••• 7774', person: { userId: 'u9', name: 'Ana', sectorName: 'TI' } },
 ];
+/** CB5: sem `telefone.ver_completo` a API manda `phoneE164` nulo e só a máscara. */
+const withoutFullPhone = items.map((item) => ({ ...item, phoneE164: null }));
 
 const onDone = vi.fn();
 const renderTab = () => render(<ContactsTab sectorId="s1" options={sectorOptions} onDone={onDone} />);
@@ -28,10 +42,39 @@ const submit = (count: number) => userEvent.setup().click(screen.getByRole('butt
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.role = 'ADMIN';
+  mocks.permissions = undefined;
   mocks.candidates.mockReturnValue({ data: { items }, isPending: false, isError: false });
   mocks.add.mockResolvedValue({ created: [{}, {}, {}], failed: [] });
 });
 afterEach(() => vi.useRealTimers());
+
+describe('ContactsTab: telefone por permissão', () => {
+  const asSupervisor = (permissions: string[], listed: unknown[]) => {
+    mocks.role = 'SUPERVISOR';
+    mocks.permissions = permissions;
+    mocks.candidates.mockReturnValue({ data: { items: listed }, isPending: false, isError: false });
+  };
+
+  it('sem telefone.ver_completo mostra •••• 7771 no contato, nunca o número, e a busca fala só de nome', () => {
+    asSupervisor(['pessoas.editar'], withoutFullPhone);
+    const { container } = renderTab();
+    expect(screen.getByText('•••• 7771')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '•••• 7773' })).toBeInTheDocument(); // sem nome: o título é a máscara
+    expect(container.innerHTML).not.toMatch(/98888|\+55/);
+    expect(screen.getByLabelText('Buscar contato por nome')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Buscar contato por nome ou número')).not.toBeInTheDocument();
+  });
+
+  it('com a chave mostra o telefone formatado como hoje e a busca por nome ou número', () => {
+    asSupervisor(['pessoas.editar', 'telefone.ver_completo'], items);
+    renderTab();
+    expect(screen.getByText('(92) 98888-7771')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: '(92) 98888-7773' })).toBeInTheDocument();
+    expect(screen.queryByText('•••• 7771')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Buscar contato por nome ou número')).toBeInTheDocument();
+  });
+});
 
 describe('ContactsTab: autorização do lote', () => {
   it('sem autorização escolhida não envia e pede a escolha', async () => {

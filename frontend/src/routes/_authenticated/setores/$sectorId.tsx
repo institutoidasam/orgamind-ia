@@ -7,10 +7,11 @@ import { QueryErrorFallback } from "@/components/query-error-fallback";
 import { Skeleton } from "@/components/ui/skeleton";
 import { extractApiError } from "@/lib/api-error";
 import { useAuthStore } from "@/stores/auth.store";
+import { usePermission } from "@/features/permissions/use-permission";
 import { SectorForm } from "@/features/internal-admin/components/sector-form";
 import { useSector, useUpdateSector } from "@/features/internal-admin/api";
 import { SectorNumber } from "@/features/internal-admin/components/sector-number";
-import type { SectorDetail } from "@/features/internal-admin/schemas";
+import type { SectorChannel, SectorDetail } from "@/features/internal-admin/schemas";
 import { useSectorPeople } from "@/features/sector-people/api";
 import { AddPeopleDialog } from "@/features/sector-people/components/add-people-dialog";
 import { EditPersonDialog } from "@/features/sector-people/components/edit-person-dialog";
@@ -41,35 +42,60 @@ function useLatestData<T>(data: T | undefined): T | undefined {
 
 function SectorDetail({ sectorId }: { sectorId: string }) {
   const isAdmin = useAuthStore((state) => state.user?.role === "ADMIN");
+  const canManageStructure = usePermission("estrutura.manter");
   const [includeInactive, setIncludeInactive] = useState(false);
   const people = useSectorPeople(sectorId, { includeInactive });
   const data = useLatestData(people.data);
   if (people.isError) {
-    return isSectorForbidden(people.error) ? (
-      <p role="alert" className="rounded-lg border p-6 text-sm">{SECTOR_FORBIDDEN_MESSAGE}</p>
-    ) : (
-      <QueryErrorFallback error={people.error} onRetry={people.refetch} />
-    );
+    if (!isSectorForbidden(people.error)) return <QueryErrorFallback error={people.error} onRetry={people.refetch} />;
+    return canManageStructure ? <StructureOnly sectorId={sectorId} showNumber={isAdmin} /> : <SectorForbiddenNotice />;
   }
   if (!data) return <Skeleton className="h-64 w-full" />;
   return (
     <main className="mx-auto max-w-4xl space-y-6">
-      <SectorHeader data={data} />
+      <SectorHeader sector={data.sector} />
       <PeopleSection sectorId={sectorId} data={data} includeInactive={includeInactive} onIncludeInactive={setIncludeInactive} />
-      {isAdmin && <AdminPanel sectorId={sectorId} />}
+      {canManageStructure && <AdminPanel sectorId={sectorId} />}
     </main>
   );
 }
 
-function SectorHeader({ data }: { data: SectorPeopleResponse }) {
-  const { sector } = data;
+function SectorForbiddenNotice() {
+  return <p role="alert" className="rounded-lg border p-6 text-sm">{SECTOR_FORBIDDEN_MESSAGE}</p>;
+}
+
+/**
+ * `estrutura.manter` em setor que o ator não gerencia: a estrutura (cabeçalho e painel) vem de
+ * `useSector`; o aviso de setor não gerenciado fica no lugar da lista de pessoas.
+ */
+function StructureOnly({ sectorId, showNumber }: { sectorId: string; showNumber: boolean }) {
+  const sector = useSector(sectorId);
+  return (
+    <main className="mx-auto max-w-4xl space-y-6">
+      {sector.data && <SectorHeader sector={sector.data} showNumber={showNumber} />}
+      <SectorForbiddenNotice />
+      <AdminPanel sectorId={sectorId} />
+    </main>
+  );
+}
+
+type HeaderSector = {
+  code: string;
+  isActive: boolean;
+  name: string;
+  manager: { name: string | null } | null;
+  channel: SectorChannel | null;
+};
+
+/** `showNumber` falso: o número do setor (GB5) continua só do ADMIN onde a página não vem da lista de pessoas. */
+function SectorHeader({ sector, showNumber = true }: { sector: HeaderSector; showNumber?: boolean }) {
   return (
     <header className="flex justify-between gap-3">
       <div>
         <p className="ds-eyebrow">{sector.code} · {sector.isActive ? "Ativo" : "Inativo"}</p>
         <h1 className="ds-display !text-3xl">{sector.name}.</h1>
         <p className="text-sm text-muted-foreground">Gestor: {sector.manager?.name ?? "A definir"}</p>
-        <p className="flex items-center gap-2 text-sm text-muted-foreground">Número: <SectorNumber channel={sector.channel} /></p>
+        {showNumber && <p className="flex items-center gap-2 text-sm text-muted-foreground">Número: <SectorNumber channel={sector.channel} /></p>}
       </div>
       <Button asChild variant="outline">
         <Link to="/setores">Voltar</Link>
@@ -85,7 +111,14 @@ type SectionProps = {
   onIncludeInactive: (include: boolean) => void;
 };
 
+/** Sem `pessoas.editar` o setor vazio mostra só o aviso; o botão de adicionar é do `EmptySector`. */
+function EmptyPeople({ canEdit, onAddPeople }: { canEdit: boolean; onAddPeople: () => void }) {
+  if (canEdit) return <EmptySector onAddPeople={onAddPeople} />;
+  return <p className="rounded-lg border p-6 text-sm text-muted-foreground">Ninguém neste setor ainda.</p>;
+}
+
 function PeopleSection({ sectorId, data, includeInactive, onIncludeInactive }: SectionProps) {
+  const canEdit = usePermission("pessoas.editar");
   const [addOpen, setAddOpen] = useState(false);
   const refreshTrail = useRefreshAuditTrail();
   const openAdd = () => setAddOpen(true);
@@ -94,11 +127,11 @@ function PeopleSection({ sectorId, data, includeInactive, onIncludeInactive }: S
     setAddOpen(open);
     if (!open) void refreshTrail();
   };
-  const addDialog = <AddPeopleDialog sectorId={sectorId} options={data.options} open={addOpen} onOpenChange={changeAdd} />;
+  const addDialog = canEdit && <AddPeopleDialog sectorId={sectorId} options={data.options} open={addOpen} onOpenChange={changeAdd} />;
   if (data.people.length === 0) {
     return (
       <>
-        <EmptySector onAddPeople={openAdd} />
+        <EmptyPeople canEdit={canEdit} onAddPeople={openAdd} />
         <InactiveToggle checked={includeInactive} onChange={onIncludeInactive} />
         {addDialog}
       </>
@@ -108,7 +141,7 @@ function PeopleSection({ sectorId, data, includeInactive, onIncludeInactive }: S
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-3">
         <h2 className="font-heading text-lg font-semibold">Pessoas ({data.people.length})</h2>
-        <Button aria-haspopup="dialog" aria-expanded={addOpen} onClick={openAdd}>Adicionar pessoas</Button>
+        {canEdit && <Button aria-haspopup="dialog" aria-expanded={addOpen} onClick={openAdd}>Adicionar pessoas</Button>}
       </div>
       {addDialog}
       <PeopleList sectorId={sectorId} data={data} includeInactive={includeInactive} onIncludeInactive={onIncludeInactive} />
@@ -151,7 +184,7 @@ function PeopleList({ sectorId, data, includeInactive, onIncludeInactive }: Sect
   );
 }
 
-/** Só o ADMIN: estado e o formulário do setor. */
+/** Quem tem `estrutura.manter`: estado e o formulário do setor. */
 function AdminPanel({ sectorId }: { sectorId: string }) {
   const sector = useSector(sectorId);
   const update = useUpdateSector(sectorId);

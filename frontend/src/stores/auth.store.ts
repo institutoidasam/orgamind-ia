@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import type { PermissionKey } from "@/features/permissions/keys";
 
 export type AuthUser = {
   id: string;
@@ -11,6 +12,9 @@ export type AuthUser = {
   sectorId?: string | null;
   sector?: { id: string; name: string; code: string; isActive: boolean } | null;
   isActive?: boolean;
+  // Optional only for a persisted session from before the permissions: access.ts
+  // then falls back to the role defaults until /auth/me is read again.
+  permissions?: PermissionKey[];
 };
 
 type AuthState = {
@@ -22,6 +26,8 @@ type AuthState = {
     user: AuthUser;
     mustChangePassword: boolean;
   }) => void;
+  /** Replaces only the user (permissions re-read); the access token is untouched. */
+  setUser: (user: AuthUser) => void;
   clearMustChangePassword: () => void;
   logout: () => void;
 };
@@ -38,6 +44,7 @@ export const useAuthStore = create<AuthState>()(
           user: s.user,
           mustChangePassword: s.mustChangePassword,
         }),
+      setUser: (user) => set({ user }),
       clearMustChangePassword: () => set({ mustChangePassword: false }),
       logout: () =>
         set({ accessToken: null, user: null, mustChangePassword: false }),

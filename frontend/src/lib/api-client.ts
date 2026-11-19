@@ -16,6 +16,59 @@ function forceLogout() {
   queryClient.clear();
 }
 
+/**
+ * Background session re-read (DB14): renews the token on 401, so it never goes
+ * stale, but never ends the session (a failed refresh just returns the 401; the
+ * next regular request logs out) and never raises the permission-denied notice
+ * (a 403 here would make the re-read invalidate itself). Other /auth/* never refresh.
+ */
+const REFRESHABLE_AUTH_PATHS = new Set(['/auth/me']);
+
+/**
+ * Request path relative to the API base. `VITE_API_URL` may carry a path prefix
+ * (`/api` in production), so the pathname seen by the hooks is `/api/auth/me`
+ * while the auth rules are written against `/auth/me`. Only a whole leading
+ * segment of the base is cut (base `/api` leaves `/apiary/x` alone).
+ */
+export function apiRelativePath(requestUrl: string, base: string = baseURL): string {
+  const { pathname } = new URL(requestUrl);
+  const prefix = new URL(base, window.location.origin).pathname.replace(/\/$/, '');
+  if (!prefix || (pathname !== prefix && !pathname.startsWith(`${prefix}/`))) return pathname;
+  return pathname.slice(prefix.length) || '/';
+}
+
+const permissionDeniedListeners = new Set<() => void>();
+
+/**
+ * Fire `cb` after any `403 auth.permission_denied`: the user's permissions
+ * changed on the server, so the session must be re-read (DB14). Returns the
+ * unsubscribe function.
+ */
+export function onPermissionDenied(cb: () => void): () => void {
+  permissionDeniedListeners.add(cb);
+  return () => {
+    permissionDeniedListeners.delete(cb);
+  };
+}
+
+async function notifyPermissionDenied({ request, response }: { request: Request; response: Response }): Promise<void> {
+  if (response.status !== 403) return;
+  if (REFRESHABLE_AUTH_PATHS.has(apiRelativePath(request.url))) return;
+  try {
+    // ky 2 reads the error body to build the HTTPError (readApiErrorBody gets it
+    // from `error.data`), so peek at a clone and leave the original untouched.
+    const body = (await response.clone().json()) as { code?: string } | null;
+    if (body?.code !== 'auth.permission_denied') return;
+    permissionDeniedListeners.forEach((listener) => listener());
+  } catch {
+    // unreadable body or failing listener — never break the original request
+  }
+}
+
+function logoutUnlessBackgroundReread(pathname: string): void {
+  if (!REFRESHABLE_AUTH_PATHS.has(pathname)) forceLogout();
+}
+
 // Single in-flight refresh — concurrent 401s coalesce on the same promise so
 // we never send more than one /auth/refresh per rotation.
 let refreshPromise: Promise<boolean> | null = null;
@@ -56,22 +109,23 @@ export const api = ky.create({
       },
     ],
     afterResponse: [
+      notifyPermissionDenied,
       async ({ request, options, response }) => {
         if (response.status !== 401) return response;
         // Don't recurse into refresh/login endpoints.
-        const url = new URL(request.url);
-        if (url.pathname.startsWith('/auth/')) return response;
+        const pathname = apiRelativePath(request.url);
+        if (pathname.startsWith('/auth/') && !REFRESHABLE_AUTH_PATHS.has(pathname)) return response;
         // Only attempt refresh if we had an access token to begin with.
         if (!useAuthStore.getState().accessToken) return response;
 
         const ok = await tryRefresh();
         if (!ok) {
-          forceLogout();
+          logoutUnlessBackgroundReread(pathname);
           return response;
         }
         const newToken = useAuthStore.getState().accessToken;
         if (!newToken) {
-          forceLogout();
+          logoutUnlessBackgroundReread(pathname);
           return response;
         }
         // Retry the original request once with the new access token.

@@ -7,9 +7,10 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { Pagination } from '@/features/internal-communications/components/pagination';
+import { usePermission } from '@/features/permissions/use-permission';
 import { useDispatchRecipients, useRetryRecipients } from '../api';
 import {
-  apiErrorCode, channelLabel, RECIPIENT_STATUS_LABEL, recipientStatusLabel, retryErrorMessage, UNCERTAIN_EXPLANATION,
+  apiErrorText, channelLabel, RECIPIENT_STATUS_LABEL, recipientStatusLabel, retryErrorMessage, UNCERTAIN_EXPLANATION,
 } from '../error-messages';
 import type { DispatchRecipient, RecipientStatus, RetryInput } from '../schemas';
 import { useBackToLastPage } from '../use-back-to-last-page';
@@ -26,7 +27,9 @@ function reasonText({ status, reason }: DispatchRecipient): string {
 
 type RowProps = { item: DispatchRecipient; busy: boolean; onRetry: (item: DispatchRecipient) => void };
 
+/** Repetir é ação de envio (DB6): sem `equipe.enviar` a linha só informa. */
 function RecipientRow({ item, busy, onRetry }: RowProps) {
+  const canRetry = usePermission('equipe.enviar');
   return (
     <TableRow>
       <TableCell>{item.userName}</TableCell>
@@ -35,7 +38,7 @@ function RecipientRow({ item, busy, onRetry }: RowProps) {
       <TableCell>{item.attempts > 0 ? item.attempts : '—'}</TableCell>
       <TableCell className="text-sm">{reasonText(item)}</TableCell>
       <TableCell>
-        {item.repeatable && (
+        {item.repeatable && canRetry && (
           <Button size="sm" variant="outline" disabled={busy} onClick={() => onRetry(item)}>Repetir</Button>
         )}
       </TableCell>
@@ -66,7 +69,7 @@ function useRetryAction(dispatchId: string) {
       if (requeued > 0) toast.success(`${requeued} mensagem(ns) na fila de novo`);
       else toast.info('Nada para repetir');
     } catch (err) {
-      toast.error(retryErrorMessage(await apiErrorCode(err)));
+      toast.error(await apiErrorText(err, retryErrorMessage));
     }
   };
   return { run, busy: retry.isPending };
@@ -80,13 +83,14 @@ export function RecipientTable({ dispatchId, failedCount }: Props) {
   const [page, setPage] = useState(1);
   const recipients = useDispatchRecipients(dispatchId, { status, page });
   const { run, busy } = useRetryAction(dispatchId);
+  const canRetry = usePermission('equipe.enviar');
   const { data } = recipients;
   useBackToLastPage(page, setPage, data);
   return (
     <section className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <StatusFilter value={status} onChange={(next) => { setStatus(next); setPage(1); }} />
-        {failedCount > 0 && (
+        {failedCount > 0 && canRetry && (
           <Button variant="outline" disabled={busy} onClick={() => run({ all: true })}>
             Repetir todas as falhas ({failedCount})
           </Button>

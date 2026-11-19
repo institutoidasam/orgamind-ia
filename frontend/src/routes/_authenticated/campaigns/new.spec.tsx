@@ -89,8 +89,13 @@ const DEFAULT_TEMPLATE: MockTemplate = {
   variables: ['nome'],
 };
 
+// Somente-Evolution (R12): o assistente pede os templates SÓ do EVOLUTION —
+// `.mock.calls` prova o argumento. Referência preguiçosa (hoisting do vi.mock).
+const useTemplatesMock = vi.fn<(provider?: string) => typeof templatesState>(
+  () => templatesState,
+);
 vi.mock('@/features/templates/api', () => ({
-  useTemplates: () => templatesState,
+  useTemplates: (provider?: string) => useTemplatesMock(provider),
 }));
 
 type MockProvider = 'EVOLUTION' | 'TWILIO' | 'ZERNIO' | 'META' | 'GOZAP';
@@ -138,11 +143,10 @@ vi.mock('@/features/whatsapp/api', () => ({
     useProvidersMock(...args),
 }));
 
-// Global provider scope (topbar). `scopeState.scope` is read lazily on render.
-const scopeState: { scope: 'all' | MockProvider } = { scope: 'all' };
+// Somente-Evolution (R15): o assistente não lê mais o escopo de provedor do topo
+// nem desenha selo de provedor. O mock renderiza o selo como texto só para o
+// teste provar que ele NÃO aparece.
 vi.mock('@/features/whatsapp/provider-scope', () => ({
-  useProviderScope: () => ({ scope: scopeState.scope, setScope: vi.fn() }),
-  // Render the provider enum as text so tests can assert grouping by provider.
   ProviderBadge: ({ provider }: { provider: string }) => (
     <span data-testid="provider-badge">{provider}</span>
   ),
@@ -375,7 +379,7 @@ beforeEach(() => {
   providersState.isPending = false;
   providersState.isError = false;
   useProvidersMock.mockClear();
-  scopeState.scope = 'all';
+  useTemplatesMock.mockClear();
   navigateSpy.mockReset();
   toastSuccess.mockReset();
   toastError.mockReset();
@@ -702,176 +706,121 @@ describe('NewCampaignPage characterization — step rendering & navigation', () 
   });
 });
 
-// --- F3: multi-provider channel selection ---------------------------------
-describe('NewCampaignPage — multi-provider channel selection', () => {
-  const TWO_PROVIDERS = {
-    providers: [
-      {
-        provider: 'EVOLUTION' as const,
-        channels: [
-          {
-            id: 'ev1',
-            name: 'Evo Um',
-            phoneE164: '+5511111111111',
-            isActive: true,
-            isDefault: true,
-            provider: 'EVOLUTION' as const,
-          },
-        ],
-      },
-      {
-        provider: 'TWILIO' as const,
-        channels: [
-          {
-            id: 'tw1',
-            name: 'Twilio Um',
-            phoneE164: '+5599999999999',
-            isActive: true,
-            isDefault: false,
-            provider: 'TWILIO' as const,
-          },
-        ],
-      },
-    ],
-  };
+// --- Somente-Evolution: seleção de canal -----------------------------------
+const EVO_UM = {
+  id: 'ev1',
+  name: 'Evo Um',
+  phoneE164: '+5511111111111',
+  isActive: true,
+  isDefault: true,
+  provider: 'EVOLUTION' as const,
+};
+const EVO_DOIS = {
+  id: 'ev2',
+  name: 'Evo Dois',
+  phoneE164: '+5522222222222',
+  isActive: true,
+  isDefault: false,
+  provider: 'EVOLUTION' as const,
+};
+const LEGADO = {
+  id: 'tw1',
+  name: 'Twilio Um',
+  phoneE164: '+5599999999999',
+  isActive: true,
+  isDefault: false,
+  provider: 'TWILIO' as const,
+};
 
-  function seedStep1({
-    templateId = 'tpl1',
-    defaultInstanceId,
-  }: {
-    templateId?: string;
-    defaultInstanceId: string;
-  }) {
-    sessionStorage.setItem(
-      DRAFT_KEY,
-      JSON.stringify({
-        step: 1,
-        name: 'Campanha X',
-        templateId,
-        defaultInstanceId,
-        // C2 — a finalidade é obrigatória em QUALQUER provedor: sem ela o passo
-        // 1 não avança (o gate de consentimento é por finalidade).
-        purposeKey: 'convite_atividades',
-        variableMap: {},
-        filters: { combinator: 'and', rules: [] },
-        schedule: { type: 'IMMEDIATE' },
-        presenceDelayMs: 0,
-      }),
-    );
-  }
+function seedStep1({ defaultInstanceId }: { defaultInstanceId: string }) {
+  sessionStorage.setItem(
+    DRAFT_KEY,
+    JSON.stringify({
+      step: 1,
+      name: 'Campanha X',
+      templateId: 'tpl1',
+      defaultInstanceId,
+      // C2 — a finalidade é obrigatória: sem ela o passo 1 não avança (o gate
+      // de consentimento é por finalidade).
+      purposeKey: 'convite_atividades',
+      variableMap: {},
+      filters: { combinator: 'and', rules: [] },
+      schedule: { type: 'IMMEDIATE' },
+      presenceDelayMs: 0,
+    }),
+  );
+}
 
-  it('groups the channel picker by provider (Evolution + Twilio)', async () => {
-    providersState.data = TWO_PROVIDERS;
-    wrap(<NewCampaignPage />);
-
-    // Both provider groups render (badge text = provider enum via the mock)…
-    expect(screen.getAllByText('EVOLUTION').length).toBeGreaterThan(0);
-    expect(screen.getAllByText('TWILIO').length).toBeGreaterThan(0);
-    // …and each provider's channel is listed.
-    expect(screen.getByText('Evo Um')).toBeTruthy();
-    expect(screen.getByText('Twilio Um')).toBeTruthy();
-  });
-
-  it('filters the channel picker to the active provider scope', async () => {
-    providersState.data = TWO_PROVIDERS;
-    scopeState.scope = 'TWILIO';
-    wrap(<NewCampaignPage />);
-
-    // Only the scoped provider's channel is shown.
-    expect(screen.getByText('Twilio Um')).toBeTruthy();
-    expect(screen.queryByText('Evo Um')).toBeNull();
-    expect(screen.queryByText('EVOLUTION')).toBeNull();
-  });
-
-  it('clears the selected template when switching to a channel of another provider', async () => {
-    providersState.data = TWO_PROVIDERS;
-    // Start with the template chosen and the Evolution channel selected.
-    seedStep1({ defaultInstanceId: 'ev1' });
-    wrap(<NewCampaignPage />);
-
-    const next = await screen.findByRole('button', { name: /Próximo/i });
-    // name + template + channel all set → enabled.
-    await waitFor(() =>
-      expect((next as HTMLButtonElement).disabled).toBe(false),
-    );
-
-    // Switch to the Twilio channel (a different provider).
-    fireEvent.click(screen.getByRole('radio', { name: /Twilio Um/i }));
-
-    // The provider-owned template no longer applies → it is dropped, so
-    // "Próximo" is disabled again.
-    await waitFor(() =>
-      expect((next as HTMLButtonElement).disabled).toBe(true),
-    );
-    await waitFor(() => {
-      const raw = sessionStorage.getItem(DRAFT_KEY);
-      expect(JSON.parse(raw as string).templateId).toBe('');
-      expect(JSON.parse(raw as string).defaultInstanceId).toBe('tw1');
-    });
-  });
-
-  it('keeps the selected template when switching between channels of the same provider', async () => {
+describe('NewCampaignPage — somente Evolution: canais', () => {
+  it('só canais EVOLUTION e nenhuma escolha de provedor', async () => {
+    // Mesmo que o back devolva um canal de provedor desligado, o assistente
+    // não o oferece, não agrupa por provedor e não desenha selo de provedor.
     providersState.data = {
       providers: [
-        {
-          provider: 'EVOLUTION' as const,
-          channels: [
-            {
-              id: 'ev1',
-              name: 'Evo Um',
-              phoneE164: '+5511111111111',
-              isActive: true,
-              isDefault: true,
-              provider: 'EVOLUTION' as const,
-            },
-            {
-              id: 'ev2',
-              name: 'Evo Dois',
-              phoneE164: '+5522222222222',
-              isActive: true,
-              isDefault: false,
-              provider: 'EVOLUTION' as const,
-            },
-          ],
-        },
+        { provider: 'EVOLUTION', channels: [EVO_UM, EVO_DOIS] },
+        { provider: 'TWILIO', channels: [LEGADO] },
       ],
     };
-    seedStep1({ defaultInstanceId: 'ev1' });
     wrap(<NewCampaignPage />);
 
-    const next = await screen.findByRole('button', { name: /Próximo/i });
-    await waitFor(() =>
-      expect((next as HTMLButtonElement).disabled).toBe(false),
-    );
-
-    // Switch to another Evolution channel (same provider).
-    fireEvent.click(screen.getByRole('radio', { name: /Evo Dois/i }));
-
-    await waitFor(() => {
-      const raw = sessionStorage.getItem(DRAFT_KEY);
-      expect(JSON.parse(raw as string).defaultInstanceId).toBe('ev2');
-    });
-    // The template is preserved → "Próximo" stays enabled.
-    expect((next as HTMLButtonElement).disabled).toBe(false);
-    expect(
-      JSON.parse(sessionStorage.getItem(DRAFT_KEY) as string).templateId,
-    ).toBe('tpl1');
+    expect(screen.getByText('Evo Um')).toBeTruthy();
+    expect(screen.getByText('Evo Dois')).toBeTruthy();
+    expect(screen.queryByText('Twilio Um')).toBeNull();
+    expect(screen.getAllByRole('radio')).toHaveLength(2);
+    expect(screen.queryByTestId('provider-badge')).toBeNull();
+    expect(screen.queryByText('EVOLUTION')).toBeNull();
+    expect(screen.queryByText('TWILIO')).toBeNull();
   });
 
-  it('shows an empty state with a Canais link when no channel is in scope', async () => {
-    // Only Evolution channels exist, but the scope is narrowed to Twilio.
-    providersState.data = {
-      providers: [TWO_PROVIDERS.providers[0]],
-    };
-    scopeState.scope = 'TWILIO';
+  it('só há canal de provedor desligado → estado vazio com link para Canais, nenhum radio', async () => {
+    providersState.data = { providers: [{ provider: 'TWILIO', channels: [LEGADO] }] };
     wrap(<NewCampaignPage />);
 
     expect(
       screen.getByText(/Nenhum canal no contexto atual/i),
     ).toBeTruthy();
     expect(screen.getByText(/ver Canais/i)).toBeTruthy();
-    // No channel radios are rendered.
     expect(screen.queryByRole('radio')).toBeNull();
+  });
+});
+
+describe('NewCampaignPage — somente Evolution: templates', () => {
+  it('pede os templates só do EVOLUTION, qualquer que seja o canal escolhido', async () => {
+    seedStep1({ defaultInstanceId: 'inst1' });
+    wrap(<NewCampaignPage />);
+
+    await screen.findByRole('button', { name: /Próximo/i });
+    expect(useTemplatesMock).toHaveBeenCalled();
+    for (const call of useTemplatesMock.mock.calls) {
+      expect(call[0]).toBe('EVOLUTION');
+    }
+  });
+});
+
+describe('NewCampaignPage — somente Evolution: troca de canal', () => {
+  it('trocar de canal EVOLUTION mantém o template escolhido', async () => {
+    providersState.data = {
+      providers: [{ provider: 'EVOLUTION', channels: [EVO_UM, EVO_DOIS] }],
+    };
+    seedStep1({ defaultInstanceId: 'ev1' });
+    wrap(<NewCampaignPage />);
+
+    const next = await screen.findByRole('button', { name: /Próximo/i });
+    await waitFor(() =>
+      expect((next as HTMLButtonElement).disabled).toBe(false),
+    );
+
+    fireEvent.click(screen.getByRole('radio', { name: /Evo Dois/i }));
+
+    await waitFor(() => {
+      const raw = sessionStorage.getItem(DRAFT_KEY);
+      expect(JSON.parse(raw as string).defaultInstanceId).toBe('ev2');
+    });
+    // O template é preservado → "Próximo" segue habilitado.
+    expect((next as HTMLButtonElement).disabled).toBe(false);
+    expect(
+      JSON.parse(sessionStorage.getItem(DRAFT_KEY) as string).templateId,
+    ).toBe('tpl1');
   });
 });
 
@@ -1168,24 +1117,6 @@ describe('FilterStep — load a saved segment', () => {
  * feature de nascer morta.
  */
 describe('C1b — finalidade da campanha (passo 1)', () => {
-  const TWILIO_PROVIDERS: typeof DEFAULT_PROVIDERS = {
-    providers: [
-      {
-        provider: 'TWILIO',
-        channels: [
-          {
-            id: 'tw1',
-            name: 'Canal Oficial',
-            phoneE164: '+559231550103',
-            isActive: true,
-            isDefault: true,
-            provider: 'TWILIO',
-          },
-        ],
-      },
-    ],
-  };
-
   /** Preenche nome + template + canal no passo 1 (tudo menos a finalidade). */
   async function fillStep1ExceptPurpose() {
     fireEvent.change(screen.getByPlaceholderText(/Boas-vindas/i), {
@@ -1195,30 +1126,6 @@ describe('C1b — finalidade da campanha (passo 1)', () => {
     fireEvent.click(await screen.findByRole('option', { name: /boas_vindas/i }));
     fireEvent.click(screen.getByRole('radio'));
   }
-
-  it('canal OFICIAL (TWILIO): não avança sem finalidade', async () => {
-    providersState.data = TWILIO_PROVIDERS;
-    wrap(<NewCampaignPage />);
-
-    await fillStep1ExceptPurpose();
-
-    expect(screen.getByRole('button', { name: /Próximo/i })).toBeDisabled();
-  });
-
-  it('escolher a finalidade libera o avanço — as opções vêm do endpoint', async () => {
-    providersState.data = TWILIO_PROVIDERS;
-    wrap(<NewCampaignPage />);
-    await fillStep1ExceptPurpose();
-
-    fireEvent.click(screen.getByRole('combobox', { name: /finalidade/i }));
-    fireEvent.click(
-      await screen.findByRole('option', { name: /Convites para cursos/i }),
-    );
-
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: /Próximo/i })).toBeEnabled(),
-    );
-  });
 
   /**
    * C2 — CORREÇÃO do footgun do C1b. O wizard liberava EVOLUTION sem finalidade
@@ -1520,7 +1427,7 @@ describe('C1b — passo 4 mostra quem consentiu para a finalidade', () => {
 /**
  * CANAL ÚNICO — um canal DESATIVADO não pode sequer ser oferecido.
  *
- * A base tem duas contas Zernio e só UMA pode disparar. Antes, o canal
+ * A base tem dois números e só UM pode disparar. Antes, o canal
  * desativado ainda era RENDERIZADO no seletor (opacidade 50%, radio disabled) —
  * e, pior, o auto-select caía nele: os dois últimos fallbacks
  * (`?? channels.find(c => c.isDefault) ?? channels[0]`) não olhavam `isActive`.
@@ -1530,10 +1437,10 @@ describe('C1b — passo 4 mostra quem consentiu para a finalidade', () => {
  * existe despublicar mensagem de WhatsApp.
  */
 describe('canal desativado não aparece no assistente', () => {
-  const DOIS_ZERNIO: typeof DEFAULT_PROVIDERS = {
+  const DOIS_CANAIS: typeof DEFAULT_PROVIDERS = {
     providers: [
       {
-        provider: 'ZERNIO',
+        provider: 'EVOLUTION',
         channels: [
           {
             id: 'proibido',
@@ -1541,7 +1448,7 @@ describe('canal desativado não aparece no assistente', () => {
             phoneE164: '+5592945550101',
             isActive: false,
             isDefault: true, // era o default ANTES de ser desativado
-            provider: 'ZERNIO',
+            provider: 'EVOLUTION',
           },
           {
             id: 'permitido',
@@ -1549,7 +1456,7 @@ describe('canal desativado não aparece no assistente', () => {
             phoneE164: '+559231550101',
             isActive: true,
             isDefault: false,
-            provider: 'ZERNIO',
+            provider: 'EVOLUTION',
           },
         ],
       },
@@ -1557,7 +1464,7 @@ describe('canal desativado não aparece no assistente', () => {
   };
 
   it('o canal desativado NÃO é oferecido como opção de envio', () => {
-    providersState.data = DOIS_ZERNIO;
+    providersState.data = DOIS_CANAIS;
     wrap(<NewCampaignPage />);
 
     expect(screen.queryByText('Canal Proibido')).not.toBeInTheDocument();
@@ -1576,7 +1483,7 @@ describe('canal desativado não aparece no assistente', () => {
     providersState.data = {
       providers: [
         {
-          provider: 'ZERNIO',
+          provider: 'EVOLUTION',
           channels: [
             {
               id: 'proibido',
@@ -1584,7 +1491,7 @@ describe('canal desativado não aparece no assistente', () => {
               phoneE164: '+5592945550101',
               isActive: false,
               isDefault: true,
-              provider: 'ZERNIO',
+              provider: 'EVOLUTION',
             },
           ],
         },
@@ -2003,14 +1910,14 @@ async function renderWizardAtConfirmStep({
 
 /**
  * T15 — substitui `instancesState.data = [...]` (EVOLUTION-only) pelo mesmo
- * `providersState` que já alimenta a seleção de canal. GOZAP de propósito: é
- * o cenário REAL de produção — `useInstances()` nunca via este canal.
+ * `providersState` que já alimenta a seleção de canal. EVOLUTION é o único
+ * provedor que o assistente oferece (somente-Evolution).
  */
-function setCanalGozap(over: Partial<MockChannel> = {}) {
+function setCanalEvolution(over: Partial<MockChannel> = {}) {
   providersState.data = {
     providers: [
       {
-        provider: 'GOZAP',
+        provider: 'EVOLUTION',
         channels: [
           {
             id: 'inst1',
@@ -2018,7 +1925,7 @@ function setCanalGozap(over: Partial<MockChannel> = {}) {
             phoneE164: '+559231550101',
             isActive: true,
             isDefault: true,
-            provider: 'GOZAP',
+            provider: 'EVOLUTION',
             dailySendLimit: 500,
             sentToday: 120,
             sentTodayResetAt: '2026-08-24T13:00:00.000Z',
@@ -2047,7 +1954,7 @@ describe('A.3 — passo final: criar + 1º lote', () => {
       skipped: 0,
       remaining: 12520,
     });
-    setCanalGozap();
+    setCanalEvolution();
   });
 
   it('o campo "Enviar agora" nasce com min(quota restante, público)', async () => {
@@ -2080,7 +1987,7 @@ describe('A.3 — passo final: criar + 1º lote', () => {
    * precisa de um número — e de saber que o lote sai sozinho no reset.
    */
   it('com o teto de hoje esgotado, nasce com o teto diário inteiro e avisa', async () => {
-    setCanalGozap({ sentToday: 500 });
+    setCanalEvolution({ sentToday: 500 });
     await renderWizardAtConfirmStep({ previewCount: 13400 });
     expect(screen.getByTestId('first-batch-size')).toHaveValue(500);
     // Texto exato de `avisoDeQuota` (channel-quota.ts, T6 — já testado em
@@ -2127,7 +2034,7 @@ describe('A.3 — passo final: criar + 1º lote', () => {
    * pt-BR) na MESMA tela. O botão tem de usar a mesma régua.
    */
   it('o botão mostra o tamanho do lote formatado em pt-BR (milhar com ponto)', async () => {
-    setCanalGozap({ dailySendLimit: 5000, sentToday: 0 });
+    setCanalEvolution({ dailySendLimit: 5000, sentToday: 0 });
     await renderWizardAtConfirmStep({ previewCount: 13400 });
 
     expect(
@@ -2173,7 +2080,7 @@ describe('A.3 — passo final: criar + 1º lote', () => {
 
     // O "poll" muda a quota do canal — a sugestão MUDARIA (450, não mais
     // 380) se o efeito de sincronização rodasse de novo.
-    setCanalGozap({ sentToday: 50 });
+    setCanalEvolution({ sentToday: 50 });
     rerender(
       <QueryClientProvider client={qc}>
         <NewCampaignPage />
@@ -2215,7 +2122,7 @@ describe('Fix round 1 (#1) — canal ainda não carregou (ou é desconhecido)', 
 
   it('canal não encontrado na lista: campo vazio, aviso explícito, botão de enviar travado', async () => {
     providersState.isPending = false;
-    providersState.data = { providers: [{ provider: 'GOZAP', channels: [] }] };
+    providersState.data = { providers: [{ provider: 'EVOLUTION', channels: [] }] };
     seedDraftAtConfirmStep();
     previewMutateAsync.mockResolvedValue({ count: 13400, sample: [] });
     wrap(<NewCampaignPage />);
@@ -2223,7 +2130,7 @@ describe('Fix round 1 (#1) — canal ainda não carregou (ou é desconhecido)', 
     await screen.findByTestId('first-batch-size');
     expect((screen.getByTestId('first-batch-size') as HTMLInputElement).value).toBe('');
     expect(
-      screen.getByText(/O canal desta campanha não foi encontrado — verifique em Canais/i),
+      screen.getByText(/O número desta campanha não está disponível \(pode usar uma integração desligada\)\. Escolha um número da Evolution/i),
     ).toBeTruthy();
     expect(screen.getByTestId('create-and-send')).toBeDisabled();
     expect(screen.getByTestId('create-without-sending')).not.toBeDisabled();

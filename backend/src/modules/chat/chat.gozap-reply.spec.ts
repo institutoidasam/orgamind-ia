@@ -9,6 +9,16 @@ import { PrismaService } from '../../shared/prisma/prisma.service';
 import { AuditService } from '../../shared/audit/audit.service';
 import { shouldReply } from '../bots/bot-reply.guard';
 
+// O envio por GOZAP/ZERNIO/TWILIO é código inativo (GC5): esta suíte segue
+// cobrindo-o com todo provedor "ligado". O guard de provedor desligado do chat
+// tem o seu teste em chat.service.spec.ts.
+vi.mock('../../shared/config/enabled-providers', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('../../shared/config/enabled-providers')
+  >()),
+  isEnabledChannelProvider: () => true,
+}));
+
 /**
  * N20/N21 — responder pelo inbox num canal GOZAP.
  *

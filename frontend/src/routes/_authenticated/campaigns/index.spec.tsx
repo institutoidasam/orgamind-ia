@@ -30,13 +30,13 @@ vi.mock('sonner', () => ({
 
 // A.6 — cada linha resolve o canal via `useProviders()` (GET
 // /whatsapp/providers, TODO provedor — não `useInstances()`, que só cobre
-// EVOLUTION). Um canal GOZAP (o provedor de produção) por padrão: é o
-// cenário real que `useInstances()` nunca enxergava.
+// EVOLUTION). Somente-Evolution: o canal padrão é EVOLUTION, o único que
+// `resolveCampaignChannel` reconhece.
 const useProvidersMock = vi.fn(() => ({
   data: {
     providers: [
       {
-        provider: 'GOZAP',
+        provider: 'EVOLUTION',
         traits: { official: true, sessionBased: false, sessionWindow: false },
         capabilities: [],
         channels: [
@@ -46,7 +46,7 @@ const useProvidersMock = vi.fn(() => ({
             phoneE164: '+5592999999999',
             isActive: true,
             isDefault: true,
-            provider: 'GOZAP',
+            provider: 'EVOLUTION',
             dailySendLimit: 500,
             sentToday: 120,
             sentTodayResetAt: '2026-08-24T13:00:00.000Z',
@@ -663,7 +663,7 @@ describe('CampaignsPage — apagar todas', () => {
 
 /**
  * A.6 — a lista mostra quantos faltam e por que a campanha parou, sem uma
- * consulta de audiência por linha. O canal (`inst1`, GOZAP) vem do
+ * consulta de audiência por linha. O canal (`inst1`, EVOLUTION) vem do
  * `useProvidersMock` default declarado no topo do arquivo: dailySendLimit
  * 500, sentToday 120 → quota restante 380, coerente com "próximo lote
  * disponível".
@@ -738,7 +738,7 @@ describe('A.6 — a linha diz quantos faltam', () => {
       data: {
         providers: [
           {
-            provider: 'GOZAP',
+            provider: 'EVOLUTION',
             traits: { official: true, sessionBased: false, sessionWindow: false },
             capabilities: [],
             channels: [
@@ -748,7 +748,7 @@ describe('A.6 — a linha diz quantos faltam', () => {
                 phoneE164: '+5592999999999',
                 isActive: true,
                 isDefault: true,
-                provider: 'GOZAP',
+                provider: 'EVOLUTION',
                 dailySendLimit: 500,
                 sentToday: 500,
                 sentTodayResetAt: '2026-08-24T13:00:00.000Z',

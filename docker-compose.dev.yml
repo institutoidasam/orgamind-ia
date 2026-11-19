@@ -31,7 +31,10 @@ services:
       retries: 5
 
   evolution-api:
-    image: evoapicloud/evolution-api:latest
+    # Evolution 2.3.7 (Baileys 7.0.0-rc.9, Node 24.15), build de 2026-05-06; trocar pela 2.3.8
+    # quando publicada (correção de segurança #2435); não usar 2.4.0-rc (exige licença).
+    # Troca de versão: OPERATIONS.md → "Evolution: versão fixa e troca de versão".
+    image: evoapicloud/evolution-api@sha256:966625532d9076a2381e973a271307d107e6f070450de3abeeea8bd18be07252
     profiles: ["evolution"]
     # Host port 8081 to avoid clashing with other local services on 8080
     # (e.g. Keycloak). The ORGAMIND backend talks to evolution-api over the

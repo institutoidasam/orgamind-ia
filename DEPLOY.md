@@ -52,21 +52,16 @@ In the **Environment** tab, paste the contents of
   (forced to change on first login)
 - Leave `WEBHOOK_BASE_URL=http://api:3000` and `EVOLUTION_BASE_URL=http://evolution-api:8080`
   as-is (internal Docker DNS). These are for containers inside this compose only.
-- `PUBLIC_WEBHOOK_BASE_URL` — required if you use an **external** provider that
-  calls back (GoZap). Set it to `https://<your domain>/api`. It must be reachable
-  from the public internet: `http://api:3000` is a compose service name, and a
-  third-party SaaS accepts it with 200 and then silently delivers nothing
-  (prod incident 2026-08-07). The app refuses to register a non-public webhook
-  URL and logs at `error` level.
-- `GOZAP_WEBHOOK_TOKEN` — `openssl rand -hex 24`. This is the **only** thing
-  protecting `/api/webhooks/gozap` (GoZap does not sign the body). The receiver
-  accepts it as a header (`X-Webhook-Token`, preferred) or in the query string
-  (`?t=`, kept for compatibility with URLs already stored in the GoZap panel).
-  Prefer the header: a query string is written to every proxy access log it
-  passes through. After moving the panel to the header, set
-  `GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN=false` to close the query path for good —
-  full procedure in [OPERATIONS.md](./OPERATIONS.md) → "Webhook do GoZap: tirar
-  o segredo da URL".
+- `PUBLIC_WEBHOOK_BASE_URL` — leave blank. Only an **external** SaaS provider
+  that calls back over the internet would need it (GoZap was the only one) and
+  Evolution does not: it calls the api over the compose network.
+- Meta, Twilio, Zernio and GoZap variables (`META_*`, `TWILIO_*`, `ZERNIO_*`,
+  `GOZAP_*`) are not forwarded to the containers anymore: Desligado em 2026-11;
+  código inativo no repositório. If they are still in the Dokploy environment
+  they are ignored with a warning that lists names only — remove them.
+- `evolution-api` is pinned by image digest and capped at `mem_limit: 1g` in
+  `docker-compose.prod.yml`; to change the version see
+  [OPERATIONS.md](./OPERATIONS.md) → "Evolution: versão fixa e troca de versão".
 
 ## 4. First deploy
 
@@ -126,16 +121,11 @@ Dokploy can schedule backups for the named volumes:
 - `evolution_instances` — Baileys auth state (losing this forces re-pairing)
 - `redis_data` — BullMQ queue state (loss only affects in-flight jobs)
 
-## Switching to Meta WhatsApp Cloud API
+## Other WhatsApp providers (Meta, Twilio, Zernio, GoZap)
 
-Fill in all of the `META_*` variables (the whole group must be set together —
-see `backend/src/shared/config/env.schema.ts`) and redeploy; the Meta channel
-becomes available alongside whatever else is configured. There is no single
-provider selector to flip — a deploy can run Evolution and Meta side by side.
-If you're dropping Evolution entirely, the `evolution-api` service stays
-running but is no longer used; you can comment it out of
-`docker-compose.prod.yml` once you've fully migrated (and remove the
-`EVOLUTION_*` vars so that group no longer validates as configured).
+Desligado em 2026-11; código inativo no repositório. Only Evolution is on, so
+there is nothing to switch: the `EVOLUTION_*` group is required and the
+`evolution-api` service must keep running.
 
 ## Troubleshooting
 

@@ -27,6 +27,28 @@ vi.mock('axios', () => ({
   default: { get: vi.fn() },
 }));
 
+function buildService() {
+  const repo = mockDeep<TemplatesRepository>();
+  const config = mockDeep<ConfigService<Env>>();
+  const audit = mockDeep<AuditService>();
+  const twilioContent = mockDeep<TwilioContentService>();
+  const zernioTemplates = mockDeep<ZernioTemplateService>();
+  // `configured` é readonly na classe — o mock precisa do valor explícito, e
+  // configurable para que o teste de "sem credencial" possa desligá-lo.
+  Object.defineProperty(zernioTemplates, 'configured', {
+    value: true,
+    configurable: true,
+  });
+  const service = new TemplatesService(
+    repo,
+    config,
+    audit,
+    twilioContent,
+    zernioTemplates,
+  );
+  return { service, repo, config, audit, twilioContent, zernioTemplates };
+}
+
 describe('TemplatesService', () => {
   let service: TemplatesService;
   let repo: MockProxy<TemplatesRepository>;
@@ -36,46 +58,11 @@ describe('TemplatesService', () => {
   let zernioTemplates: MockProxy<ZernioTemplateService>;
 
   beforeEach(() => {
-    repo = mockDeep<TemplatesRepository>();
-    config = mockDeep<ConfigService<Env>>();
-    audit = mockDeep<AuditService>();
-    twilioContent = mockDeep<TwilioContentService>();
-    zernioTemplates = mockDeep<ZernioTemplateService>();
-    // `configured` é readonly na classe — o mock precisa do valor explícito, e
-    // configurable para que o teste de "sem credencial" possa desligá-lo.
-    Object.defineProperty(zernioTemplates, 'configured', {
-      value: true,
-      configurable: true,
-    });
-    service = new TemplatesService(
-      repo,
-      config,
-      audit,
-      twilioContent,
-      zernioTemplates,
-    );
+    ({ service, repo, config, audit, twilioContent, zernioTemplates } =
+      buildService());
     // axios is a module-level mock — reset it so call-count/ordering assertions
     // (pagination tests) don't see leaked calls from earlier tests.
     vi.mocked(axios.get).mockReset();
-  });
-
-  it('list delegates to repo.listAll()', async () => {
-    repo.listAll.mockResolvedValue([]);
-    const result = await service.list();
-    expect(result).toEqual([]);
-    expect(repo.listAll).toHaveBeenCalledTimes(1);
-  });
-
-  it('list forwards the provider filter to repo.listAll()', async () => {
-    repo.listAll.mockResolvedValue([]);
-    await service.list('TWILIO' as never);
-    expect(repo.listAll).toHaveBeenCalledWith('TWILIO');
-  });
-
-  it('list calls repo.listAll() with undefined when no provider filter given', async () => {
-    repo.listAll.mockResolvedValue([]);
-    await service.list();
-    expect(repo.listAll).toHaveBeenCalledWith(undefined);
   });
 
   // twilio-platform T3 — the approval-sync columns written by the 2-min job
@@ -2307,5 +2294,35 @@ describe('TemplatesService', () => {
       expect(choices.optIn).toContain('Sim, quero receber');
       expect(choices.optOut).toContain('Não quero receber');
     });
+  });
+});
+
+describe('TemplatesService — somente Evolution', () => {
+  let service: TemplatesService;
+  let repo: MockProxy<TemplatesRepository>;
+
+  beforeEach(() => {
+    ({ service, repo } = buildService());
+  });
+
+  // R12: só os provedores ligados aparecem; o resto fica só no banco.
+  it('list() pede só EVOLUTION', async () => {
+    repo.listAll.mockResolvedValue([]);
+    const result = await service.list();
+    expect(result).toEqual([]);
+    expect(repo.listAll).toHaveBeenCalledTimes(1);
+    expect(repo.listAll.mock.calls).toEqual([[['EVOLUTION']]]);
+  });
+
+  it("list('EVOLUTION') pede só EVOLUTION", async () => {
+    repo.listAll.mockResolvedValue([]);
+    await service.list('EVOLUTION');
+    expect(repo.listAll.mock.calls).toEqual([[['EVOLUTION']]]);
+  });
+
+  it("list('ZERNIO') → [] sem consultar o banco", async () => {
+    const result = await service.list('ZERNIO');
+    expect(result).toEqual([]);
+    expect(repo.listAll.mock.calls).toEqual([]);
   });
 });

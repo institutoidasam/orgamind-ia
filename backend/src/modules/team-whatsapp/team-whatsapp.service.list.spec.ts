@@ -24,14 +24,14 @@ const channelRow = {
   id: 'c1',
   name: 'Canal',
   phoneE164: '+5592900000000',
-  provider: 'GOZAP' as const,
+  provider: 'EVOLUTION' as const,
   connectionEvents: [{ state: 'open' }],
 };
 const channelOut = {
   id: 'c1',
   name: 'Canal',
   phoneE164: '+5592900000000',
-  provider: 'GOZAP' as const,
+  provider: 'EVOLUTION' as const,
   connectionState: 'open' as const,
 };
 // C6: o setor dos alvos não traz mais membros (vêm do GET roster, por data).
@@ -64,6 +64,7 @@ describe('TeamWhatsappService.targets', () => {
     h.repo.listEligibleChannels.mockResolvedValue([
       channelRow,
       { ...channelRow, id: 'c2', provider: 'META' },
+      { ...channelRow, id: 'c3', provider: 'GOZAP' },
     ]);
     const out = await h.service.targets('a');
     expect(out.channels.map((c) => c.id)).toEqual(['c1']);

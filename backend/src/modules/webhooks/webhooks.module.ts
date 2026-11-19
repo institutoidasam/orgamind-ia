@@ -1,9 +1,6 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { WebhooksController } from './webhooks.controller';
-import { TwilioWebhooksController } from './twilio-webhooks.controller';
-import { ZernioWebhooksController } from './zernio-webhooks.controller';
-import { GozapWebhooksController } from './gozap-webhooks.controller';
 import { WebhooksService } from './webhooks.service';
 import { WhatsappProvidersModule } from '../whatsapp-providers/whatsapp-providers.module';
 import { CampaignsModule } from '../campaigns/campaigns.module';
@@ -25,12 +22,9 @@ import { QUEUE_NAMES } from '../queue/queue.constants';
     TeamTrackingModule,
     BullModule.registerQueue({ name: QUEUE_NAMES.CHAT_HISTORY_SYNC }),
   ],
-  controllers: [
-    WebhooksController,
-    TwilioWebhooksController,
-    ZernioWebhooksController,
-    GozapWebhooksController,
-  ],
+  // Só a Evolution está ligada (R5): as rotas de webhook Twilio/Zernio/GoZap
+  // deixam de existir (404). Os arquivos dos controllers ficam no repositório (GC5).
+  controllers: [WebhooksController],
   providers: [WebhooksService],
 })
 export class WebhooksModule {}

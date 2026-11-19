@@ -26,7 +26,7 @@ const useProvidersMock = vi.fn(() => ({
       ? undefined
       : {
           providers: [
-            { provider: 'GOZAP', traits: {}, capabilities: [], channels: state.channels },
+            { provider: 'EVOLUTION', traits: {}, capabilities: [], channels: state.channels },
           ],
         },
   isPending: state.channels === undefined && !state.providersError,
@@ -85,14 +85,11 @@ const summary = (over: Partial<BatchSummary> = {}): BatchSummary => ({
   ...over,
 });
 
-// T15 — GOZAP é o cenário real de produção (o provedor que
-// `useInstances()`/EVOLUTION-only nunca via). `provider` não importa para
-// `resolveCampaignChannel` (procura em TODO grupo), mas fica aqui para
-// documentar QUAL provedor este fixture representa.
+// Somente-Evolution: `resolveCampaignChannel` só reconhece canal EVOLUTION.
 const CANAL = {
   id: 'inst1',
   name: 'robo',
-  provider: 'GOZAP' as const,
+  provider: 'EVOLUTION' as const,
   isActive: true,
   dailySendLimit: 500,
   sentToday: 120,
@@ -311,7 +308,7 @@ describe('CampaignProgressHeader', () => {
     montar();
     expect(screen.getByTestId('next-batch-button')).toBeDisabled();
     expect(screen.getByTestId('channel-missing-notice').textContent).toContain(
-      'O canal desta campanha não foi encontrado',
+      'O número desta campanha não está disponível',
     );
   });
 
@@ -388,16 +385,15 @@ describe('CampaignProgressHeader', () => {
   });
 
   /**
-   * T15 — a quota funciona para TODO provedor, não só GOZAP: um canal
-   * EVOLUTION (o único que `useInstances()` já cobria) não pode regredir.
+   * Somente-Evolution (R12/R15): um canal de provedor desligado (ex.: GOZAP)
+   * com o id da campanha não é canal utilizável — a tela trata como "não
+   * encontrado" e trava o envio (o back recusa com `channel.provider_disabled`).
    */
-  it('funciona também com um canal EVOLUTION — não é exclusividade do GoZap', () => {
-    state.channels = [{ ...CANAL, provider: 'EVOLUTION' as const }];
+  it('canal de provedor desligado (GOZAP) é tratado como "não encontrado" e trava o envio', () => {
+    state.channels = [{ ...CANAL, provider: 'GOZAP' as never }];
     montar();
-    expect(screen.getByTestId('next-batch-button')).not.toBeDisabled();
-    expect(screen.getByTestId('campaign-channel-line').textContent).toContain(
-      'Canal robo: enviou 120 de 500 hoje',
-    );
+    expect(screen.getByTestId('next-batch-button')).toBeDisabled();
+    expect(screen.getByTestId('channel-missing-notice')).toBeInTheDocument();
   });
 
   /**

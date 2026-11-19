@@ -118,7 +118,7 @@ export const numberRow = (
   id: 'c1',
   name: 'Canal equipe',
   phoneE164: '+559230001111',
-  provider: 'GOZAP',
+  provider: 'EVOLUTION',
   evolutionInstanceName: null,
   ...over,
 });

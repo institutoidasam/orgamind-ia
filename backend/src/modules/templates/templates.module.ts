@@ -4,7 +4,6 @@ import { TemplatesService } from './templates.service';
 import { TemplatesController } from './templates.controller';
 import { TemplatesRepository } from './templates.repository';
 import { TemplateApprovalSyncProcessor } from './template-approval-sync.processor';
-import { ZernioTemplateSyncProcessor } from './zernio-template-sync.processor';
 import { WhatsappProvidersModule } from '../whatsapp-providers/whatsapp-providers.module';
 import { QUEUE_NAMES } from '../queue/queue.constants';
 
@@ -14,6 +13,8 @@ import { QUEUE_NAMES } from '../queue/queue.constants';
     // processor below.
     WhatsappProvidersModule,
     BullModule.registerQueue({ name: QUEUE_NAMES.TEMPLATE_APPROVAL_SYNC }),
+    // Sem consumidor (R8): a fila segue registrada só para o worker achar o token
+    // e apagar os repetíveis que um deploy antigo deixou no Redis.
     BullModule.registerQueue({ name: QUEUE_NAMES.ZERNIO_TEMPLATE_SYNC }),
   ],
   controllers: [TemplatesController],
@@ -24,10 +25,6 @@ import { QUEUE_NAMES } from '../queue/queue.constants';
     // Twilio Content approval statuses — same pattern as the
     // connection-reconciler living in WhatsappInstancesModule.
     TemplateApprovalSyncProcessor,
-    // ZC — reconciliação do catálogo do Zernio. REDE DE SEGURANÇA (1h) atrás do
-    // webhook `whatsapp.template.status_updated`, que é o caminho normal. O
-    // espaçamento é deliberado: o balde do Zernio é o MESMO do envio.
-    ZernioTemplateSyncProcessor,
   ],
   exports: [TemplatesService, TemplatesRepository],
 })

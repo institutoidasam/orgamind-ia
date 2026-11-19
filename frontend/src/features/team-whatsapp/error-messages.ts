@@ -77,6 +77,7 @@ const CHANNEL_REASON_LABEL = new Map([
   ['team_whatsapp.channel_unverified', 'Não foi possível conferir o número'],
   ['team_whatsapp.channel_unavailable', 'Número indisponível na hora do envio'],
   ['team_whatsapp.channel_invalid', 'Número removido ou inválido'],
+  ['channel.provider_disabled', 'Número de integração desligada'],
 ]);
 
 /** Texto PT-BR, orientado à ação do operador, para o `errorCode` de uma falha de envio. */

@@ -33,7 +33,12 @@ import {
 import { extractApiError } from '@/lib/api-error';
 import { useDeclareConsentButtons } from '../api';
 import type { Template, ZernioButtonRoleValue } from '../schemas';
-import { ZERNIO_BUTTON_ROLE_LABEL } from '../zernio-schemas';
+
+const ZERNIO_BUTTON_ROLE_LABEL: Record<ZernioButtonRoleValue, string> = {
+  OPT_IN: 'Opt-in — o clique GRAVA o consentimento',
+  OPT_OUT: 'Opt-out — o clique silencia o contato',
+  NONE: 'Resposta rápida comum (não mexe em consentimento)',
+};
 
 type Props = {
   template: Template;

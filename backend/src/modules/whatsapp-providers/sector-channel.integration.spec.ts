@@ -45,7 +45,7 @@ async function makeSector(
 }
 
 async function makeChannel(
-  provider: ChannelProvider = 'GOZAP',
+  provider: ChannelProvider = 'EVOLUTION',
   over: { isActive?: boolean; name?: string } = {},
 ) {
   return prisma.channel.create({
@@ -201,13 +201,12 @@ describe('duas associações ao mesmo número ao mesmo tempo', () => {
 
 describe('recusas (nada muda)', () => {
   it.each([
-    ['TWILIO', 'TWILIO', true],
-    ['GOZAP inativo', 'GOZAP', false],
-    ['EVOLUTION inativo', 'EVOLUTION', false],
+    ['GOZAP inativo', 'GOZAP'],
+    ['EVOLUTION inativo', 'EVOLUTION'],
   ] as const)(
     'canal %s: 422 channel.sectors_not_team',
-    async (_label, provider, isActive) => {
-      const channel = await makeChannel(provider, { isActive });
+    async (_label, provider) => {
+      const channel = await makeChannel(provider, { isActive: false });
       const sector = await makeSector(`Setor ${_label}`);
 
       await expect(
@@ -219,6 +218,26 @@ describe('recusas (nada muda)', () => {
       ).rejects.toMatchObject({
         status: 422,
         code: 'channel.sectors_not_team',
+      });
+      expect(await channelOf(sector.id)).toBeNull();
+    },
+  );
+
+  it.each(['GOZAP', 'TWILIO'] as const)(
+    'PUT sectors em canal %s ativo → 422 sector.channel_provider_disabled',
+    async (provider) => {
+      const channel = await makeChannel(provider);
+      const sector = await makeSector(`Setor ${provider} ativo`);
+
+      await expect(
+        service.assign({
+          channelId: channel.id,
+          sectorIds: [sector.id],
+          actorId: 'a',
+        }),
+      ).rejects.toMatchObject({
+        status: 422,
+        code: 'sector.channel_provider_disabled',
       });
       expect(await channelOf(sector.id)).toBeNull();
     },

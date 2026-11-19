@@ -25,11 +25,11 @@ import { QueryErrorFallback } from '@/components/query-error-fallback';
 import { extractApiError } from '@/lib/api-error';
 import { statusDoOperador, textoDaLinha } from '@/features/campaigns/list-progress';
 import { horaDoReset, quotaRestante } from '@/features/campaigns/channel-quota';
-// A.6 — o canal da linha vem de `useProviders()` (GET /whatsapp/providers,
-// TODO provedor), não de `useInstances()` (só EVOLUTION): a lista tem de
-// mostrar "Aguardando teto"/"aguardando canal" também para GOZAP (produção),
-// ZERNIO, TWILIO e META, não só para o provedor legado. Mesma regra de
-// `resolveCampaignChannel` usada pelo cabeçalho de progresso (T15).
+// A.6 — o canal da linha vem de `useProviders()` (GET /whatsapp/providers):
+// a lista mostra "Aguardando teto"/"aguardando canal" com a mesma regra de
+// `resolveCampaignChannel` usada pelo cabeçalho de progresso (T15). Somente-
+// Evolution: só canal EVOLUTION é reconhecido; campanha antiga em canal de
+// provedor desligado cai em "aguardando canal".
 import { useProviders } from '@/features/whatsapp/api';
 import { resolveCampaignChannel } from '@/features/campaigns/resolve-channel';
 

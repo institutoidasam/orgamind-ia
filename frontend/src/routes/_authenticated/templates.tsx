@@ -3,35 +3,13 @@ import { createFileRoute } from '@tanstack/react-router';
 import { Pencil, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { useTemplates, useSyncZernioTemplates } from '@/features/templates/api';
+import { useTemplates } from '@/features/templates/api';
 import { TemplateFormDialog } from '@/features/templates/components/template-form-dialog';
-import { TwilioTemplateFormDialog } from '@/features/templates/components/twilio-template-form-dialog';
-import { ZernioTemplateFormDialog } from '@/features/templates/components/zernio-template-form-dialog';
 import { ConsentButtonsDialog } from '@/features/templates/components/consent-buttons-dialog';
-import { SubmitTwilioTemplateDialog } from '@/features/templates/components/submit-twilio-template-dialog';
 import { DeleteTemplateDialog } from '@/features/templates/components/delete-template-dialog';
 import type { Template } from '@/features/templates/schemas';
-import {
-  cloneTwilioPrefill,
-  twilioPrefillFromTemplate,
-} from '@/features/templates/twilio-schemas';
-import { toast } from 'sonner';
-import { extractApiError } from '@/lib/api-error';
 import { QueryErrorFallback } from '@/components/query-error-fallback';
-import {
-  CHANNEL_PROVIDERS,
-  useProviders,
-  type ChannelProvider,
-} from '@/features/whatsapp/api';
-import {
-  PROVIDER_LABEL,
-  ProviderBadge,
-  useProviderScope,
-} from '@/features/whatsapp/provider-scope';
-
-/** Local listing filter — `'all'` (no filter) or a single provider. */
-type ProviderFilter = 'all' | ChannelProvider;
+import { ProviderBadge } from '@/features/whatsapp/provider-scope';
 
 export const Route = createFileRoute('/_authenticated/templates')({
   component: TemplatesPage,
@@ -62,17 +40,6 @@ const TEMPLATE_STATUS_BADGE_CLASS: Record<string, string> = {
 // Só REJEITADO/PAUSADO expõem o motivo — um template re-aprovado pode manter
 // um twilioRejectionReason antigo na coluna, que não deve reaparecer no card.
 const STATUSES_WITH_REASON = new Set(['REJECTED', 'PAUSED']);
-
-// twilio-platform T5 — rascunho Twilio (criado mas ainda não submetido à
-// Meta): o backend guarda status PENDING com raw 'draft'. O card mostra
-// "Rascunho" (submeter/editar liberados); depois da submissão o raw muda e o
-// badge vira Pendente.
-function isTwilioDraft(t: Template): boolean {
-  return t.provider === 'TWILIO' && t.twilioApprovalStatus === 'draft';
-}
-
-const DRAFT_BADGE_CLASS =
-  'border-slate-300 bg-slate-50 text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300';
 
 /**
  * Rótulo relativo simples (sem lib) para o frescor do catálogo Twilio.
@@ -162,15 +129,6 @@ type DialogState =
   | { kind: 'closed' }
   | { kind: 'create' }
   | { kind: 'edit'; template: Template }
-  // twilio-platform T5 — fluxos da Content API: criar rascunho (form
-  // dedicado), clonar-e-corrigir um rejeitado (create pré-preenchido com nome
-  // _v2) e editar um rascunho ainda não submetido (nome/idioma imutáveis).
-  | { kind: 'twilio-create' }
-  // ZB — criar template COM BOTÕES na Meta (via Zernio). Diferente do "Novo
-  // template" genérico, que só grava uma row local.
-  | { kind: 'zernio-create' }
-  | { kind: 'twilio-clone'; template: Template }
-  | { kind: 'twilio-edit-draft'; template: Template }
   // ★ ZB — dizer o que os botões de um template IMPORTADO significam. Sem isso o
   // gate de campanha o recusa: um rótulo que o sistema não lê pode ser o "sim" de
   // um opt-in, e cada clique iria para o lixo.
@@ -180,19 +138,13 @@ function TemplateCard({
   template: t,
   onEdit,
   onDelete,
-  onSubmitApproval,
-  onClone,
   onClassifyButtons,
 }: {
   template: Template;
   onEdit: (t: Template) => void;
   onDelete: (t: Template) => void;
-  onSubmitApproval: (t: Template) => void;
-  onClone: (t: Template) => void;
   onClassifyButtons: (t: Template) => void;
 }) {
-  const draft = isTwilioDraft(t);
-  const rejectedTwilio = t.provider === 'TWILIO' && t.status === 'REJECTED';
   // ★ ZB — o veredito dos botões vem do BACKEND (quem é dono do reconhecedor).
   // Não-vazio = a campanha RECUSA este template: há um botão cujo clique o
   // sistema não sabe ler, e ele pode ser o "sim" de um opt-in jogando cada
@@ -207,11 +159,9 @@ function TemplateCard({
         <h3 className="truncate font-semibold">{t.metaName}</h3>
         <Badge
           variant="outline"
-          className={
-            draft ? DRAFT_BADGE_CLASS : (TEMPLATE_STATUS_BADGE_CLASS[t.status] ?? '')
-          }
+          className={TEMPLATE_STATUS_BADGE_CLASS[t.status] ?? ''}
         >
-          {draft ? 'Rascunho' : statusLabel(t.status)}
+          {statusLabel(t.status)}
         </Badge>
       </div>
       <div className="mt-1 flex flex-wrap gap-1.5">
@@ -275,20 +225,6 @@ function TemplateCard({
           <span />
         )}
         <div className="flex items-center gap-1">
-          {draft && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => onSubmitApproval(t)}
-            >
-              Submeter à aprovação
-            </Button>
-          )}
-          {rejectedTwilio && (
-            <Button size="sm" variant="outline" onClick={() => onClone(t)}>
-              Clonar e corrigir
-            </Button>
-          )}
           {buttonProblems.length > 0 && (
             <Button
               size="sm"
@@ -325,16 +261,12 @@ function TemplateList({
   isLoading,
   onEdit,
   onDelete,
-  onSubmitApproval,
-  onClone,
   onClassifyButtons,
 }: {
   data: Template[] | undefined;
   isLoading: boolean;
   onEdit: (t: Template) => void;
   onDelete: (t: Template) => void;
-  onSubmitApproval: (t: Template) => void;
-  onClone: (t: Template) => void;
   onClassifyButtons: (t: Template) => void;
 }) {
   if (isLoading) {
@@ -343,7 +275,7 @@ function TemplateList({
   if (data && data.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
-        Nenhum template ainda. Crie um novo ou clique em sincronizar.
+        Nenhum template ainda. Crie um novo.
       </p>
     );
   }
@@ -355,8 +287,6 @@ function TemplateList({
           template={t}
           onEdit={onEdit}
           onDelete={onDelete}
-          onSubmitApproval={onSubmitApproval}
-          onClone={onClone}
           onClassifyButtons={onClassifyButtons}
         />
       ))}
@@ -365,63 +295,15 @@ function TemplateList({
 }
 
 function TemplatesPage() {
-  // Multi-provider channels — the listing filter starts at the current
-  // global provider scope ('all' = every provider) but is independent from
-  // there on: switching tabs here doesn't change the app-wide scope.
-  const { scope } = useProviderScope();
-  const [providerFilter, setProviderFilter] = useState<ProviderFilter>(scope);
-
-  // Pedido do cliente (2026-08-25): TWILIO saiu das opções de criação em
-  // toda a tela — a aba só continua existindo enquanto houver pelo menos um
-  // template TWILIO já cadastrado (legado, só leitura/edição). Sem nenhum,
-  // nem a aba nem o botão de criação aparecem. Independe de "configurado":
-  // uma row legada pode sobreviver mesmo sem canal Twilio ativo.
-  const { data: twilioTemplates } = useTemplates('TWILIO');
-  const hasTwilioTemplates = (twilioTemplates ?? []).some(
-    (t) => t.provider === 'TWILIO',
-  );
-
-  // Provider tabs are gated to the CONFIGURED providers (same source as the
-  // topbar's ProviderScopeSelector and the campaign wizard) — an
-  // Evolution-only deploy shouldn't carry three permanently-empty tabs. A
-  // template prepared ahead of its channel still shows under "Todos".
-  const { data: providersData } = useProviders();
-  const configuredProviders = CHANNEL_PROVIDERS.filter((p) => {
-    if (p === 'TWILIO') return hasTwilioTemplates;
-    return (providersData?.providers ?? []).some((g) => g.provider === p);
-  });
-
-  const { data, isLoading, isError, error, refetch } = useTemplates(
-    providerFilter === 'all' ? undefined : providerFilter,
-  );
-  const syncZernio = useSyncZernioTemplates();
-
-  // Pedido do cliente (2026-08-25): "sincronizar com a Meta" só faz sentido
-  // pelo ZERNIO — é o único provedor cujo template nasce e vive na Meta por
-  // aqui (ver o comentário ZB acima, em TemplateFormDialog). Nos demais
-  // provedores/abas (Evolution, Twilio, Meta direto, GoZap, "Todos") o botão
-  // não aparece.
-  const isZernioFilter = providerFilter === 'ZERNIO';
+  // R12/R15 — só templates Evolution: o backend já filtra a lista e a UI não
+  // oferece abas, filtro nem escolha de provedor.
+  const { data, isLoading, isError, error, refetch } = useTemplates();
 
   const [dialog, setDialog] = useState<DialogState>({ kind: 'closed' });
   const [toDelete, setToDelete] = useState<Template | null>(null);
-  // twilio-platform T5 — alvo do confirm "Submeter à aprovação".
-  const [toSubmit, setToSubmit] = useState<Template | null>(null);
 
   if (isError) {
     return <QueryErrorFallback error={error} onRetry={() => refetch()} />;
-  }
-
-  async function handleSync() {
-    try {
-      const r = await syncZernio.mutateAsync();
-      toast.success(
-        `Sincronizados ${r.synced} templates (${r.skipped} pulados)`,
-      );
-    } catch (err) {
-      const { title, message } = await extractApiError(err);
-      toast.error(title, { description: message });
-    }
   }
 
   return (
@@ -432,69 +314,17 @@ function TemplatesPage() {
           <h1 className="ds-display !text-3xl">Catálogo.</h1>
         </header>
         <div className="flex gap-2">
-          {isZernioFilter && (
-            <Button
-              variant="outline"
-              disabled={syncZernio.isPending}
-              onClick={handleSync}
-            >
-              {syncZernio.isPending ? 'Sincronizando...' : 'Sincronizar Zernio'}
-            </Button>
-          )}
-          {/* Pedido do cliente (2026-08-25): o botão "Novo template Twilio"
-              saiu — a aba (quando aparece) é só leitura/edição do legado;
-              criar template novo pela Twilio deixou de ser oferecido aqui. */}
-          {/* ZB — na aba Zernio o caminho principal é criar o template NA META
-              (com botões, nascendo PENDENTE). O "Novo template" genérico recusa
-              provider=ZERNIO justamente porque gravava uma row APROVADA de um
-              template que não existia lá. */}
-          {providerFilter === 'ZERNIO' && (
-            <Button onClick={() => setDialog({ kind: 'zernio-create' })}>
-              Novo template Zernio
-            </Button>
-          )}
-          <Button
-            variant={
-              providerFilter === 'TWILIO' || providerFilter === 'ZERNIO'
-                ? 'outline'
-                : 'default'
-            }
-            onClick={() => setDialog({ kind: 'create' })}
-          >
+          <Button onClick={() => setDialog({ kind: 'create' })}>
             Novo template
           </Button>
         </div>
       </div>
 
-      <Tabs
-        value={providerFilter}
-        onValueChange={(v) => setProviderFilter(v as ProviderFilter)}
-      >
-        <TabsList>
-          <TabsTrigger value="all">Todos</TabsTrigger>
-          {configuredProviders.map((p) => (
-            <TabsTrigger key={p} value={p}>
-              {PROVIDER_LABEL[p]}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
-
       <TemplateList
         data={data}
         isLoading={isLoading}
-        onEdit={(t) =>
-          // Rascunho Twilio edita NA Twilio (PATCH twilio-draft) — os demais
-          // editam só o row local, como sempre.
-          setDialog(
-            isTwilioDraft(t)
-              ? { kind: 'twilio-edit-draft', template: t }
-              : { kind: 'edit', template: t },
-          )
-        }
+        onEdit={(t) => setDialog({ kind: 'edit', template: t })}
         onDelete={(t) => setToDelete(t)}
-        onSubmitApproval={(t) => setToSubmit(t)}
-        onClone={(t) => setDialog({ kind: 'twilio-clone', template: t })}
         onClassifyButtons={(t) =>
           setDialog({ kind: 'consent-buttons', template: t })
         }
@@ -515,12 +345,6 @@ function TemplatesPage() {
           onOpenChange={(o) => !o && setDialog({ kind: 'closed' })}
         />
       )}
-      {dialog.kind === 'zernio-create' && (
-        <ZernioTemplateFormDialog
-          open
-          onOpenChange={(o) => !o && setDialog({ kind: 'closed' })}
-        />
-      )}
       {dialog.kind === 'consent-buttons' && (
         <ConsentButtonsDialog
           template={dialog.template}
@@ -528,36 +352,6 @@ function TemplatesPage() {
           onOpenChange={(o) => !o && setDialog({ kind: 'closed' })}
         />
       )}
-      {dialog.kind === 'twilio-create' && (
-        <TwilioTemplateFormDialog
-          mode="create"
-          open
-          onOpenChange={(o) => !o && setDialog({ kind: 'closed' })}
-        />
-      )}
-      {dialog.kind === 'twilio-clone' && (
-        <TwilioTemplateFormDialog
-          mode="create"
-          initialValues={cloneTwilioPrefill(dialog.template)}
-          open
-          onOpenChange={(o) => !o && setDialog({ kind: 'closed' })}
-        />
-      )}
-      {dialog.kind === 'twilio-edit-draft' && (
-        <TwilioTemplateFormDialog
-          mode="editDraft"
-          templateId={dialog.template.id}
-          initialValues={twilioPrefillFromTemplate(dialog.template)}
-          open
-          onOpenChange={(o) => !o && setDialog({ kind: 'closed' })}
-        />
-      )}
-
-      <SubmitTwilioTemplateDialog
-        open={toSubmit !== null}
-        onOpenChange={(o) => !o && setToSubmit(null)}
-        template={toSubmit}
-      />
 
       <DeleteTemplateDialog
         open={toDelete !== null}

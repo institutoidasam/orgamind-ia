@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { Test } from '@nestjs/testing';
 import type { INestApplication } from '@nestjs/common';
-import { createHmac } from 'crypto';
+import type { Server } from 'node:http';
 import { execFileSync } from 'node:child_process';
 import request from 'supertest';
 import {
@@ -13,16 +13,15 @@ import { DomainExceptionFilter } from '../../shared/errors/domain-exception.filt
 
 /**
  * Integration test exercising:
- *   - HMAC signature validation (rejects invalid, accepts valid).
- *   - Raw body propagation through Nest's JSON body parser.
- *   - GET verify-challenge handshake.
+ *   - Evolution apikey validation (rejects invalid, accepts valid).
+ *   - Rotas de webhook desligadas (Meta, Twilio/Zernio/GoZap): 404 (R5).
  *   - End-to-end wiring: AppModule + Postgres (Testcontainers) + Redis (Testcontainers).
  *
  * Opt-in only - Testcontainers requires Docker. To run locally:
  *   TESTCONTAINERS_ENABLED=1 bun run test src/modules/webhooks/webhooks.integration.spec.ts
  */
 const TESTCONTAINERS_ENABLED = process.env.TESTCONTAINERS_ENABLED === '1';
-const APP_SECRET = 'test-app-secret-min-32-chars-yyyyy';
+const EVOLUTION_KEY = 'test-evolution-api-key-min-16';
 
 describe.skipIf(!TESTCONTAINERS_ENABLED)('Webhooks (integration)', () => {
   let app: INestApplication;
@@ -42,10 +41,9 @@ describe.skipIf(!TESTCONTAINERS_ENABLED)('Webhooks (integration)', () => {
     process.env.REDIS_HOST = redis.getHost();
     process.env.REDIS_PORT = String(redis.getMappedPort(6379));
     process.env.JWT_SECRET = 'a'.repeat(32);
-    process.env.META_ACCESS_TOKEN = 'test-meta-access-token';
-    process.env.META_PHONE_NUMBER_ID = 'test-phone-number-id';
-    process.env.META_APP_SECRET = APP_SECRET;
-    process.env.META_WEBHOOK_VERIFY_TOKEN = 'verify-token';
+    process.env.EVOLUTION_BASE_URL = 'http://localhost:8080';
+    process.env.EVOLUTION_API_KEY = EVOLUTION_KEY;
+    process.env.EVOLUTION_INSTANCE_NAME = 'test-instance';
     process.env.APP_BASE_URL = 'http://localhost:5173';
     process.env.WEBHOOK_BASE_URL = 'http://localhost:3000';
     process.env.CORS_ORIGIN = 'http://localhost:5173';
@@ -76,53 +74,51 @@ describe.skipIf(!TESTCONTAINERS_ENABLED)('Webhooks (integration)', () => {
     await redis?.stop();
   });
 
-  it('rejects POST with invalid signature', async () => {
-    // object: 'whatsapp_business_account' is what makes the controller
-    // recognize this as a Meta-shaped payload and run the HMAC check at all
-    // (payload-based routing — see webhooks.controller.ts).
-    const body = JSON.stringify({ object: 'whatsapp_business_account', entry: [] });
-    const res = await request(app.getHttpServer())
+  const evolutionBody = { event: 'messages.upsert', data: {} };
+
+  it('rejects an Evolution POST with a wrong apikey', async () => {
+    const res = await request(app.getHttpServer() as Server)
       .post('/webhooks/whatsapp')
-      .set('Content-Type', 'application/json')
-      .set('x-hub-signature-256', 'sha256=deadbeef')
-      .send(body);
+      .set('apikey', 'wrong-key')
+      .send(evolutionBody);
     expect(res.status).toBe(401);
   });
 
-  it('accepts POST with valid signature', async () => {
-    const payload = { object: 'whatsapp_business_account', entry: [] };
-    const body = JSON.stringify(payload);
-    const sig =
-      'sha256=' + createHmac('sha256', APP_SECRET).update(body).digest('hex');
-    const res = await request(app.getHttpServer())
+  it('accepts an Evolution POST with the right apikey', async () => {
+    const res = await request(app.getHttpServer() as Server)
       .post('/webhooks/whatsapp')
-      .set('Content-Type', 'application/json')
-      .set('x-hub-signature-256', sig)
-      .send(body);
+      .set('apikey', EVOLUTION_KEY)
+      .send(evolutionBody);
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ ok: true });
   });
 
-  it('GET verify-challenge returns the challenge with correct token', async () => {
-    const res = await request(app.getHttpServer())
+  it('POST /webhooks/whatsapp with a Meta payload → 404', async () => {
+    const res = await request(app.getHttpServer() as Server)
+      .post('/webhooks/whatsapp')
+      .set('x-hub-signature-256', 'sha256=deadbeef')
+      .send({ object: 'whatsapp_business_account', entry: [] });
+    expect(res.status).toBe(404);
+  });
+
+  it('GET /webhooks/whatsapp (Meta handshake) → 404', async () => {
+    const res = await request(app.getHttpServer() as Server)
       .get('/webhooks/whatsapp')
       .query({
         'hub.mode': 'subscribe',
         'hub.verify_token': 'verify-token',
         'hub.challenge': 'CHAL',
       });
-    expect(res.status).toBe(200);
-    expect(res.text).toBe('CHAL');
+    expect(res.status).toBe(404);
   });
 
-  it('GET verify-challenge rejects an incorrect token', async () => {
-    const res = await request(app.getHttpServer())
-      .get('/webhooks/whatsapp')
-      .query({
-        'hub.mode': 'subscribe',
-        'hub.verify_token': 'wrong-token',
-        'hub.challenge': 'CHAL',
-      });
-    expect(res.status).toBe(400);
-  });
+  it.each(['twilio', 'zernio', 'gozap'])(
+    'POST /webhooks/%s → 404',
+    async (provider) => {
+      const res = await request(app.getHttpServer() as Server)
+        .post(`/webhooks/${provider}`)
+        .send({});
+      expect(res.status).toBe(404);
+    },
+  );
 });

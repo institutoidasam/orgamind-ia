@@ -49,6 +49,14 @@ vi.mock('@tanstack/react-router', () => ({
     <a href={to} {...rest}>{children}</a>
   ),
 }));
+// Estes testes cobrem os gates GENÉRICOS por trait/capacidade (valem para um
+// provedor LIGADO futuro). Hoje só a Evolution está ligada, então aqui todo
+// provedor conta como ligado para exercitá-los; o bloqueio de canal desligado
+// (R11) é coberto em message-composer.spec.tsx.
+vi.mock('@/features/whatsapp/disabled-provider', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/features/whatsapp/disabled-provider')>()),
+  isEnabledProvider: () => true,
+}));
 import { MessageComposer } from './message-composer';
 
 describe('MessageComposer provider gate (non-EVOLUTION channels)', () => {

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mockDeep, type MockProxy } from 'vitest-mock-extended';
+import { NotFoundException } from '@nestjs/common';
 import type { ConfigService } from '@nestjs/config';
 import { WebhooksController } from './webhooks.controller';
 import { WebhooksService } from './webhooks.service';
@@ -8,6 +9,7 @@ import { UnauthorizedError } from '../../shared/errors/domain.error';
 import type { Env } from '../../shared/config/env.schema';
 import { WhatsappInstancesRepository } from '../whatsapp-instances/whatsapp-instances.repository';
 import { ReconnectReplayService } from '../whatsapp-instances/reconnect-replay.service';
+import { routesOf } from '../../../test/routes-of';
 
 /**
  * Builds a minimal RawBodyRequest stub the controller actually reaches into.
@@ -45,78 +47,27 @@ describe('WebhooksController', () => {
     controller = new WebhooksController(webhooks, audit, config, instancesRepo, replayService);
   });
 
-  describe('verify (GET challenge)', () => {
-    it('returns the challenge string from webhooks.verifyChallenge', () => {
-      webhooks.verifyChallenge.mockReturnValue('challenge-123');
-      const result = controller.verify('subscribe', 'tok', 'challenge-123');
-      expect(result).toBe('challenge-123');
-      expect(webhooks.verifyChallenge).toHaveBeenCalledWith(
-        'subscribe',
-        'tok',
-        'challenge-123',
-      );
-    });
+  it('rotas: sem GET /', () => {
+    // O handshake da Meta (GET /webhooks/whatsapp) deixou de existir (R5).
+    expect(routesOf(WebhooksController)).toEqual(['POST /']);
   });
 
   describe('receive (POST signed payload) — provider detected from the payload shape', () => {
-    it('Meta-shaped payload (object=whatsapp_business_account) with valid HMAC processes the body and routes to parseWebhookFor(META, ...)', async () => {
-      webhooks.verifySignature.mockReturnValue(true);
-      webhooks.process.mockResolvedValue(undefined as never);
+    it('POST com payload Meta (object whatsapp_business_account) → 404 sem auditar rejeição', async () => {
       const body = { object: 'whatsapp_business_account', entry: [] };
-      const rawBody = Buffer.from(JSON.stringify(body));
-      const req = makeReq({ rawBody });
+      const req = makeReq({ rawBody: Buffer.from(JSON.stringify(body)) });
 
-      const result = await controller.receive(req, 'sha256=abc', undefined, body);
+      // O 404 vem antes de qualquer checagem de credencial ou auditoria.
+      await expect(controller.receive(req, undefined, body)).rejects.toThrow(
+        NotFoundException,
+      );
 
-      expect(webhooks.verifySignature).toHaveBeenCalledWith(rawBody, 'sha256=abc');
-      expect(webhooks.process).toHaveBeenCalledWith(body, undefined, 'META');
+      // O padrão `expect(mock.método)` dispara unbound-method (como no resto do arquivo).
+      /* eslint-disable @typescript-eslint/unbound-method */
+      expect(webhooks.verifySignature).not.toHaveBeenCalled();
       expect(audit.log).not.toHaveBeenCalled();
-      expect(result).toEqual({ ok: true });
-    });
-
-    it('Meta-shaped payload with invalid HMAC throws UnauthorizedError + audit-logs the rejection', async () => {
-      webhooks.verifySignature.mockReturnValue(false);
-      const rawBody = Buffer.from('{"object":"whatsapp_business_account"}');
-      const req = makeReq({
-        rawBody,
-        ip: '203.0.113.10',
-        userAgent: 'evil-bot/1.0',
-      });
-
-      await expect(
-        controller.receive(
-          req,
-          'sha256=tampered',
-          undefined,
-          { object: 'whatsapp_business_account' },
-        ),
-      ).rejects.toThrow(UnauthorizedError);
-
-      expect(audit.log).toHaveBeenCalledWith(
-        'webhook.signature_invalid',
-        'WhatsappWebhook',
-        undefined,
-        expect.objectContaining({
-          ip: '203.0.113.10',
-          userAgent: 'evil-bot/1.0',
-        }),
-      );
       expect(webhooks.process).not.toHaveBeenCalled();
-    });
-
-    it('Meta-shaped payload rejects when rawBody is missing (no upstream HMAC to verify)', async () => {
-      // verifySignature should not even be reached when rawBody is falsy.
-      const req = makeReq({ rawBody: undefined });
-      await expect(
-        controller.receive(req, 'sha256=x', undefined, { object: 'whatsapp_business_account' }),
-      ).rejects.toThrow(UnauthorizedError);
-      expect(webhooks.process).not.toHaveBeenCalled();
-      expect(audit.log).toHaveBeenCalledWith(
-        'webhook.signature_invalid',
-        'WhatsappWebhook',
-        undefined,
-        expect.any(Object),
-      );
+      /* eslint-enable @typescript-eslint/unbound-method */
     });
 
     it('Evolution-shaped payload (string event) with matching apikey processes the payload and routes to parseWebhookFor(EVOLUTION, ...)', async () => {
@@ -127,7 +78,7 @@ describe('WebhooksController', () => {
       const req = makeReq({ rawBody: undefined });
       const body = { event: 'messages.upsert' };
 
-      const result = await controller.receive(req, undefined as never, 'evo-secret', body);
+      const result = await controller.receive(req, 'evo-secret', body);
 
       expect(webhooks.verifySignature).not.toHaveBeenCalled();
       expect(audit.log).not.toHaveBeenCalled();
@@ -146,7 +97,7 @@ describe('WebhooksController', () => {
       instancesRepo.findByEvolutionName.mockResolvedValue(null);
       const body = { event: 'messages.upsert', instance: 'picoa', data: {} };
 
-      const result = await controller.receive(makeReq(), undefined as never, 'evo-secret', body);
+      const result = await controller.receive(makeReq(), 'evo-secret', body);
 
       expect(webhooks.process).not.toHaveBeenCalled(); // unknown instance → 200, no process
       expect(result).toEqual({ ok: true });
@@ -159,7 +110,7 @@ describe('WebhooksController', () => {
       const req = makeReq({ ip: '203.0.113.10' });
 
       await expect(
-        controller.receive(req, undefined as never, 'wrong-key', { event: 'messages.upsert' }),
+        controller.receive(req, 'wrong-key', { event: 'messages.upsert' }),
       ).rejects.toThrow(UnauthorizedError);
 
       expect(webhooks.process).not.toHaveBeenCalled();
@@ -182,7 +133,7 @@ describe('WebhooksController', () => {
       const req = makeReq();
       const body = { event: 'qrcode.updated', data: 'x', apikey: 'evo-secret' };
 
-      const result = await controller.receive(req, undefined as never, undefined, body);
+      const result = await controller.receive(req, undefined, body);
 
       expect(audit.log).not.toHaveBeenCalled();
       expect(webhooks.process).toHaveBeenCalledWith(body, undefined, 'EVOLUTION');
@@ -195,7 +146,7 @@ describe('WebhooksController', () => {
       );
       const req = makeReq();
       await expect(
-        controller.receive(req, undefined as never, undefined, { event: 'messages.upsert' }),
+        controller.receive(req, undefined, { event: 'messages.upsert' }),
       ).rejects.toThrow(UnauthorizedError);
       expect(webhooks.process).not.toHaveBeenCalled();
     });
@@ -209,7 +160,7 @@ describe('WebhooksController', () => {
       );
       const req = makeReq({ ip: '203.0.113.99' });
       await expect(
-        controller.receive(req, undefined as never, 'x', { event: 'messages.upsert' }),
+        controller.receive(req, 'x', { event: 'messages.upsert' }),
       ).rejects.toThrow(UnauthorizedError);
       expect(webhooks.process).not.toHaveBeenCalled();
     });
@@ -220,12 +171,9 @@ describe('WebhooksController', () => {
         key === 'EVOLUTION_API_KEY' ? 'evo-secret-long' : undefined,
       );
       const req = makeReq();
-      const result = await controller.receive(
-        req,
-        undefined as never,
-        'evo-secret-long',
-        { event: 'messages.upsert' },
-      );
+      const result = await controller.receive(req, 'evo-secret-long', {
+        event: 'messages.upsert',
+      });
       expect(result).toEqual({ ok: true });
       expect(audit.log).not.toHaveBeenCalled();
     });
@@ -241,7 +189,7 @@ describe('WebhooksController', () => {
 
       for (let i = 0; i < 5; i++) {
         await expect(
-          controller.receive(req, undefined as never, 'wrong-key', { event: 'messages.upsert' }),
+          controller.receive(req, 'wrong-key', { event: 'messages.upsert' }),
         ).rejects.toThrow(UnauthorizedError);
       }
       // Audited once for the IP, not five times.
@@ -253,20 +201,14 @@ describe('WebhooksController', () => {
         key === 'EVOLUTION_API_KEY' ? 'evo-secret' : undefined,
       );
       await expect(
-        controller.receive(
-          makeReq({ ip: '198.51.100.1' }),
-          undefined as never,
-          'wrong',
-          { event: 'messages.upsert' },
-        ),
+        controller.receive(makeReq({ ip: '198.51.100.1' }), 'wrong', {
+          event: 'messages.upsert',
+        }),
       ).rejects.toThrow(UnauthorizedError);
       await expect(
-        controller.receive(
-          makeReq({ ip: '198.51.100.2' }),
-          undefined as never,
-          'wrong',
-          { event: 'messages.upsert' },
-        ),
+        controller.receive(makeReq({ ip: '198.51.100.2' }), 'wrong', {
+          event: 'messages.upsert',
+        }),
       ).rejects.toThrow(UnauthorizedError);
       expect(audit.log).toHaveBeenCalledTimes(2);
     });
@@ -279,11 +221,53 @@ describe('WebhooksController', () => {
       const req = makeReq();
       // qrcode.updated triggers the diag log path — primary assertion is just that
       // the call still flows through to webhooks.process.
-      await controller.receive(req, undefined as never, 'evo-secret', {
+      await controller.receive(req, 'evo-secret', {
         event: 'qrcode.updated',
         data: 'x',
       });
       expect(webhooks.process).toHaveBeenCalledTimes(1);
+    });
+
+    it('log de diagnóstico de connection.update não contém apikey nem qrcode e só sai depois da autenticação', async () => {
+      webhooks.process.mockResolvedValue(undefined);
+      config.get.mockImplementation((key: unknown) =>
+        key === 'EVOLUTION_API_KEY' ? 'segredo-apikey-x' : undefined,
+      );
+      const logSpy = vi.spyOn(controller['logger'], 'log');
+      const warnSpy = vi.spyOn(controller['logger'], 'warn');
+      const errorSpy = vi.spyOn(controller['logger'], 'error');
+      const body = {
+        event: 'connection.update',
+        instance: { instanceName: 'inst-x' },
+        apikey: 'segredo-apikey-x',
+        data: { state: 'open', qrcode: { base64: 'segredo-qr-x' } },
+      };
+      const allLogs = () =>
+        JSON.stringify([
+          ...logSpy.mock.calls,
+          ...warnSpy.mock.calls,
+          ...errorSpy.mock.calls,
+        ]);
+
+      // Autenticada: o log de diagnóstico sai, mas sem segredos.
+      await controller.receive(makeReq(), 'segredo-apikey-x', body);
+      expect(allLogs()).toContain('connection event');
+      expect(allLogs()).not.toContain('segredo-apikey-x');
+      expect(allLogs()).not.toContain('segredo-qr-x');
+
+      // Não autenticada (401): nenhum log de diagnóstico é emitido.
+      logSpy.mockClear();
+      warnSpy.mockClear();
+      errorSpy.mockClear();
+      await expect(
+        controller.receive(makeReq({ ip: '203.0.113.77' }), 'apikey-errada', {
+          ...body,
+          apikey: 'apikey-errada',
+        }),
+      ).rejects.toThrow(UnauthorizedError);
+      expect(allLogs()).not.toContain('[diag]');
+      expect(allLogs()).not.toContain('connection event');
+      expect(allLogs()).not.toContain('segredo-qr-x');
     });
 
     it('resolves instance via payload.instance.instanceName and triggers replay on state=open', async () => {
@@ -299,7 +283,7 @@ describe('WebhooksController', () => {
         data: { state: 'open' },
       };
 
-      await controller.receive(makeReq(), '', 'evo-secret', payload);
+      await controller.receive(makeReq(), 'evo-secret', payload);
 
       expect(instancesRepo.findByEvolutionName).toHaveBeenCalledWith('evo-a');
       expect(webhooks.process).toHaveBeenCalledWith(payload, 'inst-a', 'EVOLUTION');
@@ -317,7 +301,7 @@ describe('WebhooksController', () => {
         .spyOn((controller as any).logger, 'error')
         .mockImplementation(() => undefined);
 
-      const res = await controller.receive(makeReq(), '', 'evo-secret', {
+      const res = await controller.receive(makeReq(), 'evo-secret', {
         event: 'connection.update',
         instance: { instanceName: 'evo-a' },
         data: { state: 'open' },
@@ -337,7 +321,7 @@ describe('WebhooksController', () => {
       );
       instancesRepo.findByEvolutionName.mockResolvedValue(null);
 
-      const res = await controller.receive(makeReq(), '', 'evo-secret', {
+      const res = await controller.receive(makeReq(), 'evo-secret', {
         event: 'connection.update',
         instance: { instanceName: 'ghost' },
         data: { state: 'open' },
@@ -353,7 +337,7 @@ describe('WebhooksController', () => {
         .spyOn((controller as any).logger, 'warn')
         .mockImplementation(() => undefined);
 
-      const res = await controller.receive(makeReq(), undefined as never, undefined, {
+      const res = await controller.receive(makeReq(), undefined, {
         foo: 'bar',
       });
 
@@ -367,7 +351,7 @@ describe('WebhooksController', () => {
     it('unrecognized payload format short-circuits BEFORE any credential check (no apikey/signature required)', async () => {
       // An empty/garbage body must not even reach the Evolution apikey branch —
       // it's classified as "unknown format" first and acked without processing.
-      const res = await controller.receive(makeReq(), undefined as never, undefined, {});
+      const res = await controller.receive(makeReq(), undefined, {});
       expect(res).toEqual({ ok: true });
       expect(webhooks.process).not.toHaveBeenCalled();
     });

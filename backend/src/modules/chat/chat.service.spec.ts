@@ -18,23 +18,36 @@ const conv = {
   instance: { id: 'i1', evolutionInstanceName: 'picoa', provider: 'EVOLUTION' },
 };
 
+function makeSendHarness() {
+  const repo = mockDeep<ChatRepository>();
+  const events = mockDeep<ChatEventsService>();
+  const wa = mockDeep<WhatsappProvidersService>();
+  // O ChatService recusa a resposta quando o provider do canal não declara
+  // `inboxChat` (fail-closed). O mock profundo devolveria `undefined` — que é
+  // recusa — então o suporte é declarado aqui explicitamente.
+  wa.supportsInboxChatFor.mockReturnValue(true);
+  const svc = new ChatService(
+    repo,
+    events,
+    wa,
+    mockDeep<PrismaService>(),
+    mockDeep<AuditService>(),
+  );
+  repo.getConversationForSend.mockResolvedValue(conv as never);
+  repo.createOutboundMessage.mockResolvedValue('m1');
+  repo.getMessageById.mockResolvedValue({
+    id: 'm1',
+    status: 'FAILED',
+  } as never);
+  return { repo, events, wa, svc };
+}
+
 describe('ChatService chat-send failure messages', () => {
   let repo: MockProxy<ChatRepository>;
-  let events: MockProxy<ChatEventsService>;
   let wa: MockProxy<WhatsappProvidersService>;
   let svc: ChatService;
   beforeEach(() => {
-    repo = mockDeep<ChatRepository>();
-    events = mockDeep<ChatEventsService>();
-    wa = mockDeep<WhatsappProvidersService>();
-    // O ChatService recusa a resposta quando o provider do canal não declara
-    // `inboxChat` (fail-closed). O mock profundo devolveria `undefined` — que é
-    // recusa — então o suporte é declarado aqui explicitamente.
-    wa.supportsInboxChatFor.mockReturnValue(true);
-    svc = new ChatService(repo, events, wa, mockDeep<PrismaService>(), mockDeep<AuditService>());
-    repo.getConversationForSend.mockResolvedValue(conv as never);
-    repo.createOutboundMessage.mockResolvedValue('m1');
-    repo.getMessageById.mockResolvedValue({ id: 'm1', status: 'FAILED' } as never);
+    ({ repo, wa, svc } = makeSendHarness());
   });
 
   it('sendReply marks FAILED with a clear disconnected message (no auto-retry promise) on a session_closed WhatsappSendError', async () => {
@@ -55,5 +68,23 @@ describe('ChatService chat-send failure messages', () => {
     wa.sendChatText.mockRejectedValue(new Error('boom'));
     await svc.sendReply('c1', 'u1', { text: 'olá' });
     expect(repo.markChatFailed).toHaveBeenCalledWith('m1', 'boom', null);
+  });
+
+  it('responder conversa de canal GOZAP → 409 channel.provider_disabled e nada é enviado', async () => {
+    repo.getConversationForSend.mockResolvedValue({
+      ...conv,
+      instance: { ...conv.instance, provider: 'GOZAP' },
+    } as never);
+
+    await expect(
+      svc.sendReply('c1', 'u1', { text: 'olá' }),
+    ).rejects.toMatchObject({
+      code: 'channel.provider_disabled',
+      status: 409,
+    });
+
+    expect(repo.createOutboundMessage.mock.calls).toHaveLength(0);
+    expect(wa.sendChatText.mock.calls).toHaveLength(0);
+    expect(wa.sendChatTextVia.mock.calls).toHaveLength(0);
   });
 });

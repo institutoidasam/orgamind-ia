@@ -8,6 +8,7 @@ import {
 } from '../whatsapp-providers/adapters/evolution-api.adapter';
 import { warmupInfo } from './warmup.helper';
 import { ChannelNotEvolutionError } from '../../shared/errors/domain.error';
+import { classifyFailure } from '../campaigns/failure-reason';
 import {
   SectorChannelService,
   assignToCreatedChannel,
@@ -32,6 +33,8 @@ export interface EvolutionAdminClient {
   createInstance(args: { instanceName: string }): Promise<{ apiKey: string }>;
   logout(instanceName: string): Promise<void>;
   restart(instanceName: string): Promise<void>;
+  /** C6: remove a sessão na Evolution (libera a vaga do plano). */
+  deleteInstance(instanceName: string): Promise<void>;
 }
 
 export const EVOLUTION_ADMIN_CLIENT = 'EVOLUTION_ADMIN_CLIENT';
@@ -308,10 +311,15 @@ export class WhatsappInstancesService {
         );
       }
     }
+    const evolutionDeleted = await this.deleteEvolutionInstance(
+      id,
+      inst.evolutionInstanceName,
+    );
     await this.repo.softDelete(id);
     await this.audit.log('instance.delete', 'WhatsappInstance', id, {
       name: inst.name,
       evolutionInstanceName: inst.evolutionInstanceName,
+      evolutionDeleted,
     });
     // Fail orphaned WAITING_INSTANCE messages — they have no recovery path
     // because the instance will never reconnect.
@@ -321,8 +329,34 @@ export class WhatsappInstancesService {
         status: 'FAILED',
         errorCode: 'antiban.instance_deleted',
         errorMessage: 'Instância removida enquanto havia mensagens aguardando reconexão',
+        failedAt: new Date(),
+        failureReason: classifyFailure(
+          'antiban.instance_deleted',
+          inst.provider,
+        ),
       },
     });
+  }
+
+  // E3: remove a sessão na Evolution para liberar a vaga do plano. Best-effort
+  // como o logout: se falhar, a conexão some do OrgaMind do mesmo jeito. O log
+  // leva só o status HTTP — o erro do axios carrega a apikey (GC6).
+  private async deleteEvolutionInstance(
+    instanceId: string,
+    evolutionInstanceName: string | null,
+  ): Promise<boolean> {
+    if (!evolutionInstanceName) return false;
+    try {
+      await this.evo.deleteInstance(evolutionInstanceName);
+      return true;
+    } catch (err) {
+      const { response } = err as { response?: { status?: number } };
+      this.logger.warn(
+        { instanceId, httpStatus: response?.status },
+        'Evolution: instance/delete falhou; conexão removida só no OrgaMind',
+      );
+      return false;
+    }
   }
 
   async restart(id: string): Promise<void> {

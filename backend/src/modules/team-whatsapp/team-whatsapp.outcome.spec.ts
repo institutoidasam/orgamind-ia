@@ -11,6 +11,12 @@ describe('failureStatus (D5)', () => {
   ])('%s → %s', (code, redispatchable, expected) => {
     expect(failureStatus(code, redispatchable)).toBe(expected);
   });
+
+  it('channel.provider_disabled é FAILED mesmo com redispatchable falso', () => {
+    expect(failureStatus('channel.provider_disabled', () => false)).toBe(
+      'FAILED',
+    );
+  });
 });
 
 describe('isRepeatable (C4)', () => {
@@ -19,6 +25,7 @@ describe('isRepeatable (C4)', () => {
     ['FAILED', 'gozap.not_on_whatsapp', false],
     ['FAILED', 'evolution.number_not_on_whatsapp', false],
     ['FAILED', 'team_whatsapp.message_missing', false],
+    ['FAILED', 'channel.provider_disabled', false],
     ['FAILED', 'x.timeout', false],
     ['FAILED', null, false],
     ['UNCERTAIN', 'team_whatsapp.indeterminate', false],

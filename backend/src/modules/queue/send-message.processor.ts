@@ -49,6 +49,11 @@ import {
   DUPLICATE_ERROR_CODE,
 } from '../campaigns/duplicate-guard';
 import { isSessionProvider } from '../../schemas/contracts/channel-provider.schema';
+import { isEnabledChannelProvider } from '../../shared/config/enabled-providers';
+import {
+  ChannelProviderDisabledError,
+  PROVIDER_DISABLED_CODE,
+} from '../../shared/errors/channel-provider-disabled.error';
 import {
   acquirePacingLock,
   releasePacingLock,
@@ -166,7 +171,6 @@ const marketingCapKey = (phoneHash: string) => `optout:131049:${phoneHash}`;
 // inteira. Este worker é UM dos dois transportes que a fazem; o outro é o
 // broadcast do Zernio, que não passa por aqui. Uma função só para os dois: era
 // o combinado desde que as duas cópias nasceram, e é o que fecha o I9.
-
 
 // @Processor() runs at module-load time, before any DI container exists,
 // so we read tunables straight from process.env. Defaults match the prior
@@ -387,6 +391,113 @@ export class SendMessageProcessor extends WorkerHost {
     }
   }
 
+  /**
+   * Estaciona a mensagem em WAITING_INSTANCE (canal fora do ar). Pré-claim: a
+   * linha ainda deve estar QUEUED aqui (`claimForSend` só roda mais abaixo).
+   * Escopar a `from: 'QUEUED'` evita que este job roube uma linha que outro
+   * worker já reivindicou (SENDING) entretanto.
+   */
+  private async parkWaiting(
+    messageId: string,
+    instanceId: string,
+    logger: Logger,
+    phase: string,
+  ): Promise<void> {
+    const waitingCount = await this.campaignsRepo.markWaitingForInstance({
+      messageId,
+      instanceId,
+      from: 'QUEUED',
+    });
+    if (waitingCount === 0) {
+      logger.debug(
+        `Message ${messageId}: not parked WAITING_INSTANCE${phase} — row already left QUEUED (claimed elsewhere); skipping`,
+      );
+      return;
+    }
+    logger.debug(`Message ${messageId} waiting for instance ${instanceId}`);
+  }
+
+  /**
+   * Termina em FAILED `channel.provider_disabled` a mensagem cujo canal é de
+   * provedor desligado. A linha ainda está QUEUED (pré-claim, como no ramo
+   * `waiting`), então a gravação é escopada a `status: 'QUEUED'`: com 0 linhas
+   * (já reivindicada por outro worker, ou já FAILED pela remoção do canal) não
+   * há mais nada a fazer. Mesmo desfecho terminal do timeout indeterminado
+   * (FAILED + flag do contato + `maybeCompleteCampaign`); não lança, para o
+   * BullMQ não fazer retry.
+   */
+  private async failQueuedOnDisabledProvider(
+    message: {
+      id: string;
+      contact: { id: string } | null;
+      campaign: { id: string } | null;
+    },
+    instance: Channel,
+    logger: Logger,
+  ): Promise<void> {
+    const { count } = await this.prisma.message.updateMany({
+      where: { id: message.id, status: 'QUEUED' },
+      data: {
+        status: 'FAILED',
+        errorCode: PROVIDER_DISABLED_CODE,
+        errorMessage: new ChannelProviderDisabledError(instance.provider)
+          .message,
+        failedAt: new Date(),
+        failureReason: classifyFailure(
+          PROVIDER_DISABLED_CODE,
+          instance.provider,
+        ),
+      },
+    });
+    if (count === 0) {
+      logger.debug(
+        `Message ${message.id}: canal ${instance.provider} desligado, mas a linha já saiu de QUEUED — nada a gravar`,
+      );
+      return;
+    }
+    logger.warn(
+      `Message ${message.id}: canal ${instance.provider} desligado — FAILED(${PROVIDER_DISABLED_CODE}), sem retry.`,
+    );
+    await this.settleDisabledProviderFailure(message, instance, logger);
+  }
+
+  /**
+   * Efeitos colaterais do FAILED `channel.provider_disabled` (best-effort,
+   * nunca lançam): flag durável de falha no contato e `maybeCompleteCampaign`.
+   */
+  private async settleDisabledProviderFailure(
+    message: {
+      contact: { id: string } | null;
+      campaign: { id: string } | null;
+    },
+    instance: Channel,
+    logger: Logger,
+  ): Promise<void> {
+    if (message.contact) {
+      await this.prisma.contact
+        .update({
+          where: { id: message.contact.id },
+          data: buildContactFailureUpdate(
+            PROVIDER_DISABLED_CODE,
+            instance.provider,
+          ),
+        })
+        .catch((e: unknown) =>
+          logger.warn(
+            { err: e },
+            'F2: falha ao atualizar flag durável de falha do contato (best-effort)',
+          ),
+        );
+    }
+    if (message.campaign) {
+      this.campaigns
+        .maybeCompleteCampaign(message.campaign.id)
+        .catch((e: unknown) =>
+          logger.warn({ err: e }, 'maybeCompleteCampaign failed'),
+        );
+    }
+  }
+
   async process(job: Job<SendMessageJob>, token?: string): Promise<void> {
     return this.cls.run(() => {
       // Re-bind the originating HTTP correlationId so audit events emitted by
@@ -583,23 +694,7 @@ export class SendMessageProcessor extends WorkerHost {
     });
 
     if (routed.kind === 'waiting') {
-      // Pré-claim: a linha ainda deve estar QUEUED aqui (claimForSend só roda
-      // mais abaixo). Escopar a `from: 'QUEUED'` evita que este job roube uma
-      // linha que outro worker já reivindicou (SENDING) entretanto.
-      const waitingCount = await this.campaignsRepo.markWaitingForInstance({
-        messageId,
-        instanceId: routed.instanceId,
-        from: 'QUEUED',
-      });
-      if (waitingCount === 0) {
-        logger.debug(
-          `Message ${messageId}: not parked WAITING_INSTANCE — row already left QUEUED (claimed elsewhere); skipping`,
-        );
-        return;
-      }
-      logger.debug(
-        `Message ${messageId} waiting for instance ${routed.instanceId}`,
-      );
+      await this.parkWaiting(messageId, routed.instanceId, logger, '');
       return;
     }
 
@@ -655,20 +750,22 @@ export class SendMessageProcessor extends WorkerHost {
         campaignDefaultInstanceId: message.campaign.defaultInstanceId,
       });
       if (freshRouted.kind === 'waiting') {
-        // Same pre-claim scoping as above: still QUEUED at this point.
-        const waitingCount = await this.campaignsRepo.markWaitingForInstance({
+        await this.parkWaiting(
           messageId,
-          instanceId: freshRouted.instanceId,
-          from: 'QUEUED',
-        });
-        if (waitingCount === 0) {
-          logger.debug(
-            `Message ${messageId}: not parked WAITING_INSTANCE (post-reset) — row already left QUEUED (claimed elsewhere); skipping`,
-          );
-        }
+          freshRouted.instanceId,
+          logger,
+          ' (post-reset)',
+        );
         return;
       }
       instance = freshRouted.instance;
+    }
+
+    // UM guard, depois do re-resolve (`instance` já é o final) e antes de janela,
+    // lock, throttle ZA4, cota e adapter: canal de provedor DESLIGADO vira FAILED
+    // claro, sem retry (o roteador nunca o estaciona em WAITING_INSTANCE, D11).
+    if (!isEnabledChannelProvider(instance.provider)) {
+      return this.failQueuedOnDisabledProvider(message, instance, logger);
     }
 
     // NOTE: the daily-limit check is intentionally NOT here. The instance we

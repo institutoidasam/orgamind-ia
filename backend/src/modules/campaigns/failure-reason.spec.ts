@@ -258,3 +258,14 @@ describe('buildContactFailureUpdate', () => {
     expect(update.lastFailureReason).toBe(FailureReason.SEM_WHATSAPP);
   });
 });
+
+describe('classifyFailure — somente Evolution', () => {
+  it.each([
+    [
+      'channel.provider_disabled',
+      'canal de provedor desligado (só Evolution ligada)',
+    ],
+  ])('%s → CANAL_FORA (%s)', (code) => {
+    expect(classifyFailure(code)).toBe(FailureReason.CANAL_FORA);
+  });
+});

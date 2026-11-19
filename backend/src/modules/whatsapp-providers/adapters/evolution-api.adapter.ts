@@ -35,6 +35,13 @@ import { makeProfile } from '../ports/provider-profile';
 import { PROVIDER_TRAITS } from '../../../schemas/contracts/channel-provider.schema';
 import { WhatsappSendError } from '../errors/whatsapp.errors';
 import { classifyEvolutionError } from './evolution-error-mapper';
+import {
+  EVOLUTION_CREATE_SETTINGS,
+  buildWebhookSetBody,
+  webhookDivergences,
+  type ExpectedWebhook,
+  type WebhookField,
+} from './evolution-webhook-config';
 
 // WhatsApp media is capped well under this; base64 inflates ~33%, so 96MB of
 // response covers the largest legit document. Beyond this we refuse to buffer.
@@ -56,6 +63,22 @@ export type EvolutionInstanceSnapshot = {
 /** Coerce an untrusted Evolution field to a string or null. */
 function asStringOrNull(v: unknown): string | null {
   return typeof v === 'string' ? v : null;
+}
+
+/**
+ * Hop interno da rede Docker do compose (api:3000), sem TLS por desenho; nunca
+ * sai do host. Exceção S5332 registrada no ledger da feature.
+ */
+const DEFAULT_WEBHOOK_URL = 'http://api:3000/webhooks/whatsapp';
+
+/**
+ * The only parts of an axios failure that are safe to log. The error object
+ * itself carries `config.headers.apikey` (the global Evolution key), so it
+ * must never be handed to the logger as-is.
+ */
+function safeHttpFailure(err: unknown): { httpStatus?: number; code?: string } {
+  const e = err as { response?: { status?: number }; code?: string } | null;
+  return { httpStatus: e?.response?.status, code: e?.code };
 }
 
 /**
@@ -692,36 +715,73 @@ export class EvolutionApiAdapter implements MessageProvider {
     }
   }
 
+  /**
+   * The webhook every instance must carry. Evolution sends a per-instance hash
+   * in `body.apikey` by default — not the global EVOLUTION_API_KEY we
+   * authenticate the controller against. Override by passing custom
+   * `headers.apikey` so Evolution echoes OUR global key back; the controller's
+   * @Headers('apikey') check then works as designed.
+   */
+  private expectedWebhook(): ExpectedWebhook {
+    return {
+      url:
+        this.config.get('EVOLUTION_WEBHOOK_URL', { infer: true }) ??
+        DEFAULT_WEBHOOK_URL,
+      apikey: this.config.get('EVOLUTION_API_KEY', { infer: true }),
+    };
+  }
+
   private async ensureWebhookConfigured(instanceName?: string): Promise<void> {
     const inst = instanceName ?? this.instance;
-    const webhookUrl =
-      this.config.get('EVOLUTION_WEBHOOK_URL', { infer: true }) ??
-      'http://api:3000/webhooks/whatsapp';
-    // Evolution sends a per-instance hash in `body.apikey` by default — not
-    // the global EVOLUTION_API_KEY we authenticate the controller against.
-    // Override by passing custom `headers.apikey` so Evolution echoes OUR
-    // global key back; the controller's @Headers('apikey') check then works
-    // as designed.
-    const apikey = this.config.get('EVOLUTION_API_KEY', { infer: true });
+    const expected = this.expectedWebhook();
     try {
-      await this.http.post(`/webhook/set/${inst}`, {
-        webhook: {
-          enabled: true,
-          url: webhookUrl,
-          headers: apikey ? { apikey } : undefined,
-          webhookByEvents: false,
-          webhookBase64: false,
-          events: [
-            'MESSAGES_UPSERT',
-            'MESSAGES_UPDATE',
-            'CONNECTION_UPDATE',
-            'QRCODE_UPDATED',
-          ],
-        },
-      });
-      this.logger.log(`Evolution webhook armed at ${webhookUrl}`);
+      await this.http.post(
+        `/webhook/set/${inst}`,
+        buildWebhookSetBody(expected),
+      );
+      this.logger.log({ instanceName: inst }, 'Evolution webhook armed');
     } catch (err) {
-      this.logger.warn({ err }, 'ensureWebhookConfigured failed');
+      // Never log `err`: the axios error embeds the apikey header.
+      this.logger.warn(
+        { instanceName: inst, ...safeHttpFailure(err) },
+        'ensureWebhookConfigured failed',
+      );
+    }
+  }
+
+  /**
+   * Compare the live webhook of an instance with the expected one and re-arm
+   * it when something diverges (enabled, url, events or the apikey header).
+   * Never throws: a Evolution failure is only logged and reported as
+   * `failed`. On `failed`, `fields` holds the divergences found before the
+   * failure (empty when the `find` itself failed). Logs carry field NAMES
+   * only, never values, so the apikey cannot leak.
+   */
+  async ensureWebhookArmed(
+    instanceName: string,
+  ): Promise<{ status: 'ok' | 'rearmed' | 'failed'; fields: WebhookField[] }> {
+    let fields: WebhookField[] = [];
+    try {
+      const found = await this.http.get<unknown>(
+        `/webhook/find/${instanceName}`,
+      );
+      fields = webhookDivergences(found.data, this.expectedWebhook());
+      if (fields.length === 0) return { status: 'ok', fields };
+      await this.http.post(
+        `/webhook/set/${instanceName}`,
+        buildWebhookSetBody(this.expectedWebhook()),
+      );
+      this.logger.warn(
+        { instanceName, fields },
+        'Evolution: webhook re-armado',
+      );
+      return { status: 'rearmed', fields };
+    } catch (err) {
+      this.logger.warn(
+        { instanceName, ...safeHttpFailure(err) },
+        'Evolution: falha ao conferir o webhook',
+      );
+      return { status: 'failed', fields };
     }
   }
 
@@ -782,14 +842,13 @@ export class EvolutionApiAdapter implements MessageProvider {
         instanceName: inst,
         integration: 'WHATSAPP-BAILEYS',
         qrcode: true,
-        rejectCall: true,
-        groupsIgnore: true,
+        ...EVOLUTION_CREATE_SETTINGS,
       });
     } catch (err) {
       // A concurrent poll may have created it first (Evolution 403/409 on a
       // duplicate name) — tolerate and still arm the webhook below.
       this.logger.warn(
-        { err },
+        { instanceName: inst, ...safeHttpFailure(err) },
         'ensureProvisioned: create failed (may already exist)',
       );
     }
@@ -1012,8 +1071,7 @@ export class EvolutionApiAdapter implements MessageProvider {
       instanceName: args.instanceName,
       integration: 'WHATSAPP-BAILEYS',
       qrcode: true,
-      rejectCall: true,
-      groupsIgnore: true,
+      ...EVOLUTION_CREATE_SETTINGS,
     });
     // be-whatsapp-003: deliberately DO NOT return the per-instance apiKey
     // Evolution hands back. Every adapter request authenticates with the global
@@ -1036,6 +1094,11 @@ export class EvolutionApiAdapter implements MessageProvider {
 
   async adminLogout(instanceName: string): Promise<void> {
     await this.http.delete(`/instance/logout/${instanceName}`);
+  }
+
+  /** Removes the instance on Evolution; the error propagates so the caller decides. */
+  async adminDeleteInstance(instanceName: string): Promise<void> {
+    await this.http.delete(`/instance/delete/${instanceName}`);
   }
 
   async adminRestart(instanceName: string): Promise<void> {

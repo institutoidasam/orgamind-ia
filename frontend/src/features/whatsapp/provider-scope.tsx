@@ -1,17 +1,7 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
-import { ChevronDown } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
-import { CHANNEL_PROVIDERS, useProviders, type ChannelProvider } from './api';
+import type { ChannelProvider } from './api';
 
 const STORAGE_KEY = 'picoa.providerScope';
 
@@ -35,16 +25,16 @@ const PROVIDER_COLOR: Record<ChannelProvider, string> = {
   GOZAP: '#7c3aed', // violet
 };
 
-const CHANNEL_PROVIDER_SET: ReadonlySet<string> = new Set(CHANNEL_PROVIDERS);
-
-function isProviderScope(value: string | null): value is ProviderScope {
-  return value === 'all' || CHANNEL_PROVIDER_SET.has(value ?? '');
-}
-
+/**
+ * Sem seletor no topo, um escopo persistido por uma sessão antiga (ex.:
+ * `GOZAP`) deixaria o operador preso numa lista vazia e sem como trocar.
+ * Qualquer valor diferente de `'all'` vira `'all'` e a chave legada é apagada.
+ */
 function readPersisted(): ProviderScope {
   if (typeof window === 'undefined') return 'all';
   const raw = window.localStorage.getItem(STORAGE_KEY);
-  return isProviderScope(raw) ? raw : 'all';
+  if (raw !== null && raw !== 'all') window.localStorage.removeItem(STORAGE_KEY);
+  return 'all';
 }
 
 function persist(scope: ProviderScope) {
@@ -61,9 +51,8 @@ const ProviderScopeContext = createContext<ProviderScopeContextValue | null>(nul
 
 /**
  * Mounts the global provider-scope context. Rendered once, at the
- * authenticated root layout, so every screen underneath (topbar selector,
- * inbox, campaigns, ...) shares the same scope and its localStorage
- * persistence.
+ * authenticated root layout, so every screen underneath (inbox, campaigns,
+ * ...) shares the same scope.
  */
 export function ProviderScopeProvider({ children }: { children: ReactNode }) {
   const [scope, setScopeState] = useState<ProviderScope>(() => readPersisted());
@@ -80,8 +69,8 @@ export function ProviderScopeProvider({ children }: { children: ReactNode }) {
 
 /**
  * Global WhatsApp provider scope: `'all'` or a single {@link ChannelProvider}.
- * Persisted in `localStorage` (`picoa.providerScope`, default `'all'`) so the
- * operator's choice survives reloads. Must be called under
+ * Sem seletor na UI, ele sempre inicia em `'all'` (valor legado em
+ * `localStorage` é descartado). Must be called under
  * `<ProviderScopeProvider>` (mounted in the authenticated root layout).
  */
 export function useProviderScope(): ProviderScopeContextValue {
@@ -110,89 +99,5 @@ export function ProviderBadge({ provider, className }: { provider: ChannelProvid
     >
       {PROVIDER_LABEL[provider]}
     </Badge>
-  );
-}
-
-const CONNECTION_STATE_LABEL = {
-  open: 'Conectado',
-  connecting: 'Conectando…',
-  close: 'Desconectado',
-} as const;
-
-const CONNECTION_STATE_COLOR = {
-  open: '#10b981', // emerald — mesmo verde do dot da EvolutionSection
-  connecting: '#f59e0b', // amber
-  close: '#ef4444', // vermelho — mesmo do dot da EvolutionSection
-} as const;
-
-/**
- * Ponto + rótulo PT-BR do estado de conexão de UM canal (`ChannelSummary.
- * connectionState`, GET /whatsapp/providers) — o que faltava na tela Canais
- * para o operador saber se um número está pareado agora ou não.
- *
- * `state` ausente/`null` não vira nada: é o caso de um canal sem sessão
- * (TWILIO/ZERNIO/META — sempre "no ar" enquanto ativo, sem pareamento por QR)
- * ou de um canal sessionBased que nunca completou um ciclo de conexão.
- * Mostrar "desconectado" nesse caso seria inventar um dado que não existe.
- */
-export function ConnectionStateBadge({
-  state,
-}: {
-  state: 'open' | 'connecting' | 'close' | null | undefined;
-}) {
-  if (!state) return null;
-  const color = CONNECTION_STATE_COLOR[state];
-  return (
-    <span className="inline-flex items-center gap-1.5 text-xs" style={{ color: 'var(--foreground)' }}>
-      <span className="size-2 shrink-0 rounded-full" style={{ background: color }} aria-hidden />
-      {CONNECTION_STATE_LABEL[state]}
-    </span>
-  );
-}
-
-/**
- * Topbar control that scopes the whole app to a single WhatsApp provider (or
- * back to "Todos os canais"). Renders nothing when fewer than 2 providers are
- * configured — with a single provider there's nothing to disambiguate.
- */
-export function ProviderScopeSelector() {
-  const { data } = useProviders();
-  const { scope, setScope } = useProviderScope();
-
-  const providers = data?.providers ?? [];
-  if (providers.length < 2) return null;
-
-  const activeLabel = scope === 'all' ? 'Todos os canais' : PROVIDER_LABEL[scope];
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label="Filtrar por provedor"
-          className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1.5 text-sm"
-          style={{
-            background: 'var(--surface)',
-            borderColor: 'var(--border)',
-            color: 'var(--foreground-muted)',
-          }}
-        >
-          <span className="hidden sm:inline">{activeLabel}</span>
-          <ChevronDown className="size-3.5" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-48">
-        <DropdownMenuLabel>Escopo de canais</DropdownMenuLabel>
-        <DropdownMenuRadioGroup value={scope} onValueChange={(v) => setScope(v as ProviderScope)}>
-          <DropdownMenuRadioItem value="all">Todos os canais</DropdownMenuRadioItem>
-          <DropdownMenuSeparator />
-          {providers.map(({ provider }) => (
-            <DropdownMenuRadioItem key={provider} value={provider}>
-              {PROVIDER_LABEL[provider]}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }

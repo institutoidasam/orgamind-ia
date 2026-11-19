@@ -10,7 +10,7 @@ import { WhatsappProvidersService } from '../whatsapp-providers/whatsapp-provide
 import { WhatsappProvidersRepository } from '../whatsapp-providers/whatsapp-providers.repository';
 import { WhatsappInstancesRepository } from '../whatsapp-instances/whatsapp-instances.repository';
 import { ProviderRegistry } from '../whatsapp-providers/provider-registry.service';
-import { GozapCloudAdapter } from '../whatsapp-providers/adapters/gozap-cloud.adapter';
+import { EvolutionApiAdapter } from '../whatsapp-providers/adapters/evolution-api.adapter';
 import { ChatEventsService } from './chat-events.service';
 import { ConsentService } from '../consent/consent.service';
 import { OptInLinkService } from '../consent/optin-link.service';
@@ -95,10 +95,45 @@ function conversationMatches(where: Where, row: ConvRow): boolean {
   return true;
 }
 
+/**
+ * Adapter que entrega o TOQUE no botão de aceite como o ingest o enxerga. O
+ * parser da Evolution não emite `buttonPayload` (quem o produz é o canal de
+ * campanha) e o ingest só olha esse campo — então ele é injetado sobre a saída
+ * REAL do parser, que continua respondendo pela identidade (JID, telefone).
+ */
+class EvolutionComToque extends EvolutionApiAdapter {
+  override parseInboundChatMessages(payload: unknown) {
+    return super.parseInboundChatMessages(payload).map((m) => ({
+      ...m,
+      text: 'Sim, quero receber',
+      buttonPayload: 'optin_yes',
+    }));
+  }
+}
+
+// O adapter REAL da Evolution (único provedor ligado), resolvido pelo registry
+// REAL: a identidade do remetente vem do parser de produção, não de um fake.
+function makeWhatsappProviders(botao: boolean) {
+  const config = { get: () => undefined } as unknown as ConfigService<Env>;
+  const adapter = botao
+    ? new EvolutionComToque(config)
+    : new EvolutionApiAdapter(config);
+  const registry = new ProviderRegistry(new Map([['EVOLUTION', adapter]]));
+  return new WhatsappProvidersService(
+    adapter,
+    mockDeep<WhatsappProvidersRepository>(),
+    mockDeep<WhatsappInstancesRepository>(),
+    registry,
+    mockDeep<ConfigService<Env>>(),
+  );
+}
+
 function make(
   opts: {
     contacts?: { id: string; phoneE164: string }[];
     conversations?: ConvRow[];
+    /** O webhook é o toque no botão de aceite (`optin_yes`). */
+    botao?: boolean;
   } = {},
 ) {
   const contacts = opts.contacts ?? EM_ORDEM_DE_INDICE;
@@ -152,21 +187,9 @@ function make(
   consent.rehydrate.mockResolvedValue([]);
   links.matchInbound.mockResolvedValue(null);
 
-  const adapter = new GozapCloudAdapter({
-    get: () => 'https://acme.gozap.dev',
-  } as unknown as ConfigService);
-  const registry = new ProviderRegistry(new Map([['GOZAP', adapter]]));
-  const wa = new WhatsappProvidersService(
-    adapter,
-    mockDeep<WhatsappProvidersRepository>(),
-    mockDeep<WhatsappInstancesRepository>(),
-    registry,
-    mockDeep<ConfigService<Env>>(),
-  );
-
   const svc = new ChatIngestService(
     prisma,
-    wa,
+    makeWhatsappProviders(opts.botao ?? false),
     events,
     redis,
     mediaQueue,
@@ -177,25 +200,21 @@ function make(
   return { svc, prisma, consent, links, events };
 }
 
-/** Webhook do GoZap com o remetente na grafia LEGADA (12 díg.) — o caso de produção. */
-function webhookLegado(msg: Record<string, unknown> = { conversation: 'Oi' }) {
+/** Webhook (`messages.upsert`) da Evolution com o remetente na grafia LEGADA (12 díg.) — o caso de produção. */
+function webhookLegado() {
   return {
-    event: 'messages',
-    instance_id: 'rffe51e7ef7c8ff',
-    timestamp: 1786126513000,
+    event: 'messages.upsert',
+    instance: 'picoa',
     data: {
-      Info: {
-        ID: 'GZ_WAMID_1',
-        Chat: '123456789012345@lid',
-        Sender: '123456789012345@lid',
-        SenderAlt: '559287654321@s.whatsapp.net',
-        IsFromMe: false,
-        IsGroup: false,
-        PushName: 'Maria',
-        Timestamp: '2026-08-07T18:15:13Z',
-        Type: 'text',
+      key: {
+        id: 'EVO_WAMID_1',
+        remoteJid: '559287654321@s.whatsapp.net',
+        fromMe: false,
       },
-      Message: msg,
+      pushName: 'Maria',
+      messageType: 'conversation',
+      messageTimestamp: 1786126513,
+      message: { conversation: 'Oi' },
     },
   };
 }
@@ -204,7 +223,7 @@ describe('I13 — o inbound resolve o MESMO titular que o resto do sistema', () 
   it('com os dois gêmeos na base, a mensagem é gravada no contato de 13 dígitos (o que a audiência enxerga)', async () => {
     const { svc, prisma } = make();
 
-    await svc.ingestFromWebhook(webhookLegado(), 'ch_gozap', 'GOZAP');
+    await svc.ingestFromWebhook(webhookLegado(), 'ch_evo', 'EVOLUTION');
 
     const [createArgs] = vi.mocked(prisma.message.create).mock.calls[0] as [
       { data: Record<string, unknown> },
@@ -213,7 +232,7 @@ describe('I13 — o inbound resolve o MESMO titular que o resto do sistema', () 
   });
 
   it('o GRANT do botão é gravado no contato de 13 dígitos — não no gêmeo do ingest', async () => {
-    const { svc, prisma, consent } = make();
+    const { svc, prisma, consent } = make({ botao: true });
     vi.mocked(prisma.message.findMany).mockResolvedValue([
       {
         id: 'out1',
@@ -228,16 +247,7 @@ describe('I13 — o inbound resolve o MESMO titular que o resto do sistema', () 
       },
     ] as never);
 
-    await svc.ingestFromWebhook(
-      webhookLegado({
-        buttonsResponseMessage: {
-          selectedButtonId: 'optin_yes',
-          selectedDisplayText: 'Sim, quero receber',
-        },
-      }),
-      'ch_gozap',
-      'GOZAP',
-    );
+    await svc.ingestFromWebhook(webhookLegado(), 'ch_evo', 'EVOLUTION');
 
     expect(consent.record).toHaveBeenCalledWith(
       expect.objectContaining({ contactId: 'c-13', action: ConsentAction.GRANT }),
@@ -251,18 +261,9 @@ describe('I13 — o inbound resolve o MESMO titular que o resto do sistema', () 
    * prova falsa num registro append-only.
    */
   it('a janela de atribuição do botão é buscada nos DOIS gêmeos (senão a guarda de ambiguidade fica cega)', async () => {
-    const { svc, prisma } = make();
+    const { svc, prisma } = make({ botao: true });
 
-    await svc.ingestFromWebhook(
-      webhookLegado({
-        buttonsResponseMessage: {
-          selectedButtonId: 'optin_yes',
-          selectedDisplayText: 'Sim, quero receber',
-        },
-      }),
-      'ch_gozap',
-      'GOZAP',
-    );
+    await svc.ingestFromWebhook(webhookLegado(), 'ch_evo', 'EVOLUTION');
 
     const [findArgs] = vi.mocked(prisma.message.findMany).mock.calls[0] as [
       { where: { contactId: unknown } },
@@ -277,7 +278,7 @@ describe('I14 — a resposta pousa na conversa que o disparo abriu', () => {
   /** A conversa que o espelho da campanha criou: JID da grafia GRAVADA (13 díg.). */
   const CONVERSA_DA_CAMPANHA: ConvRow = {
     id: 'conv-campanha',
-    instanceId: 'ch_gozap',
+    instanceId: 'ch_evo',
     remoteJid: '5592987654321@s.whatsapp.net',
     phoneE164: '+5592987654321',
     contactId: 'c-13',
@@ -291,7 +292,7 @@ describe('I14 — a resposta pousa na conversa que o disparo abriu', () => {
       conversations: [CONVERSA_DA_CAMPANHA],
     });
 
-    await svc.ingestFromWebhook(webhookLegado(), 'ch_gozap', 'GOZAP');
+    await svc.ingestFromWebhook(webhookLegado(), 'ch_evo', 'EVOLUTION');
 
     const [createArgs] = vi.mocked(prisma.message.create).mock.calls[0] as [
       { data: Record<string, unknown> },
@@ -323,7 +324,7 @@ describe('I14 — a resposta pousa na conversa que o disparo abriu', () => {
       }),
     );
 
-    await svc.ingestFromWebhook(webhookLegado(), 'ch_gozap', 'GOZAP');
+    await svc.ingestFromWebhook(webhookLegado(), 'ch_evo', 'EVOLUTION');
 
     expect(prisma.conversation.upsert).toHaveBeenCalled();
     const [createArgs] = vi.mocked(prisma.message.create).mock.calls[0] as [
@@ -335,7 +336,7 @@ describe('I14 — a resposta pousa na conversa que o disparo abriu', () => {
   it('sem conversa nenhuma, o ingest continua criando a sua (nenhuma regressão)', async () => {
     const { svc, prisma } = make({ contacts: [PLANILHA], conversations: [] });
 
-    await svc.ingestFromWebhook(webhookLegado(), 'ch_gozap', 'GOZAP');
+    await svc.ingestFromWebhook(webhookLegado(), 'ch_evo', 'EVOLUTION');
 
     expect(prisma.conversation.upsert).toHaveBeenCalled();
     const [upsertArgs] = vi.mocked(prisma.conversation.upsert).mock.calls[0] as [

@@ -6,6 +6,33 @@ import { sanitizeReqForLog } from '../../shared/logging/pino-req-serializer';
 import { TOKEN_HEADER } from './gozap-webhooks.controller';
 
 /**
+ * Preenche (sem sobrescrever) a env mínima que o `ConfigModule` valida no
+ * import de `app.module`. Sem isto o import rejeita e o teste morre por um
+ * motivo que não tem nada a ver com log.
+ */
+function applyTestEnvDefaults(webhookToken: string): void {
+  const defaults: Record<string, string> = {
+    DATABASE_URL: 'postgresql://u:p@localhost:5432/db',
+    JWT_SECRET: 'test-jwt-secret-test-jwt-secret-32ch',
+    APP_BASE_URL: 'http://localhost:3000',
+    WEBHOOK_BASE_URL: 'http://localhost:3000',
+    CORS_ORIGIN: 'http://localhost:5173',
+    // O schema exige um grupo de provedor COMPLETO; o do GoZap é o desta rota.
+    GOZAP_BASE_URL: 'https://gozap.example.com',
+    GOZAP_ADMIN_TOKEN: 'admin-token-de-teste',
+    GOZAP_WEBHOOK_TOKEN: webhookToken,
+    GOZAP_TOKEN_ENCRYPTION_KEY: '0'.repeat(64),
+    // Grupo Evolution (único provedor ligado): o schema exige o grupo completo.
+    EVOLUTION_BASE_URL: 'http://evolution.test:8080',
+    EVOLUTION_API_KEY: 'test-evolution-key',
+    EVOLUTION_INSTANCE_NAME: 'test-instance',
+  };
+  for (const [key, value] of Object.entries(defaults)) {
+    process.env[key] ??= value;
+  }
+}
+
+/**
  * O SEGREDO NÃO PODE TROCAR DE LOG.
  *
  * O achado C20 tirou o `GOZAP_WEBHOOK_TOKEN` da query string — e a query já não
@@ -31,19 +58,8 @@ describe('segredo de webhook não pode aparecer no log da aplicação', () => {
   let redactPaths: string[];
 
   beforeAll(async () => {
-    // `app.module` importa o ConfigModule, que valida a env no momento do
-    // import. Sem isto o import rejeita e o teste morre por um motivo que não
-    // tem nada a ver com log.
-    process.env.DATABASE_URL ??= 'postgresql://u:p@localhost:5432/db';
-    process.env.JWT_SECRET ??= 'test-jwt-secret-test-jwt-secret-32ch';
-    process.env.APP_BASE_URL ??= 'http://localhost:3000';
-    process.env.WEBHOOK_BASE_URL ??= 'http://localhost:3000';
-    process.env.CORS_ORIGIN ??= 'http://localhost:5173';
-    // O schema exige um grupo de provedor COMPLETO; o do GoZap é o desta rota.
-    process.env.GOZAP_BASE_URL ??= 'https://gozap.example.com';
-    process.env.GOZAP_ADMIN_TOKEN ??= 'admin-token-de-teste';
-    process.env.GOZAP_WEBHOOK_TOKEN ??= SECRET;
-    process.env.GOZAP_TOKEN_ENCRYPTION_KEY ??= '0'.repeat(64);
+    // `app.module` importa o ConfigModule, que valida a env no import.
+    applyTestEnvDefaults(SECRET);
     ({ LOG_REDACT_PATHS: redactPaths } = await import('../../app.module.js'));
   });
 

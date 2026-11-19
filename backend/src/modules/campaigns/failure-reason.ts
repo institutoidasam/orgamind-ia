@@ -167,7 +167,9 @@ const TEMPLATE_INDISPONIVEL_CODES = new Set([
  * Meta (`131031` conta/número bloqueado pela Meta), GoZap
  * (`gozap.not_connected` — instância desconectada, `gozap.quota_exceeded` —
  * cota de instâncias/conexões do plano, `gozap.unauthorized` — token
- * ausente/inválido; nenhum dos três é culpa do destinatário desta mensagem). */
+ * ausente/inválido; nenhum dos três é culpa do destinatário desta mensagem),
+ * `channel.provider_disabled` (canal de provedor desligado — só a Evolution
+ * está ligada). */
 const CANAL_FORA_CODES = new Set([
   'enqueue_failed',
   'antiban.instance_deleted',
@@ -181,6 +183,7 @@ const CANAL_FORA_CODES = new Set([
   'gozap.not_connected',
   'gozap.quota_exceeded',
   'gozap.unauthorized',
+  'channel.provider_disabled',
 ]);
 
 /** Falha transitória/ambígua do provedor — não sabemos se entregou (timeout

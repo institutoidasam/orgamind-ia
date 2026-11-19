@@ -1,6 +1,6 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api-client';
-import { auditTrailPageSchema, type AuditCategory } from './schemas';
+import { auditTrailPageSchema, personAssignmentsSchema, type AuditCategory } from './schemas';
 
 export type AuditTrailQuery = {
   q?: string;
@@ -41,5 +41,17 @@ export function usePersonHistory(userId: string, page: number) {
         .get(`audit-trail/people/${userId}`, { searchParams: { page, pageSize: PERSON_HISTORY_PAGE_SIZE } })
         .json()
         .then((data) => auditTrailPageSchema.parse(data)),
+  });
+}
+
+/** Vínculos de uma pessoa (`GET /audit-trail/people/:userId/assignments`), linha aberta primeiro, depois por `to` decrescente. */
+export function usePersonAssignments(userId: string) {
+  return useQuery({
+    queryKey: ['audit-trail', 'people', userId, 'assignments'],
+    queryFn: () =>
+      api
+        .get(`audit-trail/people/${userId}/assignments`)
+        .json()
+        .then((data) => personAssignmentsSchema.parse(data)),
   });
 }

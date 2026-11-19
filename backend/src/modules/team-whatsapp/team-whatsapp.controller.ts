@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodValidationPipe } from 'nestjs-zod';
+import { RequirePermission } from '../auth/decorators/require-permission.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { CreateTeamDispatchDto } from './dto/create-team-dispatch.dto';
@@ -29,8 +30,10 @@ import { TeamWhatsappService } from './team-whatsapp.service';
 type AuthRequest = { user: JwtPayload };
 
 /**
- * WhatsApp da equipe. VIEWER é barrado pelo RolesGuard; entre os demais papéis,
- * quem decide é a política do serviço (ADMIN ou gestor de setor, senão 403).
+ * WhatsApp da equipe. Leituras: VIEWER é barrado pelo RolesGuard. Enviar,
+ * cancelar e repetir: o portão é a permissão `equipe.enviar` (PermissionsGuard).
+ * Entre quem passa, quem decide é a política do serviço (ADMIN ou gestor de
+ * setor, senão 403) e, no envio a todos os setores, `equipe.disparo_amplo`.
  */
 @ApiTags('team-whatsapp')
 @Controller('internal/team-whatsapp')
@@ -73,7 +76,7 @@ export class TeamWhatsappController {
 
   @Post('dispatches')
   @HttpCode(202)
-  @Roles('ADMIN', 'SUPERVISOR', 'OPERATOR')
+  @RequirePermission('equipe.enviar')
   @ApiOperation({
     summary:
       'Enfileira um recado de WhatsApp para um usuário ou setor, ou agenda para o início do turno',
@@ -128,7 +131,7 @@ export class TeamWhatsappController {
 
   @Post('dispatches/:id/cancel')
   @HttpCode(200)
-  @Roles('ADMIN', 'SUPERVISOR', 'OPERATOR')
+  @RequirePermission('equipe.enviar')
   @ApiOperation({ summary: 'Cancela um envio agendado antes do disparo' })
   cancel(@Param('id') id: string, @Req() req: AuthRequest) {
     return this.schedule.cancel(req.user.sub, id);
@@ -136,7 +139,7 @@ export class TeamWhatsappController {
 
   @Post('dispatches/:id/retry')
   @HttpCode(200)
-  @Roles('ADMIN', 'SUPERVISOR', 'OPERATOR')
+  @RequirePermission('equipe.enviar')
   @ApiOperation({
     summary:
       'Repete as falhas certas de um envio (uma, várias ou todas); quem vê o envio e pode enviar à área',

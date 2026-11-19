@@ -3,6 +3,10 @@ import {
   ENABLED_CHANNEL_PROVIDERS,
   type EnabledChannelProvider,
 } from '../../shared/config/enabled-providers';
+import {
+  hasPermission,
+  type PermissionKey,
+} from '../../shared/authz/permissions';
 
 /**
  * Provedores que o envio da equipe aceita: os ligados (D1). Canal de provedor
@@ -25,6 +29,8 @@ export type TeamActor = {
   /** Pessoa sem acesso (GC5) nunca envia nem vê a escala, qualquer que seja o papel. */
   hasAccess: boolean;
   managedSectorIds: readonly string[];
+  /** Permissões efetivas do papel, lidas do banco junto do ator (DB4). */
+  permissions: readonly PermissionKey[];
 };
 
 /** O `sector` do alvo é checado aqui: não confiar só no filtro de `findActor`. */
@@ -76,4 +82,23 @@ export function canViewDispatch(
   dispatch: { authorId: string | null },
 ): boolean {
   return actor.role === 'ADMIN' || dispatch.authorId === actor.id;
+}
+
+/**
+ * Disparo amplo (B4): o alvo cobre todos os setores ativos da organização e há
+ * mais de um. Ids repetidos contam uma vez; setor inativo não entra em
+ * `activeSectorIds`. Envio a uma pessoa nunca é amplo (alvo sem setores).
+ */
+export function isBroadSend(
+  targetSectorIds: readonly string[],
+  activeSectorIds: readonly string[],
+): boolean {
+  if (activeSectorIds.length <= 1) return false;
+  const targeted = new Set(targetSectorIds);
+  return activeSectorIds.every((id) => targeted.has(id));
+}
+
+/** A chave `equipe.disparo_amplo` decide, não o papel (a matriz inicial a dá a S e O). */
+export function canBroadSend(actor: TeamActor): boolean {
+  return hasPermission(actor, 'equipe.disparo_amplo');
 }

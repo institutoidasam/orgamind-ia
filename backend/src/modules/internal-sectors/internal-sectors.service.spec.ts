@@ -1,5 +1,9 @@
-import type { Prisma } from '@prisma/client';
+import type { Prisma, Role } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
+import {
+  permissionsWith,
+  type PermissionChange,
+} from '../../shared/authz/actor.test-fixtures';
 import { InternalSectorsService } from './internal-sectors.service';
 
 const ACTOR = 'admin-1';
@@ -56,6 +60,211 @@ function trailHarness(before: object, after: object) {
 }
 const withManager = (manager: object | null) => ({ ...sector, manager });
 
+const SUPERVISOR_ID = 'sup-1';
+const ADMIN_ONLY = { status: 403, code: 'sector.manager_admin_only' };
+const withAna = { ...sector, managerId: ANA.id, manager: ANA };
+
+/** Setor lido do banco já tem a Ana como gestora; `after` é o que a gravação devolve. */
+function managedHarness(after: object) {
+  const h = trailHarness(withAna, after);
+  h.repo.find.mockResolvedValue({ ...withAna, members: [] });
+  return h;
+}
+const createdData = (h: ReturnType<typeof trailHarness>) =>
+  h.repo.createWithAudit.mock.calls[0][0] as Prisma.SectorCreateInput;
+const updatedData = (h: ReturnType<typeof trailHarness>) =>
+  h.repo.updateWithAudit.mock.calls[0][1] as Prisma.SectorUpdateInput;
+
+const PHONE_NAME = '+5592999998888';
+const MEMBER_ROWS = [
+  { id: 'u-fone', name: PHONE_NAME, email: 'a@test.local', role: 'OPERATOR' },
+  { id: 'u-ana', name: 'Ana Souza', email: 'b@test.local', role: 'OPERATOR' },
+];
+
+function membersHarness(role: Role, change: PermissionChange = {}) {
+  const repo = {
+    find: vi.fn().mockResolvedValue({ ...sector, members: [] }),
+    findMembers: vi.fn().mockResolvedValue(MEMBER_ROWS),
+    effectivePermissions: vi
+      .fn()
+      .mockResolvedValue(permissionsWith(role, change)),
+  };
+  const service = new InternalSectorsService(repo as never, {} as never);
+  return { repo, service };
+}
+
+describe('InternalSectorsService.members — nome sem o telefone completo (DB8)', () => {
+  it.each([
+    ['VIEWER', 'VIEWER', {}],
+    [
+      'SUPERVISOR sem a chave',
+      'SUPERVISOR',
+      { revoke: ['telefone.ver_completo'] },
+    ],
+  ] as const)(
+    '%s recebe o nome-telefone mascarado, sem o número na resposta',
+    async (_label, role, change) => {
+      const { repo, service } = membersHarness(role, change);
+
+      const result = await service.members('s1', undefined, role);
+
+      expect(result.items.map((m) => m.name)).toEqual([
+        '•••• 8888',
+        'Ana Souza',
+      ]);
+      expect(JSON.stringify(result)).not.toContain('99999');
+      expect(repo.effectivePermissions).toHaveBeenCalledWith(role);
+      expect(repo.findMembers).toHaveBeenCalledWith('s1', undefined);
+    },
+  );
+
+  it.each(['ADMIN', 'SUPERVISOR'] as const)(
+    '%s com a chave vê o nome real; nome normal nunca muda',
+    async (role) => {
+      const { service } = membersHarness(role);
+
+      const result = await service.members('s1', true, role);
+
+      expect(result.items).toEqual(MEMBER_ROWS);
+    },
+  );
+});
+
+describe('InternalSectorsService.get — nome dos membros sem o telefone completo (DB8)', () => {
+  const memberDetail = (role: Role, change: PermissionChange = {}) => {
+    const h = membersHarness(role, change);
+    h.repo.find.mockResolvedValue({ ...sector, members: MEMBER_ROWS });
+    return h;
+  };
+
+  it('SUPERVISOR com estrutura.manter e sem telefone.ver_completo recebe o nome mascarado', async () => {
+    const { repo, service } = memberDetail('SUPERVISOR', {
+      grant: ['estrutura.manter'],
+      revoke: ['telefone.ver_completo'],
+    });
+
+    const detail = await service.get('s1', 'SUPERVISOR');
+
+    expect(detail.members.map((m) => m.name)).toEqual([
+      '•••• 8888',
+      'Ana Souza',
+    ]);
+    expect(JSON.stringify(detail)).not.toContain('99999');
+    expect(repo.effectivePermissions).toHaveBeenCalledWith('SUPERVISOR');
+  });
+
+  it('ADMIN recebe o nome real', async () => {
+    const { service } = memberDetail('ADMIN');
+
+    const detail = await service.get('s1', 'ADMIN');
+
+    expect(detail.members).toEqual(MEMBER_ROWS);
+  });
+});
+
+describe('InternalSectorsService — gestor só pelo ADMIN: criação (DB20)', () => {
+  it('SUPERVISOR com a chave cria setor sem managerId', async () => {
+    const h = trailHarness(sector, sector);
+
+    await h.service.create(
+      { name: 'Compras', code: 'COM' },
+      SUPERVISOR_ID,
+      'SUPERVISOR',
+    );
+
+    expect(h.repo.createWithAudit).toHaveBeenCalledTimes(1);
+    expect(createdData(h)).not.toHaveProperty('manager');
+    expect(h.repo.findValidManager).not.toHaveBeenCalled();
+  });
+
+  it('SUPERVISOR cria setor com managerId null → cria sem gestor', async () => {
+    const h = trailHarness(sector, sector);
+
+    await h.service.create(
+      { name: 'Compras', code: 'COM', managerId: null },
+      SUPERVISOR_ID,
+      'SUPERVISOR',
+    );
+
+    expect(h.repo.createWithAudit).toHaveBeenCalledTimes(1);
+    expect(createdData(h)).not.toHaveProperty('manager');
+  });
+
+  it('SUPERVISOR cria setor com managerId → 403 e nada é gravado', async () => {
+    const h = trailHarness(sector, sector);
+
+    await expect(
+      h.service.create(
+        { name: 'Compras', code: 'COM', managerId: ANA.id },
+        SUPERVISOR_ID,
+        'SUPERVISOR',
+      ),
+    ).rejects.toMatchObject(ADMIN_ONLY);
+
+    expect(h.repo.findValidManager).not.toHaveBeenCalled();
+    expect(h.repo.createWithAudit).not.toHaveBeenCalled();
+    expect(h.audit.recordChange).not.toHaveBeenCalled();
+  });
+});
+
+describe('InternalSectorsService — gestor só pelo ADMIN: edição (DB20)', () => {
+  it('SUPERVISOR edita o nome reenviando o managerId atual → passa e não grava manager', async () => {
+    const h = managedHarness({ ...withAna, name: 'Compras 2' });
+
+    await h.service.update(
+      's1',
+      { name: 'Compras 2', managerId: ANA.id },
+      SUPERVISOR_ID,
+      'SUPERVISOR',
+    );
+
+    expect(updatedData(h)).toEqual({ name: 'Compras 2' });
+    expect(h.repo.findValidManager).not.toHaveBeenCalled();
+    expect(h.audit.recordChange).toHaveBeenCalledWith(
+      TX,
+      expect.objectContaining({
+        action: 'sector.updated',
+        actorId: SUPERVISOR_ID,
+        changes: [{ field: 'name', before: 'Compras', after: 'Compras 2' }],
+      }),
+    );
+  });
+
+  it('SUPERVISOR troca ou limpa o managerId → 403 e nada é gravado', async () => {
+    for (const managerId of [BRUNO.id, null]) {
+      const h = managedHarness(withAna);
+
+      await expect(
+        h.service.update('s1', { managerId }, SUPERVISOR_ID, 'SUPERVISOR'),
+      ).rejects.toMatchObject(ADMIN_ONLY);
+
+      expect(h.repo.findValidManager).not.toHaveBeenCalled();
+      expect(h.repo.updateWithAudit).not.toHaveBeenCalled();
+      expect(h.audit.recordChange).not.toHaveBeenCalled();
+    }
+  });
+});
+
+describe('InternalSectorsService — gestor só pelo ADMIN: o ADMIN segue igual (DB20, GB1)', () => {
+  it('ADMIN cria e troca o gestor como hoje', async () => {
+    const created = trailHarness(sector, sector);
+    const changed = managedHarness(withAna);
+
+    await created.service.create(
+      { name: 'Compras', code: 'COM', managerId: ANA.id },
+      ACTOR,
+      'ADMIN',
+    );
+    await changed.service.update('s1', { managerId: BRUNO.id }, ACTOR, 'ADMIN');
+
+    expect(createdData(created).manager).toEqual({ connect: { id: ANA.id } });
+    expect(updatedData(changed).manager).toEqual({
+      connect: { id: BRUNO.id },
+    });
+    expect(changed.repo.findValidManager).toHaveBeenCalledWith(BRUNO.id);
+  });
+});
+
 describe('InternalSectorsService — trilha de setor na criação e na edição (A5, GC1)', () => {
   it('create grava sector.created no tx, STRUCTURE, com o ator e o gestor só { id, name }', async () => {
     const created = withManager({ ...ANA, email: 'ana@gbr.com.br' });
@@ -64,6 +273,7 @@ describe('InternalSectorsService — trilha de setor na criação e na edição 
     await h.service.create(
       { name: 'Compras', code: 'COM', managerId: ANA.id },
       ACTOR,
+      'ADMIN',
     );
 
     expect(h.audit.recordChange).toHaveBeenCalledWith(TX, {
@@ -86,7 +296,7 @@ describe('InternalSectorsService — trilha de setor na criação e na edição 
   it('update grava sector.updated no tx só com o campo alterado e o ator explícito', async () => {
     const h = trailHarness(withManager(ANA), withManager(BRUNO));
 
-    await h.service.update('s1', { managerId: BRUNO.id }, ACTOR);
+    await h.service.update('s1', { managerId: BRUNO.id }, ACTOR, 'ADMIN');
 
     expect(h.audit.recordChange).toHaveBeenCalledWith(TX, {
       action: 'sector.updated',
@@ -103,7 +313,7 @@ describe('InternalSectorsService — trilha de setor sem alteração e com falha
   it('update sem nenhum campo auditado alterado não grava evento vazio', async () => {
     const h = trailHarness(sector, { ...sector, description: 'Nova' });
 
-    await h.service.update('s1', { description: 'Nova' }, ACTOR);
+    await h.service.update('s1', { description: 'Nova' }, ACTOR, 'ADMIN');
 
     expect(h.audit.recordChange).not.toHaveBeenCalled();
   });
@@ -114,10 +324,10 @@ describe('InternalSectorsService — trilha de setor sem alteração e com falha
     h.audit.recordChange.mockRejectedValue(failure);
 
     await expect(
-      h.service.create({ name: 'Compras', code: 'COM' }, ACTOR),
+      h.service.create({ name: 'Compras', code: 'COM' }, ACTOR, 'ADMIN'),
     ).rejects.toBe(failure);
     await expect(
-      h.service.update('s1', { isActive: true }, ACTOR),
+      h.service.update('s1', { isActive: true }, ACTOR, 'ADMIN'),
     ).rejects.toBe(failure);
   });
 });
@@ -128,11 +338,18 @@ describe('InternalSectorsService — membros e criação', () => {
       find: vi.fn().mockResolvedValue({ ...sector, members: [] }),
       findMembers: vi
         .fn()
-        .mockResolvedValue([{ id: 'u1', role: 'OPERATOR', isActive: true }]),
+        .mockResolvedValue([
+          { id: 'u1', name: 'Ana Souza', role: 'OPERATOR', isActive: true },
+        ]),
+      effectivePermissions: vi
+        .fn()
+        .mockResolvedValue(permissionsWith('OPERATOR')),
     };
     const service = new InternalSectorsService(repo as never, {} as never);
-    await expect(service.members('s1', true)).resolves.toEqual({
-      items: [{ id: 'u1', role: 'OPERATOR', isActive: true }],
+    await expect(service.members('s1', true, 'OPERATOR')).resolves.toEqual({
+      items: [
+        { id: 'u1', name: 'Ana Souza', role: 'OPERATOR', isActive: true },
+      ],
     });
     expect(repo.findMembers).toHaveBeenCalledWith('s1', true);
   });
@@ -144,7 +361,7 @@ describe('InternalSectorsService — membros e criação', () => {
     };
     const service = new InternalSectorsService(repo as never, {} as never);
     await expect(
-      service.create({ name: 'Compras', code: 'COM' }, ACTOR),
+      service.create({ name: 'Compras', code: 'COM' }, ACTOR, 'ADMIN'),
     ).resolves.toMatchObject({ id: 's1', memberCount: 2, channel: null });
   });
 });
@@ -158,7 +375,7 @@ describe('InternalSectorsService — edição e falha de persistência', () => {
     };
     const service = new InternalSectorsService(repo as never, {} as never);
 
-    await service.update('s1', { managerId: null }, ACTOR);
+    await service.update('s1', { managerId: null }, ACTOR, 'ADMIN');
 
     expect(repo.findValidManager).not.toHaveBeenCalled();
     expect(repo.updateWithAudit).toHaveBeenCalledWith(
@@ -177,7 +394,7 @@ describe('InternalSectorsService — edição e falha de persistência', () => {
     const service = new InternalSectorsService(repo as never, {} as never);
 
     await expect(
-      service.create({ name: 'Compras', code: 'COM' }, ACTOR),
+      service.create({ name: 'Compras', code: 'COM' }, ACTOR, 'ADMIN'),
     ).rejects.toBe(failure);
   });
 });
@@ -203,11 +420,14 @@ describe('InternalSectorsService — número efetivo do setor (C1)', () => {
       const repo = {
         list: vi.fn().mockResolvedValue([[{ ...sector, channel }], 1]),
         find: vi.fn().mockResolvedValue({ ...sector, channel, members: [] }),
+        effectivePermissions: vi
+          .fn()
+          .mockResolvedValue(permissionsWith('ADMIN')),
       };
       const service = new InternalSectorsService(repo as never, {} as never);
 
       const listed = await service.list(1, 25);
-      const detail = await service.get('s1');
+      const detail = await service.get('s1', 'ADMIN');
 
       expect(listed.items[0].channel).toEqual(expected);
       expect(detail.channel).toEqual(expected);

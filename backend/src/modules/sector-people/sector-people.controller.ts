@@ -11,6 +11,7 @@ import {
   Req,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { RequirePermission } from '../auth/decorators/require-permission.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { AddFromContactsDto } from './dto/add-from-contacts.dto';
@@ -27,11 +28,11 @@ import { SectorPeopleWriteService } from './sector-people-write.service';
 type AuthRequest = { user: JwtPayload };
 
 /**
- * Página do setor (C3). Papel de escrita no controller (VIEWER fora); quem
- * pode qual setor é da política P1, aplicada no serviço.
+ * Página do setor (C3). Leituras por papel em cada handler (VIEWER fora);
+ * escritas por permissão (`pessoas.editar`; a inativação, `pessoas.inativar`).
+ * Quem pode qual setor é da política P1, aplicada no serviço e somada a isto.
  */
 @ApiTags('sector-people')
-@Roles('ADMIN', 'SUPERVISOR', 'OPERATOR')
 @Controller('internal/sectors/:sectorId/people')
 export class SectorPeopleController {
   constructor(
@@ -40,6 +41,7 @@ export class SectorPeopleController {
   ) {}
 
   @Get()
+  @Roles('ADMIN', 'SUPERVISOR', 'OPERATOR')
   @ApiOperation({
     summary:
       'Setor, pessoas dele (inativas só com includeInactive) e opções de nível e turno',
@@ -53,6 +55,7 @@ export class SectorPeopleController {
   }
 
   @Get('candidates')
+  @Roles('ADMIN', 'SUPERVISOR', 'OPERATOR')
   @ApiOperation({
     summary: 'Pessoas já cadastradas que podem vir para o setor',
   })
@@ -65,6 +68,7 @@ export class SectorPeopleController {
   }
 
   @Get('contact-candidates')
+  @Roles('ADMIN', 'SUPERVISOR', 'OPERATOR')
   @ApiOperation({ summary: 'Contatos para cadastrar como pessoas do setor' })
   contactCandidates(
     @Param('sectorId') sectorId: string,
@@ -75,6 +79,7 @@ export class SectorPeopleController {
   }
 
   @Post()
+  @RequirePermission('pessoas.editar')
   @ApiOperation({ summary: 'Nova pessoa sem acesso neste setor' })
   create(
     @Param('sectorId') sectorId: string,
@@ -85,6 +90,7 @@ export class SectorPeopleController {
   }
 
   @Post('from-contacts')
+  @RequirePermission('pessoas.editar')
   @HttpCode(200)
   @ApiOperation({ summary: 'Pessoas do setor a partir de contatos, em lote' })
   addFromContacts(
@@ -96,6 +102,7 @@ export class SectorPeopleController {
   }
 
   @Post('move')
+  @RequirePermission('pessoas.editar')
   @HttpCode(200)
   @ApiOperation({ summary: 'Traz pessoas já cadastradas para o setor' })
   move(
@@ -107,6 +114,7 @@ export class SectorPeopleController {
   }
 
   @Patch(':userId')
+  @RequirePermission('pessoas.editar')
   @ApiOperation({
     summary: 'Edita pessoa do setor (com acesso: nível, função, turno)',
   })
@@ -120,6 +128,7 @@ export class SectorPeopleController {
   }
 
   @Post(':userId/status')
+  @RequirePermission('pessoas.inativar')
   @HttpCode(200)
   @ApiOperation({ summary: 'Inativa ou reativa pessoa do setor, com motivo' })
   setStatus(
@@ -132,6 +141,7 @@ export class SectorPeopleController {
   }
 
   @Delete(':userId')
+  @RequirePermission('pessoas.editar')
   @HttpCode(204)
   @ApiOperation({ summary: 'Tira do setor pessoa sem acesso' })
   remove(

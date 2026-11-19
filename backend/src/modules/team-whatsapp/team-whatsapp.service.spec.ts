@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { TeamMember } from './team-whatsapp.repository';
+import { actorWith } from '../../shared/authz/actor.test-fixtures';
 import type { CreateTeamDispatchInput } from './dto/create-team-dispatch.dto';
 import {
   ADMIN,
@@ -126,7 +127,10 @@ describe('TeamWhatsappService.dispatch — remetente fora da política (403)', (
   });
 
   it('gestor rebaixado a VIEWER recebe 403', async () => {
-    h.repo.findActor.mockResolvedValue({ ...MANAGER, role: 'VIEWER' });
+    h.repo.findActor.mockResolvedValue({
+      ...MANAGER,
+      ...actorWith('VIEWER', { id: MANAGER.id }),
+    });
     h.repo.findSector.mockResolvedValue(sector());
     await expectForbidden(toSector());
   });
@@ -134,7 +138,7 @@ describe('TeamWhatsappService.dispatch — remetente fora da política (403)', (
   it('SUPERVISOR sem setor gerido recebe 403', async () => {
     h.repo.findActor.mockResolvedValue({
       ...MANAGER,
-      role: 'SUPERVISOR',
+      ...actorWith('SUPERVISOR', { id: MANAGER.id }),
       managedSectorIds: [],
     });
     h.repo.findTargetUser.mockResolvedValue(member());

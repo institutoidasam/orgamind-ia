@@ -14,6 +14,7 @@ import {
   canChangePersonStatus,
   canEditContactAuthorization,
 } from '../../shared/authz/person-actions.policy';
+import { permissionDenied } from '../../shared/authz/permissions';
 import { DomainError } from '../../shared/errors/domain.error';
 import { optionalReason, requireReason } from '../users/change-reason';
 import { invalidLevel } from '../users/users.errors';
@@ -30,13 +31,13 @@ import {
   canEditPerson,
   canPickExisting,
   canRemove,
-  isSectorAdmin,
   type PeopleActor,
-  type PeoplePerson,
   type PersonField,
 } from './sector-people.policy';
 import {
   type BatchContact,
+  peopleViewer,
+  type PersonWithPhone,
   SectorPeopleRepository,
   toSectorPerson,
 } from './sector-people.repository';
@@ -218,6 +219,14 @@ export class SectorPeopleWriteService {
     const data = personPatch(patch);
     const fields = Object.keys(data) as PersonField[];
     if (!canEditPerson(sector, person, fields)) throw sectorPeopleForbidden();
+    // DB8: sem a chave, trocar o telefone gravado seria também ler/confirmar o número; vale até para o mesmo valor.
+    if (
+      data.phone !== undefined &&
+      person.hasPhone &&
+      !peopleViewer(actor).fullPhone
+    ) {
+      throw permissionDenied('telefone.ver_completo');
+    }
     // D16: guarda explícita da autorização (hoje só é falsa para pessoa com login, já barrada acima).
     if (
       data.contactAuthorization &&
@@ -348,19 +357,19 @@ export class SectorPeopleWriteService {
     return reason;
   }
 
-  private async requirePerson(userId: string): Promise<PeoplePerson> {
+  private async requirePerson(userId: string): Promise<PersonWithPhone> {
     const person = await this.repo.findPerson(userId);
     if (!person?.isActive) throw sectorPeoplePersonNotFound();
     return person;
   }
 
-  /** Respostas pelo mapper da T5 (GC8: telefone de quem tem acesso só ao ADMIN). */
+  /** Respostas pelo mapper da T5 (GC8: telefone de quem tem acesso só ao ADMIN; DB8: completo só com a chave). */
   private async readPeople(
     actor: PeopleActor,
     ids: readonly string[],
   ): Promise<SectorPerson[]> {
     if (ids.length === 0) return [];
-    const viewer = { isAdmin: isSectorAdmin(actor) };
+    const viewer = peopleViewer(actor);
     const rows = new Map(
       (await this.repo.findPersonRows(ids)).map((row) => [row.id, row]),
     );

@@ -1,41 +1,65 @@
 import { describe, it, expect } from 'vitest';
 import {
+  canBroadSend,
   canSendToSector,
   canViewDispatch,
   canSendToUser,
+  isBroadSend,
   isTeamProvider,
   isTeamSender,
   TEAM_PROVIDERS,
   type TeamActor,
   type TeamTargetUser,
 } from './team-whatsapp.policy';
+import { actorWith } from '../../shared/authz/actor.test-fixtures';
 
 const admin: TeamActor = {
-  id: 'a',
-  role: 'ADMIN',
-  isActive: true,
-  hasAccess: true,
+  ...actorWith('ADMIN', { id: 'a' }),
   managedSectorIds: [],
 };
 const manager: TeamActor = {
-  id: 'm',
-  role: 'OPERATOR',
-  isActive: true,
-  hasAccess: true,
+  ...actorWith('OPERATOR', { id: 'm' }),
   managedSectorIds: ['s1'],
 };
 const plain: TeamActor = {
-  id: 'p',
-  role: 'SUPERVISOR',
-  isActive: true,
-  hasAccess: true,
+  ...actorWith('SUPERVISOR', { id: 'p' }),
   managedSectorIds: [],
 };
 // Rebaixado a VIEWER, mas ainda `managerId` do setor (o JWT antigo vale até 15 min).
-const viewerManager: TeamActor = { ...manager, role: 'VIEWER' };
+const viewerManager: TeamActor = {
+  ...actorWith('VIEWER', { id: 'm' }),
+  managedSectorIds: ['s1'],
+};
 const inactiveManager: TeamActor = { ...manager, isActive: false };
 const on = { isActive: true };
 const off = { isActive: false };
+
+describe('team-whatsapp policy — disparo amplo', () => {
+  const ACTIVE = ['s1', 's2', 's3'];
+
+  it.each<[string, string[], string[], boolean]>([
+    ['alvo com todos os ativos', ['s1', 's2', 's3'], ACTIVE, true],
+    ['alvo com 2 dos 3 ativos', ['s1', 's2'], ACTIVE, false],
+    ['um único setor ativo, mesmo coberto', ['s1'], ['s1'], false],
+    ['nenhum setor ativo', ['s1'], [], false],
+    ['alvo vazio', [], ACTIVE, false],
+    ['s1 repetido não cobre s3', ['s1', 's1', 's2'], ACTIVE, false],
+    ['repetido com todos presentes', ['s1', 's1', 's2', 's3'], ACTIVE, true],
+    ['id alheio não cobre s3', ['s1', 's2', 'x'], ACTIVE, false],
+  ])('isBroadSend: %s', (_label, target, active, expected) => {
+    expect(isBroadSend(target, active)).toBe(expected);
+  });
+
+  it('canBroadSend segue a chave equipe.disparo_amplo, não o papel', () => {
+    const without: TeamActor = {
+      ...actorWith('OPERATOR', { revoke: ['equipe.disparo_amplo'] }),
+      managedSectorIds: ['s1'],
+    };
+    expect(canBroadSend(manager)).toBe(true);
+    expect(canBroadSend(admin)).toBe(true);
+    expect(canBroadSend(without)).toBe(false);
+  });
+});
 
 describe('team-whatsapp policy — setor', () => {
   it.each<[TeamActor, { id: string; isActive: boolean }, boolean]>([

@@ -19,8 +19,11 @@ export const sectorPeopleRoleSchema = z.enum([
 export const sectorPersonSchema = z.object({
   id: z.string(),
   name: z.string(),
-  // GC8: null ao gestor quando `editable` = 'limited'; ADMIN recebe o número.
+  // CB5/DB8: `phoneE164` só com `telefone.ver_completo`; `hasPhone` e `phoneMasked` ("•••• 1234") saem sempre.
+  // GC8: pessoa com acesso, para quem não é ADMIN, chega com `hasPhone` true e os dois telefones nulos.
   phoneE164: z.string().nullable(),
+  hasPhone: z.boolean(),
+  phoneMasked: z.string().nullable(),
   hasAccess: z.boolean(),
   // null quando sem acesso (o VIEWER da D1 não é exibido).
   role: sectorPeopleRoleSchema.nullable(),
@@ -88,7 +91,9 @@ export const sectorContactCandidatesResponseSchema = z.object({
     .object({
       contactId: z.string(),
       name: z.string().nullable(),
-      phoneE164: z.string(),
+      // CB5: `phoneE164` só com `telefone.ver_completo`; `phoneMasked` sai sempre.
+      phoneE164: z.string().nullable(),
+      phoneMasked: z.string(),
       person: z
         .object({
           userId: z.string(),

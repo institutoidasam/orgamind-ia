@@ -4,6 +4,8 @@ import { AuthRepository, type AuthUser } from './auth.repository';
 import { RefreshService } from './refresh.service';
 import { InvalidCredentialsError } from './errors/auth.errors';
 import { AuditService } from '../../shared/audit/audit.service';
+import { PermissionsService } from '../permissions/permissions.service';
+import type { PermissionKey } from '../../shared/authz/permissions';
 import { NotFoundError } from '../../shared/errors/domain.error';
 import type { LoginInput } from '../../schemas/contracts/auth.schema';
 import type { Role } from '@prisma/client';
@@ -31,7 +33,11 @@ export type CurrentAuthUser = {
   sectorId: string | null;
   sector: { id: string; name: string; code: string; isActive: boolean } | null;
   isActive: boolean;
+  // Efetivas do papel, lidas do banco a cada resposta (GB3); nunca vão no JWT.
+  permissions: PermissionKey[];
 };
+
+export type MeResult = { user: CurrentAuthUser; mustChangePassword: boolean };
 
 // Fixed argon2id hash used to equalize login response time when the email maps
 // to no user. Without this, the no-user path returns before any argon2.verify,
@@ -49,6 +55,7 @@ export class AuthService {
     private readonly repo: AuthRepository,
     private readonly refresh: RefreshService,
     private readonly audit: AuditService,
+    private readonly permissions: PermissionsService,
   ) {}
 
   async login(input: LoginInput): Promise<LoginResult> {
@@ -59,6 +66,8 @@ export class AuthService {
     // guarda só estreita o tipo (sem `!`).
     const email = user.email;
     if (email === null) throw new InvalidCredentialsError();
+    // Lidas antes de emitir o token: falha aqui não deixa sessão nem auditoria.
+    const permissions = await this.permissions.effectiveFor(user.role);
 
     const { accessToken, refreshToken } = await this.refresh.issueNew(
       user.id,
@@ -70,7 +79,29 @@ export class AuthService {
     await this.repo.updateLastLoginAt(user.id);
     await this.audit.log('auth.login_success', 'User', user.id);
 
-    return this.loginResult({ ...user, email }, accessToken, refreshToken);
+    return {
+      accessToken,
+      refreshToken,
+      mustChangePassword: user.mustChangePassword,
+      user: this.currentUser({ ...user, email }, permissions),
+    };
+  }
+
+  /**
+   * Sessão atual (`GET /auth/me`): o `JwtStrategy` já recusou inativo, sem
+   * acesso e sessão revogada; a releitura cobre a corrida entre a guarda e
+   * aqui, e as permissões vêm do banco agora (sem cache, GB3).
+   */
+  async me(userId: string): Promise<MeResult> {
+    const user = await this.repo.findById(userId);
+    if (!user || !user.isActive || !user.hasAccess || user.email === null) {
+      throw new InvalidCredentialsError();
+    }
+    const permissions = await this.permissions.effectiveFor(user.role);
+    return {
+      user: this.currentUser({ ...user, email: user.email }, permissions),
+      mustChangePassword: user.mustChangePassword,
+    };
   }
 
   private async rejectUnknownLogin(input: LoginInput): Promise<never> {
@@ -105,31 +136,26 @@ export class AuthService {
     throw new InvalidCredentialsError();
   }
 
-  private loginResult(
+  private currentUser(
     user: AuthUser & { email: string },
-    accessToken: string,
-    refreshToken: string,
-  ): LoginResult {
+    permissions: PermissionKey[],
+  ): CurrentAuthUser {
     return {
-      accessToken,
-      refreshToken,
-      mustChangePassword: user.mustChangePassword,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-        sectorId: user.sectorId,
-        sector: user.sector
-          ? {
-              id: user.sector.id,
-              name: user.sector.name,
-              code: user.sector.code,
-              isActive: user.sector.isActive,
-            }
-          : null,
-        isActive: user.isActive,
-      },
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      sectorId: user.sectorId,
+      sector: user.sector
+        ? {
+            id: user.sector.id,
+            name: user.sector.name,
+            code: user.sector.code,
+            isActive: user.sector.isActive,
+          }
+        : null,
+      isActive: user.isActive,
+      permissions,
     };
   }
 

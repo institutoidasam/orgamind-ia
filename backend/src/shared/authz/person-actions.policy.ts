@@ -1,15 +1,15 @@
 import type { AuditCategory, Role } from '@prisma/client';
+import { hasPermission, type PermissionHolder } from './permissions';
 
 /**
- * Políticas de pessoa e trilha (C3). Matriz inicial por papel: toda decisão
- * nova de quem inativa, autoriza, exclui ou consulta a trilha passa por aqui,
- * para o Lote B trocar o corpo por permissão sem tocar nos chamadores.
+ * Políticas de pessoa e trilha (C3). Toda decisão de quem inativa, autoriza,
+ * exclui ou consulta a trilha passa por aqui. Inativar, autorizar contato e ver
+ * o histórico da ficha dependem da permissão do ator (Lote B); exclusão,
+ * consulta geral e categorias da ficha seguem fixas do ADMIN.
  */
 export type PolicyActor = { id: string; role: Role };
+export type PermissionActor = PolicyActor & PermissionHolder;
 export type PolicyPerson = { hasAccess: boolean };
-
-/** Papéis que já escrevem pessoas do setor (`sector-people.policy.ts`). */
-const PERSON_WRITE_ROLES: readonly Role[] = ['ADMIN', 'SUPERVISOR', 'OPERATOR'];
 
 /** Categorias que a ficha mostra a quem não é ADMIN (sem Estrutura e Permissões). */
 const PERSON_RECORD_CATEGORIES: readonly AuditCategory[] = [
@@ -22,23 +22,26 @@ function isAdmin(actor: PolicyActor): boolean {
   return actor.role === 'ADMIN';
 }
 
-/** pessoas.inativar: ADMIN qualquer pessoa; SUPERVISOR só sem login e no alcance; OPERATOR/VIEWER nunca. */
+/**
+ * pessoas.inativar: exige a permissão; ADMIN inativa qualquer pessoa, os demais
+ * só quem não tem login e no alcance (pessoa com login, só o ADMIN).
+ */
 export function canChangePersonStatus(
-  actor: PolicyActor,
+  actor: PermissionActor,
   person: PolicyPerson,
   inReach: boolean,
 ): boolean {
-  if (isAdmin(actor)) return true;
-  return actor.role === 'SUPERVISOR' && !person.hasAccess && inReach;
+  if (!hasPermission(actor, 'pessoas.inativar')) return false;
+  return isAdmin(actor) || (!person.hasAccess && inReach);
 }
 
-/** Autorização de contato: pessoa com login, só ADMIN; sem login, quem já edita a pessoa. */
+/** Autorização de contato: pessoa com login, só ADMIN; sem login, quem tem pessoas.editar (DB16). */
 export function canEditContactAuthorization(
-  actor: PolicyActor,
+  actor: PermissionActor,
   person: PolicyPerson,
 ): boolean {
   if (person.hasAccess) return isAdmin(actor);
-  return PERSON_WRITE_ROLES.includes(actor.role);
+  return hasPermission(actor, 'pessoas.editar');
 }
 
 /** Exclusão física: só ADMIN. */
@@ -51,13 +54,14 @@ export function canQueryAuditTrail(actor: PolicyActor): boolean {
   return isAdmin(actor);
 }
 
-/** trilha.consultar, ficha: ADMIN sempre; SUPERVISOR só no alcance; OPERATOR/VIEWER nunca. */
+/** trilha.consultar, ficha: ADMIN sempre; os demais com a permissão e só no alcance. */
 export function canViewPersonHistory(
-  actor: PolicyActor,
+  actor: PermissionActor,
   inReach: boolean,
 ): boolean {
-  if (isAdmin(actor)) return true;
-  return actor.role === 'SUPERVISOR' && inReach;
+  return (
+    isAdmin(actor) || (hasPermission(actor, 'trilha.consultar') && inReach)
+  );
 }
 
 /**

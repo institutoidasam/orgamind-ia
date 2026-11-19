@@ -18,8 +18,11 @@ import {
   type PeopleActor,
 } from './sector-people.policy';
 import {
+  peopleViewer,
+  personNameView,
   type SectorDetail,
   SectorPeopleRepository,
+  sortByName,
   toSectorPerson,
 } from './sector-people.repository';
 
@@ -60,9 +63,9 @@ export class SectorPeopleService {
     includeInactive = false,
   ): Promise<SectorPeopleResponse> {
     const { actor, sector } = await this.requireManageable(actorId, sectorId);
-    const viewer = { isAdmin: isSectorAdmin(actor) };
+    const viewer = peopleViewer(actor);
     const [rows, levels, shifts] = await Promise.all([
-      this.repo.listPeople(sector.id, includeInactive),
+      this.repo.listPeople(sector.id, includeInactive, viewer),
       this.levels.listActive(),
       this.shifts.listAll(),
     ]);
@@ -91,22 +94,29 @@ export class SectorPeopleService {
     q: string,
   ): Promise<SectorPeopleCandidatesResponse> {
     const { actor, sector } = await this.requireManageable(actorId, sectorId);
+    const viewer = peopleViewer(actor);
     const items = await this.repo.listCandidates({
       sectorId: sector.id,
       q,
       onlyUnassignedWithoutAccess: !isSectorAdmin(actor),
+      searchPhone: viewer.fullPhone,
     });
-    // A política confirma o recorte da consulta (D6) item a item.
-    return {
-      items: items.filter((item) =>
+    // A política confirma o recorte da consulta (D6) item a item; o nome sai pela D11.
+    const shown = items
+      .filter((item) =>
         canPickExisting(actor, sector, {
           id: item.id,
           sectorId: item.sector?.id ?? null,
           hasAccess: item.hasAccess,
           isActive: true,
         }),
-      ),
-    };
+      )
+      .map((item) => ({
+        ...item,
+        name: personNameView(item.name, item.hasAccess, viewer),
+      }));
+    // I2: na ordem do nome exibido (empate pelo id), nunca na do nome real.
+    return { items: sortByName(shown, ({ name, id }) => ({ name, id })) };
   }
 
   async contactCandidates(
@@ -114,7 +124,8 @@ export class SectorPeopleService {
     sectorId: string,
     q: string,
   ): Promise<SectorContactCandidatesResponse> {
-    await this.requireManageable(actorId, sectorId);
-    return { items: await this.repo.listContactCandidates(q) };
+    const { actor } = await this.requireManageable(actorId, sectorId);
+    const viewer = peopleViewer(actor);
+    return { items: await this.repo.listContactCandidates(q, viewer) };
   }
 }

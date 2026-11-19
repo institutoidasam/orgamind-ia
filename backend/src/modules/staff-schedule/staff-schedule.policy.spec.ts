@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TeamActor } from '../team-whatsapp/team-whatsapp.policy';
+import { actorWith } from '../../shared/authz/actor.test-fixtures';
 import {
   canAssignSector,
   canEditPerson,
@@ -15,10 +16,7 @@ function actor(
   managedSectorIds: string[] = [],
 ): TeamActor {
   return {
-    id: `actor-${role}`,
-    role,
-    isActive: true,
-    hasAccess: true,
+    ...actorWith(role, { id: `actor-${role}` }),
     managedSectorIds,
   };
 }

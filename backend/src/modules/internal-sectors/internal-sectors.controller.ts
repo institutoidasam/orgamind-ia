@@ -9,6 +9,7 @@ import {
   Req,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { RequirePermission } from '../auth/decorators/require-permission.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import {
@@ -28,25 +29,32 @@ export class InternalSectorsController {
   ) {
     return this.sectors.list(q.page, q.pageSize, q.activeOnly);
   }
-  @Roles('ADMIN') @Post() create(
+  @RequirePermission('estrutura.manter') @Post() create(
     @Body() dto: CreateSectorDto,
     @Req() req: AuthRequest,
   ) {
-    return this.sectors.create(dto, req.user.sub);
+    return this.sectors.create(dto, req.user.sub, req.user.role);
   }
-  @Roles('ADMIN') @Get(':id') get(@Param('id') id: string) {
-    return this.sectors.get(id);
+  @RequirePermission('estrutura.manter') @Get(':id') get(
+    @Param('id') id: string,
+    @Req() req: AuthRequest,
+  ) {
+    return this.sectors.get(id, req.user.role);
   }
-  @Roles('ADMIN') @Patch(':id') update(
+  @RequirePermission('estrutura.manter') @Patch(':id') update(
     @Param('id') id: string,
     @Body() dto: UpdateSectorDto,
     @Req() req: AuthRequest,
   ) {
-    return this.sectors.update(id, dto, req.user.sub);
+    return this.sectors.update(id, dto, req.user.sub, req.user.role);
   }
   @Roles('ADMIN', 'SUPERVISOR', 'OPERATOR', 'VIEWER')
   @Get(':id/members')
-  members(@Param('id') id: string, @Query() q: MembersQueryDto) {
-    return this.sectors.members(id, q.eligible);
+  members(
+    @Param('id') id: string,
+    @Query() q: MembersQueryDto,
+    @Req() req: AuthRequest,
+  ) {
+    return this.sectors.members(id, q.eligible, req.user.role);
   }
 }

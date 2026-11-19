@@ -1,4 +1,5 @@
 import type { Role } from '@prisma/client';
+import type { PermissionKey } from '../../shared/authz/permissions';
 
 /**
  * Política P1 da página do setor (pura). O serviço resolve existência (404 só
@@ -9,6 +10,8 @@ export type PeopleActor = {
   role: Role;
   isActive: boolean;
   hasAccess: boolean;
+  /** Permissões efetivas do papel, lidas do banco junto do ator (DB4, GB3). */
+  permissions: readonly PermissionKey[];
 };
 export type PeopleSector = {
   id: string;

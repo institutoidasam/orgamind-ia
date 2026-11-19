@@ -1,8 +1,17 @@
 import type { ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import type { Role } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import { ROLES_KEY } from '../auth/decorators/roles.decorator';
+import { PERMISSION_KEY } from '../auth/decorators/require-permission.decorator';
+import { PermissionsGuard } from '../auth/permissions.guard';
 import { RolesGuard } from '../auth/roles.guard';
+import type { PermissionsService } from '../permissions/permissions.service';
+import {
+  permissionsWith,
+  type PermissionChange,
+} from '../../shared/authz/actor.test-fixtures';
+import { PERMISSION_DENIED_TEXT } from '../../shared/authz/permissions';
 import { LevelsController } from './levels.controller';
 import type { LevelsService } from './levels.service';
 
@@ -10,8 +19,13 @@ type Handler = 'list' | 'create' | 'update' | 'reorder';
 const HANDLERS = Object.getOwnPropertyNames(LevelsController.prototype).filter(
   (name) => name !== 'constructor',
 ) as Handler[];
+const DENIED = {
+  status: 403,
+  code: 'auth.permission_denied',
+  detail: PERMISSION_DENIED_TEXT['estrutura.manter'],
+};
 
-function context(handler: Handler, role: string) {
+function context(handler: Handler, role: Role) {
   return {
     getHandler: () => LevelsController.prototype[handler],
     getClass: () => LevelsController,
@@ -19,10 +33,26 @@ function context(handler: Handler, role: string) {
   } as unknown as ExecutionContext;
 }
 
+/** Cadeia do app: `RolesGuard`, depois `PermissionsGuard`; `change` ajusta a matriz do papel. */
+async function passesGuards(
+  handler: Handler,
+  role: Role,
+  change: PermissionChange = {},
+) {
+  const reflector = new Reflector();
+  const permissions = {
+    effectiveFor: (r: Role) => Promise.resolve(permissionsWith(r, change)),
+  } as unknown as PermissionsService;
+  const ctx = context(handler, role);
+  return (
+    new RolesGuard(reflector).canActivate(ctx) &&
+    (await new PermissionsGuard(reflector, permissions).canActivate(ctx))
+  );
+}
+
 describe('LevelsController — autorização', () => {
-  it('todas as rotas exigem ADMIN e não há rota de apagar', () => {
+  it('a classe exige estrutura.manter, sem @Roles em classe nem em rota e sem rota de apagar', () => {
     const reflector = new Reflector();
-    const guard = new RolesGuard(reflector);
 
     expect([...HANDLERS].sort()).toEqual([
       'create',
@@ -30,21 +60,35 @@ describe('LevelsController — autorização', () => {
       'reorder',
       'update',
     ]);
-    expect(reflector.get(ROLES_KEY, LevelsController)).toEqual(['ADMIN']);
+    expect(reflector.get(PERMISSION_KEY, LevelsController)).toBe(
+      'estrutura.manter',
+    );
+    expect(reflector.get(ROLES_KEY, LevelsController)).toBeUndefined();
     for (const handler of HANDLERS) {
-      // Nenhuma rota sobrescreve o papel do controller.
-      expect(
-        reflector.get(ROLES_KEY, LevelsController.prototype[handler]),
-      ).toBeUndefined();
-      for (const role of ['SUPERVISOR', 'OPERATOR', 'VIEWER']) {
-        expect(() => guard.canActivate(context(handler, role))).toThrow(
-          expect.objectContaining({
-            status: 403,
-            code: 'auth.insufficient_role',
-          }),
-        );
+      const route = LevelsController.prototype[handler];
+      expect(reflector.get(ROLES_KEY, route)).toBeUndefined();
+      expect(reflector.get(PERMISSION_KEY, route)).toBeUndefined();
+    }
+  });
+
+  it('com a matriz inicial só o ADMIN passa; SUPERVISOR, OPERATOR e VIEWER recebem 403 auth.permission_denied', async () => {
+    for (const handler of HANDLERS) {
+      await expect(passesGuards(handler, 'ADMIN')).resolves.toBe(true);
+      for (const role of ['SUPERVISOR', 'OPERATOR', 'VIEWER'] as const) {
+        await expect(passesGuards(handler, role)).rejects.toMatchObject(DENIED);
       }
-      expect(guard.canActivate(context(handler, 'ADMIN'))).toBe(true);
+    }
+  });
+
+  it('com estrutura.manter liberada ao SUPERVISOR, ele passa em todas as rotas e o OPERATOR segue negado', async () => {
+    const grant = { grant: ['estrutura.manter'] } as const;
+    for (const handler of HANDLERS) {
+      await expect(passesGuards(handler, 'SUPERVISOR', grant)).resolves.toBe(
+        true,
+      );
+      await expect(passesGuards(handler, 'OPERATOR')).rejects.toMatchObject(
+        DENIED,
+      );
     }
   });
 });

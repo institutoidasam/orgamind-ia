@@ -1,4 +1,5 @@
 import type { z } from 'zod';
+import { nameView, phoneView } from '../../shared/authz/phone-visibility';
 import type { ShiftRef } from '../../schemas/contracts/shift.schema';
 import {
   rosterSnapshotSchema,
@@ -14,6 +15,7 @@ import {
   resolveDay,
   type DaySituation,
 } from '../staff-schedule/schedule-resolver';
+import { sortByViewedName } from './team-whatsapp.name-view';
 import type {
   TeamMemberRow,
   TeamMemberWithSchedule,
@@ -211,13 +213,22 @@ export function rosterSnapshot(
   return { working, off };
 }
 
-/** Membro do GET roster: telefone que o envio usaria (contato ligado, senão o do usuário). */
-export function toRosterMember(m: DayMember): TeamRosterMember {
+/**
+ * Membro do GET roster: telefone que o envio usaria (contato ligado, senão o do
+ * usuário). `fullPhone` (`telefone.ver_completo` do ator) decide se o número
+ * completo sai; a máscara e `hasPhone` saem sempre (CB5, `phoneView`).
+ */
+export function toRosterMember(
+  m: DayMember,
+  viewer: { fullPhone: boolean },
+): TeamRosterMember {
   return {
     id: m.id,
-    name: m.name,
+    name: nameView(m.name, { full: viewer.fullPhone }),
     email: m.email,
-    phoneE164: m.contact?.phoneE164 ?? m.phoneE164,
+    ...phoneView(m.contact?.phoneE164 ?? m.phoneE164, {
+      full: viewer.fullPhone,
+    }),
     isActive: m.isActive,
     jobTitle: m.jobTitle,
     fromOtherSector: m.fromOtherSector,
@@ -228,6 +239,26 @@ export function toRosterMember(m: DayMember): TeamRosterMember {
       m.contactAuthorization === 'AUTORIZADO' &&
       m.authorizationSource === 'CADASTRO_ANTERIOR',
   };
+}
+
+/**
+ * Membros do GET roster, na ordem da escala (`dayMembers`: setor principal e
+ * depois os de fora, cada grupo por nome). Sem a chave, o nome-telefone sai
+ * mascarado e a ordem passa a ser pelo nome exibido (`sortByViewedName`).
+ */
+export function toRosterMembers(
+  members: readonly DayMember[],
+  viewer: { fullPhone: boolean },
+): TeamRosterMember[] {
+  return sortByViewedName(
+    members.map((m) => toRosterMember(m, viewer)),
+    viewer.fullPhone,
+    (m) => ({
+      group: Number(m.fromOtherSector),
+      name: m.name ?? m.email ?? '',
+      id: m.id,
+    }),
+  );
 }
 
 /** Filtro de nível do envio (C5); `null` = todos. */

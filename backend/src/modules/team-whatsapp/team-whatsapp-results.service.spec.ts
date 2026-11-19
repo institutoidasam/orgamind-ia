@@ -10,6 +10,7 @@ import type {
   TeamWhatsappRepository,
 } from './team-whatsapp.repository';
 import type { TeamActor } from './team-whatsapp.policy';
+import { actorWith } from '../../shared/authz/actor.test-fixtures';
 import { TeamWhatsappResultsService } from './team-whatsapp-results.service';
 import { ADMIN, MANAGER, PHONE } from './team-whatsapp.test-fixtures';
 
@@ -109,7 +110,7 @@ describe.each(['detail', 'recipients'] as const)(
       ['OPERATOR, envio de outro autor', MANAGER, OTHER_AUTHOR],
       [
         'SUPERVISOR gestor, envio de outro autor',
-        { ...MANAGER, role: 'SUPERVISOR' },
+        { ...MANAGER, ...actorWith('SUPERVISOR', { id: MANAGER.id }) },
         OTHER_AUTHOR,
       ],
       ['OPERATOR, envio sem autor', MANAGER, null],
@@ -130,7 +131,7 @@ describe.each(['detail', 'recipients'] as const)(
     );
 
     it.each<[string, TeamActor | null]>([
-      ['VIEWER', { ...MANAGER, role: 'VIEWER' }],
+      ['VIEWER', { ...MANAGER, ...actorWith('VIEWER', { id: MANAGER.id }) }],
       ['OPERATOR sem setor gerido', { ...MANAGER, managedSectorIds: [] }],
       ['ator inativo', { ...MANAGER, isActive: false }],
       ['ator sem acesso', { ...MANAGER, hasAccess: false }],

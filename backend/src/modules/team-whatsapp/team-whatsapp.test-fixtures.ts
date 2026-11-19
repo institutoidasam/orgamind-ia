@@ -9,6 +9,7 @@ import type {
   TeamWhatsappRepository,
 } from './team-whatsapp.repository';
 import type { TeamActor } from './team-whatsapp.policy';
+import { actorWith } from '../../shared/authz/actor.test-fixtures';
 import type { LevelsRepository } from '../levels/levels.repository';
 import type { ConsentService } from '../consent/consent.service';
 import type { AuditService } from '../../shared/audit/audit.service';
@@ -22,17 +23,11 @@ import type {
 export const PHONE = '+5592991234567';
 export const SUPPRESSED = '+5592988887777';
 export const ADMIN: TeamActor = {
-  id: 'a',
-  role: 'ADMIN',
-  isActive: true,
-  hasAccess: true,
+  ...actorWith('ADMIN', { id: 'a' }),
   managedSectorIds: [],
 };
 export const MANAGER: TeamActor = {
-  id: 'm',
-  role: 'OPERATOR',
-  isActive: true,
-  hasAccess: true,
+  ...actorWith('OPERATOR', { id: 'm' }),
   managedSectorIds: ['s1'],
 };
 

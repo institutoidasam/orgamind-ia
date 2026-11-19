@@ -26,6 +26,21 @@ export type AuditTrailPerson = {
   registration: string | null;
 };
 
+/** Setor, turno ou nível pelo nome, ativo ou não (o passado não some ao inativar). */
+type AssignmentRef = { id: string; name: string };
+
+/** Linha de vínculo como a consulta "Vínculos" a lê (DV13); sem autor nem data de gravação. */
+export type AuditTrailAssignmentRow = {
+  id: string;
+  validFrom: Date | null;
+  validTo: Date | null;
+  sector: AssignmentRef | null;
+  shift: AssignmentRef | null;
+  level: AssignmentRef | null;
+};
+
+const REF_SELECT = { select: { id: true, name: true } } as const;
+
 const ROW_SELECT = {
   id: true,
   createdAt: true,
@@ -79,6 +94,26 @@ export class AuditTrailRepository {
     return this.prisma.user.findMany({
       where: { id: { in: [...ids] } },
       select: { id: true, name: true, registration: true },
+    });
+  }
+
+  /** Aberta primeiro, depois por fim decrescente (DV13); início e `id` desempatam. */
+  findAssignments(userId: string): Promise<AuditTrailAssignmentRow[]> {
+    return this.prisma.userAssignment.findMany({
+      where: { userId },
+      select: {
+        id: true,
+        validFrom: true,
+        validTo: true,
+        sector: REF_SELECT,
+        shift: REF_SELECT,
+        level: REF_SELECT,
+      },
+      orderBy: [
+        { validTo: { sort: 'desc', nulls: 'first' } },
+        { validFrom: { sort: 'desc', nulls: 'last' } },
+        { id: 'desc' },
+      ],
     });
   }
 

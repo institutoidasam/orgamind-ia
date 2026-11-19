@@ -7,6 +7,10 @@ import {
   fieldChangeSchema,
   type PersonHistoryQuery,
 } from '../../schemas/contracts/audit-trail.schema';
+import type {
+  PersonAssignment,
+  PersonAssignments,
+} from '../../schemas/contracts/person-assignments.schema';
 import {
   canQueryAuditTrail,
   canViewPersonHistory,
@@ -14,7 +18,7 @@ import {
 } from '../../shared/authz/person-actions.policy';
 import { hasPermission } from '../../shared/authz/permissions';
 import { nameView } from '../../shared/authz/phone-visibility';
-import { addDays, zonedStart } from '../staff-schedule/civil-date';
+import { addDays, fromDbDate, zonedStart } from '../staff-schedule/civil-date';
 import { viewableSectorIds } from '../staff-schedule/staff-schedule.policy';
 import type { TeamActor } from '../team-whatsapp/team-whatsapp.policy';
 import {
@@ -22,6 +26,7 @@ import {
   auditTrailPersonNotFound,
 } from './audit-trail.errors';
 import {
+  type AuditTrailAssignmentRow,
   type AuditTrailPerson,
   AuditTrailRepository,
   type AuditTrailRow,
@@ -57,15 +62,46 @@ export class AuditTrailService {
     return this.page(where, query.page, query.pageSize, actor);
   }
 
-  /**
-   * Histórico de uma pessoa (D18: só eventos categorizados). Fora do alcance e
-   * inexistente dão o mesmo 403; só quem vê qualquer pessoa recebe 404.
-   */
+  /** Histórico de uma pessoa (D18: só eventos categorizados); acesso por `personInReach`. */
   async personHistory(
     actorId: string,
     userId: string,
     query: PersonHistoryQuery,
   ): Promise<AuditTrailPage> {
+    const { actor, person } = await this.personInReach(actorId, userId);
+    const categories = personHistoryCategories(actor);
+    return this.page(
+      {
+        subjectUserId: person.id,
+        category: categories ? { in: categories } : { not: null },
+      },
+      query.page,
+      query.pageSize,
+      actor,
+    );
+  }
+
+  /**
+   * Vínculos de uma pessoa (DV13): setor, turno e nível com de e até, sem
+   * paginação; mesma regra de acesso do Histórico (`personInReach`).
+   */
+  async personAssignments(
+    actorId: string,
+    userId: string,
+  ): Promise<PersonAssignments> {
+    const { person } = await this.personInReach(actorId, userId);
+    const rows = await this.repo.findAssignments(person.id);
+    return { items: rows.map(toAssignment) };
+  }
+
+  /**
+   * Acesso à ficha (Histórico e Vínculos). Fora do alcance e inexistente dão o
+   * mesmo 403; só quem vê qualquer pessoa recebe 404.
+   */
+  private async personInReach(
+    actorId: string,
+    userId: string,
+  ): Promise<{ actor: TeamActor; person: { id: string } }> {
     const [actor, person] = await Promise.all([
       this.repo.findActor(actorId),
       this.repo.findPerson(userId),
@@ -79,16 +115,7 @@ export class AuditTrailService {
     if (!canViewPersonHistory(actor, inReach(actor, person.sectorId))) {
       throw auditTrailForbidden();
     }
-    const categories = personHistoryCategories(actor);
-    return this.page(
-      {
-        subjectUserId: person.id,
-        category: categories ? { in: categories } : { not: null },
-      },
-      query.page,
-      query.pageSize,
-      actor,
-    );
+    return { actor, person };
   }
 
   /** Nomes que são telefone (D11) só saem inteiros a quem tem `telefone.ver_completo`. */
@@ -199,5 +226,24 @@ function toEntry(
     subject: toSubject(row.subjectUserId, people, view),
     reason: row.reason,
     changes: toChanges(row.changes, view),
+  };
+}
+
+type AssignmentRef = AuditTrailAssignmentRow['sector'];
+
+/** Só `id` e `name`: nome de setor, turno e nível sai como está (GV7). */
+function toRef(ref: AssignmentRef): PersonAssignment['sector'] {
+  return ref ? { id: ref.id, name: ref.name } : null;
+}
+
+/** Datas `@db.Date` viram data civil; início e fim nulos continuam nulos (CV6). */
+function toAssignment(row: AuditTrailAssignmentRow): PersonAssignment {
+  return {
+    id: row.id,
+    sector: toRef(row.sector),
+    shift: toRef(row.shift),
+    level: toRef(row.level),
+    from: row.validFrom ? fromDbDate(row.validFrom) : null,
+    to: row.validTo ? fromDbDate(row.validTo) : null,
   };
 }

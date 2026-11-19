@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StaffScheduleBoard } from '../../schemas/contracts/staff-schedule.schema';
 import type { TeamActor } from '../team-whatsapp/team-whatsapp.policy';
+import type { AssignmentLine } from '../users/assignment-timeline';
 import { actorWith } from '../../shared/authz/actor.test-fixtures';
 import type { BoardPersonRow, ScheduleData } from './staff-schedule.repository';
 import { StaffScheduleService } from './staff-schedule.service';
@@ -53,6 +54,8 @@ type HarnessInput = {
   actor?: TeamActor | null;
   members?: BoardPersonRow[];
   visitors?: BoardPersonRow[];
+  assigned?: BoardPersonRow[];
+  lines?: Record<string, AssignmentLine[]>;
   data?: Record<string, Partial<ScheduleData>>;
 };
 
@@ -60,8 +63,8 @@ const byIds = <T extends { id: string }>(all: T[], ids: readonly string[]) =>
   Promise.resolve(all.filter((item) => ids.includes(item.id)));
 
 function harness(input: HarnessInput = {}) {
-  const { members = [], visitors = [], data = {} } = input;
-  const ids = [...members, ...visitors].map((p) => p.id);
+  const { members = [], visitors = [], assigned = [], data = {} } = input;
+  const ids = [...members, ...assigned, ...visitors].map((p) => p.id);
   const loaded = new Map(ids.map((id) => [id, { ...EMPTY, ...data[id] }]));
   const repo = {
     findActor: vi.fn().mockResolvedValue(input.actor ?? null),
@@ -73,7 +76,13 @@ function harness(input: HarnessInput = {}) {
     listActiveShifts: vi.fn().mockResolvedValue([MORNING, NIGHT]),
     listSectorPeople: vi.fn().mockResolvedValue(members),
     listVisitorIds: vi.fn().mockResolvedValue(visitors.map((v) => v.id)),
-    listPeopleByIds: vi.fn((only: readonly string[]) => byIds(visitors, only)),
+    listPeopleByIds: vi.fn((only: readonly string[]) =>
+      byIds([...assigned, ...visitors], only),
+    ),
+    listAssignedUserIds: vi.fn().mockResolvedValue(assigned.map((a) => a.id)),
+    loadAssignmentLines: vi
+      .fn()
+      .mockResolvedValue(new Map(Object.entries(input.lines ?? {}))),
     loadScheduleData: vi.fn().mockResolvedValue(loaded),
     findSectorsByIds: vi.fn((only: readonly string[]) =>
       byIds(ACTIVE_SECTORS, only),
@@ -109,6 +118,85 @@ const swap = (userId: string, note: string) => ({
   shiftId: NIGHT.id,
   sectorId: null,
   note,
+});
+
+const inLog = (from: string | null, to: string | null): AssignmentLine => ({
+  sectorId: LOG.id,
+  shiftId: MORNING.id,
+  levelId: null,
+  from,
+  to,
+});
+const inProd = (from: string | null, to: string | null): AssignmentLine => ({
+  ...inLog(from, to),
+  sectorId: PROD.id,
+});
+
+describe('StaffScheduleService.board — vínculo pela data (aceite 17)', () => {
+  it('from >= hoje não consulta linhas de vínculo', async () => {
+    const { repo, service } = harness({ actor: ADMIN, members: [HOME_ANA] });
+
+    const board = await service.board(ADMIN.id, {
+      sectorId: PROD.id,
+      from: '2026-10-21',
+      to: '2026-10-27',
+    });
+
+    expect(repo.listAssignedUserIds).not.toHaveBeenCalled();
+    expect(repo.loadAssignmentLines).not.toHaveBeenCalled();
+    expect(board.rows.map((row) => row.userId)).toEqual(['ana']);
+  });
+
+  it('período todo passado: entra quem estava no setor (mesmo hoje em outro) e sai quem chegou depois', async () => {
+    const bia = person('bia', { name: 'Bia', sectorId: LOG.id });
+    const past = { sectorId: PROD.id, from: '2026-10-12', to: '2026-10-18' };
+    const { repo, service } = harness({
+      actor: ADMIN,
+      members: [HOME_ANA],
+      assigned: [bia],
+      lines: { ana: [inLog(null, '2026-10-20')], bia: [inProd(null, null)] },
+    });
+
+    const board = await service.board(ADMIN.id, past);
+
+    expect(board.rows.map((row) => [row.userId, row.fromOtherSector])).toEqual([
+      ['bia', false],
+    ]);
+    expect(board.rows[0].days[0].situation).toMatchObject({
+      sectorId: PROD.id,
+    });
+    expect(repo.listAssignedUserIds).toHaveBeenCalledWith(
+      PROD.id,
+      past.from,
+      past.to,
+      501,
+    );
+    expect(repo.loadAssignmentLines).toHaveBeenCalledWith(
+      ['ana', 'bia'],
+      past.from,
+      past.to,
+    );
+  });
+});
+
+describe('StaffScheduleService.board — o mesmo today', () => {
+  it('usa o mesmo today no loadPeople e na resposta, mesmo se a meia-noite passa no meio', async () => {
+    const { repo, service } = harness({ actor: ADMIN, members: [HOME_ANA] });
+    repo.listSectorPeople.mockImplementation(() => {
+      // 01:00 de 22/10 em Manaus: um segundo `todayIn` já daria 22/10.
+      vi.setSystemTime(new Date('2026-10-22T05:00:00Z'));
+      return Promise.resolve([HOME_ANA]);
+    });
+
+    const board = await service.board(ADMIN.id, WEEK);
+
+    expect(board.today).toBe('2026-10-21');
+    expect(repo.loadAssignmentLines).toHaveBeenCalledWith(
+      ['ana'],
+      WEEK.from,
+      '2026-10-20',
+    );
+  });
 });
 
 const PHONE_A = '+5592911112222';

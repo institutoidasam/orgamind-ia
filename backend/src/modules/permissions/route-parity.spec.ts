@@ -114,8 +114,10 @@ const PARITY: ParityRow[] = [
   },
 ];
 
-/** Rotas que não existiam antes (não são "função que já existia"); vazia neste lote. */
-const NEW_ROUTES: readonly string[] = [];
+/** Rotas novas do Lote C (não são "função que já existia"): ainda sem linha na tabela de paridade. */
+const NEW_ROUTES: readonly string[] = [
+  'AuditTrailController GET /people/:userId/assignments',
+];
 
 function withoutNew(found: string[], added: readonly string[]): string[] {
   return found.filter((route) => !added.includes(route));

@@ -67,6 +67,10 @@ const grant = (role: 'OPERATOR' | 'ADMIN' = 'OPERATOR') =>
   svc.grantAccess('admin', 'p1', { email: '  Maria@IDASAM.org ', role });
 const created = () => repo.createWithAudit.mock.calls[0]?.[0];
 const patched = () => repo.updateWithLastAdminGuard.mock.calls[0]?.[1];
+// Setor, turno e nível vão só no parâmetro `assignment` do repositório (DV5).
+const createdLink = () => repo.createWithAudit.mock.calls[0]?.[2]?.patch;
+const patchedLink = () =>
+  repo.updateWithLastAdminGuard.mock.calls[0]?.[3]?.patch;
 // O contrato descreve o JSON (datas viram string).
 const wire = (value: unknown) => JSON.parse(JSON.stringify(value)) as unknown;
 const uniqueEmail = () =>
@@ -109,10 +113,10 @@ describe('criar sem acesso', () => {
       password: null,
       mustChangePassword: false,
       phoneE164: '+5592991234567',
-      sector: { connect: { id: 's1' } },
       contact: { connect: { id: 'c1' } },
       createdBy: { connect: { id: 'admin' } },
     });
+    expect(createdLink()).toMatchObject({ sectorId: 's1' });
     expect(phones.resolveContactId.mock.calls).toContainEqual([
       '+5592991234567',
       'Maria',
@@ -128,6 +132,7 @@ describe('criar sem acesso', () => {
   it('sem setor é aceito', async () => {
     await createPerson({ sectorId: null });
     expect(created()?.sector).toBeUndefined();
+    expect(createdLink()).toMatchObject({ sectorId: null });
     expect(repo.findActiveSector.mock.calls).toEqual([]);
   });
 });
@@ -149,9 +154,7 @@ describe('criar sem acesso', () => {
     expect(repo.findLevelForAssignment.mock.calls).toContainEqual([
       'level_employee',
     ]);
-    expect(created()).toMatchObject({
-      level: { connect: { id: 'level_employee' } },
-    });
+    expect(createdLink()).toMatchObject({ levelId: 'level_employee' });
   });
 });
 
@@ -274,7 +277,7 @@ describe('regras de quem não tem acesso', () => {
 
   it('PATCH sectorId null em sem acesso é aceito', async () => {
     await svc.updateUser('p1', { sectorId: null }, 'admin');
-    expect(patched()).toMatchObject({ sector: { disconnect: true } });
+    expect(patchedLink()).toEqual({ sectorId: null });
   });
 });
 
@@ -301,12 +304,14 @@ describe('nível na edição', () => {
       isActive: false,
     });
     await svc.updateUser('p1', { levelId: 'level_old' }, 'admin');
-    expect(patched()).toEqual({ level: { connect: { id: 'level_old' } } });
+    expect(patched()).toEqual({});
+    expect(patchedLink()).toEqual({ levelId: 'level_old' });
   });
 
   it('PATCH levelId null limpa o nível sem consultar', async () => {
     await svc.updateUser('p1', { levelId: null }, 'admin');
-    expect(patched()).toEqual({ level: { disconnect: true } });
+    expect(patched()).toEqual({});
+    expect(patchedLink()).toEqual({ levelId: null });
     expect(repo.findLevelForAssignment.mock.calls).toEqual([]);
   });
 });
@@ -332,9 +337,7 @@ describe('nível no convite (com acesso)', () => {
 
   it('convite com levelId grava o nível', async () => {
     await invite('level_employee');
-    expect(created()).toMatchObject({
-      level: { connect: { id: 'level_employee' } },
-    });
+    expect(createdLink()).toMatchObject({ levelId: 'level_employee' });
   });
 
   it.each([

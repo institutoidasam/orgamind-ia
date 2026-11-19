@@ -11,6 +11,7 @@ import type {
 } from '../../schemas/contracts/staff-schedule.schema';
 import { findTeamActor } from '../team-whatsapp/team-actor.query';
 import type { TeamActor } from '../team-whatsapp/team-whatsapp.policy';
+import type { AssignmentLine } from '../users/assignment-timeline';
 import { fromDbDate, toDbDate, type CivilDate } from './civil-date';
 import { planOverlap, type OverlapPlan } from './exception-overlap';
 import type { ScheduleCycle } from './schedule-resolver';
@@ -78,6 +79,28 @@ export type ScheduleData = {
 function overlaps(from: CivilDate, to: CivilDate) {
   return { startDate: { lte: toDbDate(to) }, endDate: { gte: toDbDate(from) } };
 }
+
+/** Linha de vínculo que cruza from..to; início nulo = desde sempre, fim nulo = aberta. */
+function crossesPeriod(
+  from: CivilDate,
+  to: CivilDate,
+): Prisma.UserAssignmentWhereInput {
+  return {
+    AND: [
+      { OR: [{ validFrom: null }, { validFrom: { lte: toDbDate(to) } }] },
+      { OR: [{ validTo: null }, { validTo: { gte: toDbDate(from) } }] },
+    ],
+  };
+}
+
+const assignmentLineSelect = {
+  userId: true,
+  sectorId: true,
+  shiftId: true,
+  levelId: true,
+  validFrom: true,
+  validTo: true,
+} satisfies Prisma.UserAssignmentSelect;
 
 function toSchedule(row: ScheduleRow): StaffSchedule {
   return {
@@ -264,6 +287,51 @@ export class StaffScheduleRepository {
       bySector.set(sectorId, (bySector.get(sectorId) ?? new Set()).add(userId));
     }
     return new Map([...bySector].map(([id, users]) => [id, [...users]]));
+  }
+
+  /**
+   * Ativos com linha de vínculo no setor que cruza from..to (quem esteve no
+   * setor em algum dia do trecho passado do quadro); `take` limita (D13).
+   */
+  async listAssignedUserIds(
+    sectorId: string,
+    from: CivilDate,
+    to: CivilDate,
+    take: number,
+  ): Promise<string[]> {
+    const users = await this.prisma.user.findMany({
+      where: {
+        isActive: true,
+        assignments: { some: { sectorId, ...crossesPeriod(from, to) } },
+      },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      take,
+      select: { id: true },
+    });
+    return users.map((u) => u.id);
+  }
+
+  /** Linhas de vínculo que cruzam from..to, por pessoa; toda id pedida tem entrada. */
+  async loadAssignmentLines(
+    userIds: readonly string[],
+    from: CivilDate,
+    to: CivilDate,
+  ): Promise<Map<string, AssignmentLine[]>> {
+    const ids = [...userIds];
+    const rows = await this.prisma.userAssignment.findMany({
+      where: { userId: { in: ids }, ...crossesPeriod(from, to) },
+      orderBy: [{ validFrom: { sort: 'asc', nulls: 'first' } }, { id: 'asc' }],
+      select: assignmentLineSelect,
+    });
+    const lines = new Map<string, AssignmentLine[]>(ids.map((id) => [id, []]));
+    for (const { userId, validFrom, validTo, ...values } of rows) {
+      lines.get(userId)?.push({
+        ...values,
+        from: validFrom && fromDbDate(validFrom),
+        to: validTo && fromDbDate(validTo),
+      });
+    }
+    return lines;
   }
 
   /** Toda id pedida tem entrada; sem escala nem exceção = vazia. */

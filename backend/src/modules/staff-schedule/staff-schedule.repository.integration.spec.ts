@@ -101,6 +101,101 @@ async function seedVisitorCases() {
   return { sectorId: prod.id, expected: expected.sort() };
 }
 
+type LineSeed = {
+  userId: string;
+  sectorId: string | null;
+  from: string | null;
+  to: string | null;
+};
+/** Linha de vínculo gravada direto pelo Prisma (sem passar pelo UsersService). */
+function createAssignment(seed: LineSeed) {
+  return prisma.userAssignment.create({
+    data: {
+      userId: seed.userId,
+      sectorId: seed.sectorId,
+      shiftId: seed.sectorId ? 'shift_first' : null,
+      validFrom: seed.from === null ? null : toDbDate(seed.from),
+      validTo: seed.to === null ? null : toDbDate(seed.to),
+    },
+  });
+}
+
+describe('StaffScheduleRepository.listAssignedUserIds (Postgres real)', () => {
+  it('listAssignedUserIds acha linha em branco no início, fechada e aberta que cruzam o período; ignora inativos', async () => {
+    const prod = await createSector('AssProd');
+    const other = await createSector('AssOutro');
+    const cases: [boolean, Partial<LineSeed>, boolean?][] = [
+      [true, { from: null, to: '2026-10-20' }], // em branco no início
+      [true, { from: '2026-10-10', to: '2026-10-22' }], // fechada
+      [true, { from: '2026-10-01', to: null }], // aberta
+      [false, { from: '2026-10-01', to: '2026-10-18' }], // termina antes
+      [false, { from: '2026-10-26', to: null }], // começa depois
+      [false, { sectorId: other.id, from: null, to: null }], // outro setor
+      [false, { from: null, to: null }, false], // inativo
+    ];
+    const expected: string[] = [];
+    for (const [hit, line, active = true] of cases) {
+      const user = await createUser({ isActive: active });
+      const seed = { userId: user.id, sectorId: prod.id, ...line };
+      await createAssignment({ from: null, to: null, ...seed });
+      if (hit) expected.push(user.id);
+    }
+
+    const ids = await repo.listAssignedUserIds(
+      prod.id,
+      '2026-10-19',
+      '2026-10-25',
+      50,
+    );
+
+    expect([...ids].sort()).toEqual(expected.sort());
+    expect(
+      await repo.listAssignedUserIds(prod.id, '2026-10-19', '2026-10-25', 1),
+    ).toHaveLength(1);
+  });
+});
+
+describe('StaffScheduleRepository.loadAssignmentLines (Postgres real)', () => {
+  it('loadAssignmentLines devolve as linhas que cruzam o período por pessoa', async () => {
+    const prod = await createSector('LinProd');
+    const [ana, bia, caio] = await Promise.all([
+      createUser(),
+      createUser(),
+      createUser(),
+    ]);
+    const lines: Omit<LineSeed, 'sectorId'>[] = [
+      { userId: ana.id, from: null, to: '2026-10-10' }, // antes do período
+      { userId: ana.id, from: '2026-10-11', to: '2026-10-20' },
+      { userId: ana.id, from: '2026-10-21', to: null },
+      { userId: bia.id, from: null, to: '2026-10-20' },
+    ];
+    for (const line of lines) {
+      await createAssignment({ ...line, sectorId: prod.id });
+    }
+
+    const map = await repo.loadAssignmentLines(
+      [ana.id, bia.id, caio.id],
+      '2026-10-19',
+      '2026-10-25',
+    );
+
+    const row = (from: string | null, to: string | null) => ({
+      sectorId: prod.id,
+      shiftId: 'shift_first',
+      levelId: null,
+      from,
+      to,
+    });
+    expect([...map.keys()].sort()).toEqual([ana.id, bia.id, caio.id].sort());
+    expect(map.get(ana.id)).toEqual([
+      row('2026-10-11', '2026-10-20'),
+      row('2026-10-21', null),
+    ]);
+    expect(map.get(bia.id)).toEqual([row(null, '2026-10-20')]);
+    expect(map.get(caio.id)).toEqual([]);
+  });
+});
+
 describe('StaffScheduleRepository.listVisitorIds (Postgres real)', () => {
   it('listVisitorIds só traz OTHER_SECTOR para o setor e no período', async () => {
     const { sectorId, expected } = await seedVisitorCases();

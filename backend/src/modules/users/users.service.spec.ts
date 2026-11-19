@@ -221,6 +221,7 @@ describe('UsersService.updateUser', () => {
       'u1',
       { name: 'New Name' },
       expect.any(Function),
+      undefined,
     );
   });
 });

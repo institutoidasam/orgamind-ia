@@ -15,6 +15,7 @@ const CATEGORY_LABEL: Record<AuditCategory, string> = {
   SCHEDULE: 'Escala',
   STRUCTURE: 'Estrutura',
   PERMISSIONS: 'Permissões',
+  SPREADSHEET: 'Planilhas',
 };
 
 const FIELD_LABEL: Record<string, string> = {
@@ -34,6 +35,13 @@ const FIELD_LABEL: Record<string, string> = {
   shift: 'Turno',
   level: 'Nível',
   manager: 'Gestor',
+  format: 'Formato',
+  statusFilter: 'Situação',
+  referenceDate: 'Data de referência',
+  rowCount: 'Linhas',
+  phoneVisibility: 'Telefone',
+  periodFrom: 'De',
+  periodTo: 'Até',
 };
 
 const ACTION_LABEL: Record<string, string> = {
@@ -72,11 +80,25 @@ const ACTION_LABEL: Record<string, string> = {
   'auth.password_changed': 'Senha alterada',
   'permission.matrix_updated': 'Permissões alteradas',
   'permission.matrix_restored': 'Permissões restauradas ao padrão',
+  'people.export': 'Exportou pessoas',
+  'schedule.export': 'Exportou escala',
 };
 
 const AUTHORIZATION_STATUS_LABEL: Record<string, string> = {
   AUTORIZADO: 'Autorizado',
   NAO_AUTORIZADO: 'Sem autorização',
+};
+
+const EXPORT_STATUS_LABEL: Record<string, string> = {
+  active: 'Ativas',
+  inactive: 'Inativas',
+  all: 'Todas',
+};
+
+const PHONE_VISIBILITY_LABEL: Record<string, string> = {
+  full: 'Completo',
+  masked: 'Mascarado',
+  partial: 'Completo em parte',
 };
 
 const AUTHORIZATION_SOURCE_VALUE_LABEL: Record<string, string> = {
@@ -129,11 +151,20 @@ export function formatAuditDateTime(iso: string): string {
 
 const CIVIL_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
+function civilDateLabel(value: string): string {
+  return CIVIL_DATE.test(value) ? formatDatePtBr(value) : value;
+}
+
 const TEXT_FORMATTER: Record<string, (value: string) => string> = {
   role: (value) => lookup(ROLE_LABEL, value),
   contactAuthorization: (value) => lookup(AUTHORIZATION_STATUS_LABEL, value),
   authorizationSource: (value) => lookup(AUTHORIZATION_SOURCE_VALUE_LABEL, value),
-  authorizationDate: (value) => (CIVIL_DATE.test(value) ? formatDatePtBr(value) : value),
+  authorizationDate: civilDateLabel,
+  referenceDate: civilDateLabel,
+  periodFrom: civilDateLabel,
+  periodTo: civilDateLabel,
+  statusFilter: (value) => lookup(EXPORT_STATUS_LABEL, value),
+  phoneVisibility: (value) => lookup(PHONE_VISIBILITY_LABEL, value),
 };
 
 function booleanLabel(field: string, value: boolean): string {

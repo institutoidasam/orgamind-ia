@@ -65,6 +65,7 @@ enum AuditCategory {
   SCHEDULE
   STRUCTURE
   PERMISSIONS
+  SPREADSHEET
 }
 
 model User {

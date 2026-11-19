@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DomainError } from '../errors/domain.error';
 import {
+  DEFAULT_MATRIX,
   PERMISSION_DENIED_TEXT,
   PERMISSION_KEYS,
   defaultPermissionsFor,
@@ -10,13 +11,21 @@ import {
 } from './permissions';
 import { actorWith, permissionsWith } from './actor.test-fixtures';
 
+const SUPERVISOR_DEFAULT = [
+  'pessoas.editar',
+  'pessoas.inativar',
+  'escala.alterar',
+  'telefone.ver_completo',
+  'equipe.enviar',
+  'equipe.disparo_amplo',
+  'trilha.consultar',
+];
+
 describe('defaultPermissionsFor', () => {
-  it('defaultPermissionsFor: ADMIN todas, VIEWER nenhuma, SUPERVISOR sem estrutura.manter, OPERATOR as 5 de B2', () => {
+  it('defaultPermissionsFor: ADMIN todas, VIEWER nenhuma, SUPERVISOR a lista explícita das sete, OPERATOR as 5 de B2', () => {
     expect(defaultPermissionsFor('ADMIN')).toEqual([...PERMISSION_KEYS]);
     expect(defaultPermissionsFor('VIEWER')).toEqual([]);
-    expect(defaultPermissionsFor('SUPERVISOR')).toEqual(
-      PERMISSION_KEYS.filter((key) => key !== 'estrutura.manter'),
-    );
+    expect(defaultPermissionsFor('SUPERVISOR')).toEqual(SUPERVISOR_DEFAULT);
     expect(defaultPermissionsFor('OPERATOR')).toEqual([
       'pessoas.editar',
       'escala.alterar',
@@ -27,18 +36,43 @@ describe('defaultPermissionsFor', () => {
   });
 });
 
+describe('pessoas.exportar na matriz padrão', () => {
+  it('SUPERVISOR e OPERATOR não têm pessoas.exportar por padrão; ADMIN tem; VIEWER não', () => {
+    // Linha ausente no banco vale o padrão: nenhum dos dois papéis editáveis exporta.
+    expect(resolvePermissions('SUPERVISOR', [])).not.toContain(
+      'pessoas.exportar',
+    );
+    expect(resolvePermissions('OPERATOR', [])).not.toContain(
+      'pessoas.exportar',
+    );
+    expect(defaultPermissionsFor('SUPERVISOR')).not.toContain(
+      'pessoas.exportar',
+    );
+    expect(defaultPermissionsFor('OPERATOR')).not.toContain('pessoas.exportar');
+    expect(defaultPermissionsFor('ADMIN')).toContain('pessoas.exportar');
+    expect(defaultPermissionsFor('VIEWER')).not.toContain('pessoas.exportar');
+  });
+
+  it('DEFAULT_MATRIX.SUPERVISOR é a lista explícita das sete chaves', () => {
+    expect(DEFAULT_MATRIX.SUPERVISOR).toEqual(SUPERVISOR_DEFAULT);
+  });
+});
+
 describe('resolvePermissions', () => {
   it('resolvePermissions: linha vence o padrão; ausente cai no padrão; chave desconhecida ignorada; ADMIN e VIEWER ignoram linhas', () => {
     const supervisorRows = [
       { key: 'trilha.consultar', granted: false },
       { key: 'estrutura.manter', granted: true },
-      { key: 'pessoas.exportar', granted: true },
+      { key: 'chave.inexistente', granted: true },
     ];
     const allFalse = PERMISSION_KEYS.map((key) => ({ key, granted: false }));
     const allTrue = PERMISSION_KEYS.map((key) => ({ key, granted: true }));
 
+    // trilha.consultar revogada pela linha; pessoas.exportar ausente cai no padrão (negada).
     expect(resolvePermissions('SUPERVISOR', supervisorRows)).toEqual(
-      PERMISSION_KEYS.filter((key) => key !== 'trilha.consultar'),
+      PERMISSION_KEYS.filter(
+        (key) => key !== 'trilha.consultar' && key !== 'pessoas.exportar',
+      ),
     );
     expect(resolvePermissions('OPERATOR', [])).toEqual(
       defaultPermissionsFor('OPERATOR'),
@@ -71,7 +105,7 @@ describe('permissionDenied', () => {
     });
   });
 
-  it('PERMISSION_DENIED_TEXT tem texto para cada uma das 8 chaves', () => {
+  it('PERMISSION_DENIED_TEXT tem texto para cada uma das 9 chaves', () => {
     expect(Object.keys(PERMISSION_DENIED_TEXT).sort()).toEqual(
       [...PERMISSION_KEYS].sort(),
     );

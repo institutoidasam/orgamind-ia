@@ -53,6 +53,22 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+describe('PermissionsMatrix: exportar pessoas e escala', () => {
+  it('mostra a linha com a explicação, desmarcada para Supervisor e Operador por padrão', async () => {
+    await renderMatrix(matrixWith(DEFAULTS.OPERATOR));
+
+    expect(box('Supervisor', 'Exportar pessoas e escala')).not.toBeChecked();
+    expect(box('Operador', 'Exportar pessoas e escala')).not.toBeChecked();
+    expect(box('Administrador', 'Exportar pessoas e escala')).toBeChecked();
+    expect(
+      screen.getByText(
+        'Baixar a lista de pessoas e a escala em CSV ou XLSX. Quem não é administrador exporta só os setores que gerencia.',
+      ),
+    ).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('pessoas.exportar');
+  });
+});
+
 describe('PermissionsMatrix: colunas fixas', () => {
   it('Administrador marcado e travado; Leitura desmarcado e travado; as outras com caixa livre', async () => {
     await renderMatrix(matrixWith(DEFAULTS.OPERATOR));

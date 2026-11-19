@@ -17,6 +17,7 @@ import { useAuthStore } from '@/stores/auth.store';
 import { useUsers, useDeleteUser, useResetUserPassword } from '@/features/users/api';
 import { AuthorizationBadge } from '@/features/people-record/components/authorization-badge';
 import { PersonHistoryDialog } from '@/features/audit-trail/components/person-history-dialog';
+import { ExportPeopleButton } from '@/features/people-export/components/export-people-button';
 import { InviteUserDialog } from '@/features/users/components/invite-user-dialog';
 import { EditUserDialog } from '@/features/users/components/edit-user-dialog';
 import { GrantAccessDialog } from '@/features/users/components/grant-access-dialog';
@@ -110,7 +111,10 @@ function UsersHeader({ onInvite }: { onInvite: () => void }) {
         <h1 className="text-2xl font-bold">Usuários</h1>
         <p className="text-sm" style={{ color: 'var(--foreground-muted)' }}>Cada pessoa tem um setor principal e um papel de acesso.</p>
       </div>
-      <Button onClick={onInvite}><UserPlus className="size-4 mr-2" />Cadastrar usuário</Button>
+      <div className="flex items-center gap-2">
+        <ExportPeopleButton />
+        <Button onClick={onInvite}><UserPlus className="size-4 mr-2" />Cadastrar usuário</Button>
+      </div>
     </div>
   );
 }

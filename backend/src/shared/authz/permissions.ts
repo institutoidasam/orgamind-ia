@@ -16,17 +16,30 @@ export const PERMISSION_KEYS = [
   'equipe.enviar',
   'equipe.disparo_amplo',
   'trilha.consultar',
+  'pessoas.exportar',
 ] as const;
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
 
 export const EDITABLE_ROLES = ['SUPERVISOR', 'OPERATOR'] as const;
 export type EditableRole = (typeof EDITABLE_ROLES)[number];
 
-/** Matriz inicial (spec B2). ADMIN e VIEWER não entram: são fixos. */
+/**
+ * Matriz inicial (spec B2). ADMIN e VIEWER não entram: são fixos. A lista do
+ * SUPERVISOR é explícita: chave nova não chega a ele por padrão, só por
+ * decisão registrada aqui e na migração que a semeia.
+ */
 export const DEFAULT_MATRIX: Readonly<
   Record<EditableRole, readonly PermissionKey[]>
 > = {
-  SUPERVISOR: PERMISSION_KEYS.filter((key) => key !== 'estrutura.manter'),
+  SUPERVISOR: [
+    'pessoas.editar',
+    'pessoas.inativar',
+    'escala.alterar',
+    'telefone.ver_completo',
+    'equipe.enviar',
+    'equipe.disparo_amplo',
+    'trilha.consultar',
+  ],
   OPERATOR: [
     'pessoas.editar',
     'escala.alterar',
@@ -95,6 +108,7 @@ export const PERMISSION_DENIED_TEXT: Readonly<Record<PermissionKey, string>> = {
     'Você não tem permissão para enviar a todos os setores de uma vez.',
   'trilha.consultar':
     'Você não tem permissão para consultar o histórico de alterações.',
+  'pessoas.exportar': 'Você não tem permissão para exportar pessoas e escala.',
 };
 
 export function permissionDenied(key: PermissionKey): DomainError {

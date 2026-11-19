@@ -509,6 +509,29 @@ describe('UsersPage Enviar WhatsApp', () => {
   });
 });
 
+describe('UsersPage botão Exportar', () => {
+  const asUser = (permissions: string[]) => {
+    authState.user = { id: 'admin-1', role: 'ADMIN', permissions } as typeof authState.user;
+  };
+
+  beforeEach(() => listing([users[0]]));
+  afterEach(() => { authState.user = { id: 'admin-1', role: 'ADMIN' }; });
+
+  it('Exportar aparece no cabeçalho para quem tem pessoas.exportar', () => {
+    asUser(['pessoas.exportar']);
+    render(<UsersPage />);
+    const exportar = screen.getByRole('button', { name: 'Exportar' });
+    expect(exportar.parentElement).toBe(screen.getByRole('button', { name: /Cadastrar usuário/ }).parentElement);
+  });
+
+  it('Exportar não aparece sem pessoas.exportar', () => {
+    asUser([]);
+    render(<UsersPage />);
+    expect(screen.getByRole('button', { name: /Cadastrar usuário/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Exportar' })).not.toBeInTheDocument();
+  });
+});
+
 async function openActions(user: ReturnType<typeof userEvent.setup>, rowName: RegExp) {
   const row = screen.getByRole('row', { name: rowName });
   await user.click(within(row).getByRole('button', { name: 'Ações' }));

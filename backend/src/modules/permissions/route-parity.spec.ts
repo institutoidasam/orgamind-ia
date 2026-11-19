@@ -28,6 +28,7 @@ import { ShiftsController } from '../shifts/shifts.controller';
 import { LevelsController } from '../levels/levels.controller';
 import { InternalSectorsController } from '../internal-sectors/internal-sectors.controller';
 import { AuditTrailController } from '../audit-trail/audit-trail.controller';
+import { PeopleExportController } from '../people-export/people-export.controller';
 
 /**
  * GB1 (aceite 10): com a matriz inicial, cada rota dos sete controllers permite
@@ -270,5 +271,121 @@ describe('detector de mistura de @Roles e @RequirePermission', () => {
   it('acusa permissão no handler com @Roles na classe, e o contrário', () => {
     expect(mixedRoutes(RolesClassPermissionHandler)).toHaveLength(1);
     expect(mixedRoutes(PermissionClassRolesHandler)).toHaveLength(1);
+  });
+});
+
+/** Controllers com a chave na classe (Etapa 2); o Lote E acrescenta o dele. */
+const CLASS_KEY_CONTROLLERS: {
+  controller: Type<object>;
+  key: PermissionKey;
+}[] = [{ controller: PeopleExportController, key: 'pessoas.exportar' }];
+
+/** Rotas cuja chave resolvida (handler vale sobre a classe) não é a esperada, ou que declaram `@Roles`. */
+function routesOffClassKey(
+  controller: Type<object>,
+  key: PermissionKey,
+): string[] {
+  return handlersOf(controller)
+    .filter(({ handler }) => {
+      const targets = [handler, controller];
+      const resolved = reflector.getAllAndOverride<PermissionKey | undefined>(
+        PERMISSION_KEY,
+        targets,
+      );
+      return (
+        resolved !== key ||
+        reflector.getAllAndOverride<unknown>(ROLES_KEY, targets) !== undefined
+      );
+    })
+    .map(({ route }) => `${controller.name} ${route}`);
+}
+
+/** `allow` ou o status do 403, por `rota papel`, com a matriz que o `guard` lê. */
+async function verdicts(
+  controller: Type<object>,
+  guard: PermissionsGuard,
+): Promise<Record<string, 'allow' | number>> {
+  const found: Record<string, 'allow' | number> = {};
+  for (const { route, handler } of handlersOf(controller)) {
+    for (const role of ALL) {
+      const ctx = routeContext(controller, handler, role);
+      try {
+        rolesGuard.canActivate(ctx);
+        await guard.canActivate(ctx);
+        found[`${route} ${role}`] = 'allow';
+      } catch (error) {
+        if (!(error instanceof DomainError)) throw error;
+        found[`${route} ${role}`] = error.status;
+      }
+    }
+  }
+  return found;
+}
+
+function expectedVerdicts(
+  controller: Type<object>,
+  allowed: readonly Role[],
+): Record<string, 'allow' | number> {
+  return Object.fromEntries(
+    handlersOf(controller).flatMap(({ route }) =>
+      ALL.map((role) => [
+        `${route} ${role}`,
+        allowed.includes(role) ? 'allow' : 403,
+      ]),
+    ),
+  );
+}
+
+/** Controladores de controle: a chave na classe, mas um handler com `@Roles` e outro com outra chave. */
+@RequirePermission('pessoas.exportar')
+class Faulty {
+  @Get('ok') ok() {}
+  @Get('roles') @Roles('ADMIN') withRoles() {}
+  @Get('other') @RequirePermission('pessoas.editar') other() {}
+}
+class NoKey {
+  @Get('a') a() {}
+}
+
+describe('controllers com a chave na classe (Etapa 2)', () => {
+  it('toda rota exige a chave e nenhuma declara @Roles', () => {
+    for (const { controller, key } of CLASS_KEY_CONTROLLERS) {
+      expect(handlersOf(controller).length).toBeGreaterThan(0);
+      expect(routesOffClassKey(controller, key)).toEqual([]);
+      expect(mixedRoutes(controller)).toEqual([]);
+    }
+  });
+
+  it('acusa rota sem a chave, com outra chave ou com @Roles', () => {
+    expect(routesOffClassKey(Faulty, 'pessoas.exportar')).toEqual([
+      'Faulty GET /roles',
+      'Faulty GET /other',
+    ]);
+    expect(routesOffClassKey(NoKey, 'pessoas.exportar')).toEqual([
+      'NoKey GET /a',
+    ]);
+  });
+
+  it('com a matriz padrão só o ADMIN passa; os outros recebem 403', async () => {
+    for (const { controller } of CLASS_KEY_CONTROLLERS) {
+      expect(await verdicts(controller, permissionsGuard)).toEqual(
+        expectedVerdicts(controller, ['ADMIN']),
+      );
+    }
+  });
+
+  it('com a chave liberada SUPERVISOR e OPERATOR passam; VIEWER continua recusado', async () => {
+    for (const { controller, key } of CLASS_KEY_CONTROLLERS) {
+      const granted = new PermissionsGuard(reflector, {
+        effectiveFor: (role: Role) =>
+          Promise.resolve(
+            role === 'VIEWER' ? [] : [...defaultPermissionsFor(role), key],
+          ),
+      } as unknown as PermissionsService);
+
+      expect(await verdicts(controller, granted)).toEqual(
+        expectedVerdicts(controller, ASO),
+      );
+    }
   });
 });

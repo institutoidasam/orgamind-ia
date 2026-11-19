@@ -31,6 +31,24 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.11.19.3',
+    date: '2026-11-19',
+    title: 'Exportar pessoas e escala',
+    items: [
+      {
+        text: 'Em Usuários e na página de cada setor, o botão Exportar baixa a lista de pessoas em CSV ou XLSX, filtrada por setor, turno, situação e data de referência.',
+        where: '/users',
+      },
+      {
+        text: 'Na Escala, o botão Exportar baixa o quadro do setor e do período na tela.',
+        where: '/escala',
+      },
+      {
+        text: 'Quem não pode ver o telefone completo recebe o telefone mascarado, e toda exportação fica registrada na Trilha de alterações, no tipo Planilhas. O administrador libera a exportação para Supervisor e Operador em Permissões.',
+      },
+    ],
+  },
+  {
     version: '2026.11.19.2',
     date: '2026-11-19',
     title: 'Histórico de vínculos',

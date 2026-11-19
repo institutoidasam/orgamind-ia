@@ -20,9 +20,9 @@ describe('savePermissionMatrixSchema', () => {
     ).toBe(true);
   });
 
-  it('recusa chave fora das 8 (pessoas.exportar)', () => {
+  it('recusa chave fora do catálogo (chave.inexistente)', () => {
     const result = savePermissionMatrixSchema.safeParse({
-      roles: { SUPERVISOR: ['pessoas.exportar'], OPERATOR: [] },
+      roles: { SUPERVISOR: ['chave.inexistente'], OPERATOR: [] },
     });
 
     expect(result.success).toBe(false);

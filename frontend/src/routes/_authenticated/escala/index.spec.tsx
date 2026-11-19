@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   remove: vi.fn(),
   put: vi.fn(),
   removeSchedule: vi.fn(),
+  exportSchedule: vi.fn(),
 }));
 
 vi.mock('@tanstack/react-router', () => ({
@@ -26,6 +27,9 @@ vi.mock('@/features/staff-schedule/api', () => ({
   useDeleteSchedule: () => ({ mutateAsync: mocks.removeSchedule, isPending: false }),
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('@/features/people-export/api', () => ({
+  useExportSchedule: () => ({ mutate: mocks.exportSchedule, isPending: false }),
+}));
 
 import { Route } from './index';
 
@@ -197,5 +201,37 @@ describe('/escala: editar escala', () => {
     // Ana não tem escala e o turno do cadastro (Noite) está ativo: o editor parte dele.
     expect(within(dialog).getByRole('combobox', { name: 'Modelo' })).toHaveTextContent('Semanal');
     expect(within(dialog).getByRole('combobox', { name: 'Turno' })).toHaveTextContent('Noite');
+  });
+});
+
+describe('/escala: botão Exportar', () => {
+  const user = (permissions: AuthUser['permissions']) =>
+    useAuthStore.setState({ user: { id: 'u1', email: 'a@b.c', name: 'A', role: 'SUPERVISOR', permissions } });
+
+  it('Exportar aparece na linha de controles para quem tem pessoas.exportar e leva setor e período da tela', async () => {
+    user(['pessoas.exportar']);
+    render(<Page />);
+
+    const u = userEvent.setup();
+    await u.click(screen.getByRole('button', { name: 'Exportar' }));
+    await u.click(screen.getByRole('menuitem', { name: 'CSV' }));
+
+    const { from, to } = lastRange();
+    expect(mocks.exportSchedule).toHaveBeenCalledWith({ format: 'csv', sectorId: 's1', from, to });
+  });
+
+  it('Exportar não aparece sem pessoas.exportar', () => {
+    user([]);
+    render(<Page />);
+    expect(screen.getByRole('tab', { name: 'Semana' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Exportar' })).not.toBeInTheDocument();
+  });
+
+  it('não aparece enquanto nenhum setor foi escolhido, mesmo com a chave', () => {
+    user(['pessoas.exportar']);
+    mockData([producao, logistica]);
+    render(<Page />);
+    expect(screen.getByRole('tab', { name: 'Semana' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Exportar' })).not.toBeInTheDocument();
   });
 });

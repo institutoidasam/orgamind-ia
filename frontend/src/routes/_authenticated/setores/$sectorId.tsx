@@ -8,6 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { extractApiError } from "@/lib/api-error";
 import { useAuthStore } from "@/stores/auth.store";
 import { usePermission } from "@/features/permissions/use-permission";
+import { ExportPeopleButton } from "@/features/people-export/components/export-people-button";
 import { SectorForm } from "@/features/internal-admin/components/sector-form";
 import { useSector, useUpdateSector } from "@/features/internal-admin/api";
 import { SectorNumber } from "@/features/internal-admin/components/sector-number";
@@ -53,7 +54,7 @@ function SectorDetail({ sectorId }: { sectorId: string }) {
   if (!data) return <Skeleton className="h-64 w-full" />;
   return (
     <main className="mx-auto max-w-4xl space-y-6">
-      <SectorHeader sector={data.sector} />
+      <SectorHeader sector={data.sector} exportSectorId={sectorId} />
       <PeopleSection sectorId={sectorId} data={data} includeInactive={includeInactive} onIncludeInactive={setIncludeInactive} />
       {canManageStructure && <AdminPanel sectorId={sectorId} />}
     </main>
@@ -87,8 +88,11 @@ type HeaderSector = {
   channel: SectorChannel | null;
 };
 
-/** `showNumber` falso: o número do setor (GB5) continua só do ADMIN onde a página não vem da lista de pessoas. */
-function SectorHeader({ sector, showNumber = true }: { sector: HeaderSector; showNumber?: boolean }) {
+/**
+ * `showNumber` falso: o número do setor (GB5) continua só do ADMIN onde a página não vem da lista de pessoas.
+ * `exportSectorId` só vem onde a lista de pessoas carregou: no `StructureOnly` o setor não é do ator e a exportação daria 403.
+ */
+function SectorHeader({ sector, showNumber = true, exportSectorId }: { sector: HeaderSector; showNumber?: boolean; exportSectorId?: string }) {
   return (
     <header className="flex justify-between gap-3">
       <div>
@@ -97,9 +101,12 @@ function SectorHeader({ sector, showNumber = true }: { sector: HeaderSector; sho
         <p className="text-sm text-muted-foreground">Gestor: {sector.manager?.name ?? "A definir"}</p>
         {showNumber && <p className="flex items-center gap-2 text-sm text-muted-foreground">Número: <SectorNumber channel={sector.channel} /></p>}
       </div>
-      <Button asChild variant="outline">
-        <Link to="/setores">Voltar</Link>
-      </Button>
+      <div className="flex items-start gap-2">
+        {exportSectorId && <ExportPeopleButton defaultSectorId={exportSectorId} />}
+        <Button asChild variant="outline">
+          <Link to="/setores">Voltar</Link>
+        </Button>
+      </div>
     </header>
   );
 }

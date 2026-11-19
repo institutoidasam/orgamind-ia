@@ -11,6 +11,7 @@ export const auditCategorySchema = z.enum([
   'SCHEDULE',
   'STRUCTURE',
   'PERMISSIONS',
+  'SPREADSHEET',
 ]);
 
 export const auditValueSchema = z.union([

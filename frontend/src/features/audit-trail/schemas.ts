@@ -2,7 +2,14 @@ import { z } from 'zod';
 
 /** Espelha o contrato da trilha do backend (`audit-trail.schema.ts`, C7). */
 
-export const AUDIT_CATEGORIES = ['PERSON', 'ASSIGNMENT', 'SCHEDULE', 'STRUCTURE', 'PERMISSIONS'] as const;
+export const AUDIT_CATEGORIES = [
+  'PERSON',
+  'ASSIGNMENT',
+  'SCHEDULE',
+  'STRUCTURE',
+  'PERMISSIONS',
+  'SPREADSHEET',
+] as const;
 export const auditCategorySchema = z.enum(AUDIT_CATEGORIES);
 export type AuditCategory = z.infer<typeof auditCategorySchema>;
 

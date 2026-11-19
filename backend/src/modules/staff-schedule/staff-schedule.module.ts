@@ -15,6 +15,6 @@ import { StaffScheduleService } from './staff-schedule.service';
     StaffScheduleEditService,
     StaffScheduleRepository,
   ],
-  exports: [StaffScheduleRepository],
+  exports: [StaffScheduleRepository, StaffScheduleService],
 })
 export class StaffScheduleModule {}

@@ -34,16 +34,32 @@ export function syncAuthStoreOnSelfEdit(id: string, data: EditUserInput) {
   });
 }
 
-type UsersFilters = { hasAccess?: true };
+export type UsersFilters = {
+  hasAccess?: boolean;
+  q?: string;
+  status?: "active" | "inactive" | "all";
+  authorization?: "UNVERIFIED" | "NOT_AUTHORIZED";
+};
 
-/** `filters.hasAccess` vira `?hasAccess=true` (filtro do servidor); sem filtro, lista todos. */
+/** Só o que foi informado vai na query; `hasAccess` segue só como `hasAccess=true`. */
+function usersFilterParams(filters?: UsersFilters) {
+  const q = filters?.q?.trim();
+  return {
+    ...(filters?.hasAccess ? { hasAccess: true } : {}),
+    ...(q ? { q } : {}),
+    ...(filters?.status ? { status: filters.status } : {}),
+    ...(filters?.authorization ? { authorization: filters.authorization } : {}),
+  };
+}
+
+/** `filters` vira parâmetros de busca do servidor; sem filtro, lista todos. */
 export function useUsers(page = 1, pageSize = 20, filters?: UsersFilters) {
-  const hasAccess = filters?.hasAccess ? { hasAccess: true as const } : {};
+  const params = { page, pageSize, ...usersFilterParams(filters) };
   return useQuery({
-    queryKey: ["users", { page, pageSize, ...hasAccess }],
+    queryKey: ["users", params],
     queryFn: () =>
       api
-        .get("users", { searchParams: { page, pageSize, ...hasAccess } })
+        .get("users", { searchParams: params })
         .json()
         .then((d) => userListResponseSchema.parse(d)),
   });
@@ -124,6 +140,16 @@ export function useUpdateUser() {
   });
 }
 
+/** Inativar ou reativar pela lista (D6): `PATCH users/:id` com motivo; 204 sem corpo. */
+export function useSetUserStatus() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, isActive, reason }: { id: string; isActive: boolean; reason: string }) =>
+      api.patch(`users/${id}`, { json: { isActive, reason } }),
+    onSuccess: () => invalidateUserList(qc),
+  });
+}
+
 export function useResetUserPassword() {
   const qc = useQueryClient();
   return useMutation({
@@ -133,6 +159,7 @@ export function useResetUserPassword() {
   });
 }
 
+/** Só sem histórico: com histórico a API responde 409 `user.has_history` (mensagem em error-messages.ts). */
 export function useDeleteUser() {
   const qc = useQueryClient();
   return useMutation({

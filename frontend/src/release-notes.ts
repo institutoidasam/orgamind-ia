@@ -31,6 +31,32 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.11.19',
+    date: '2026-11-19',
+    title: 'Ficha da pessoa e trilha de alterações',
+    items: [
+      {
+        text: 'Cada pessoa pode ter matrícula. A busca da lista de usuários e da página do setor também acha pela matrícula.',
+        where: '/users',
+      },
+      {
+        text: 'Ao cadastrar alguém, informe a autorização de contato: termo assinado, ficha de admissão, aceite pelo WhatsApp ou outro. Quem fica sem autorização não recebe mensagens da equipe. Quem já estava cadastrado aparece como "Cadastro anterior — origem não verificada" e continua recebendo.',
+        where: '/users',
+      },
+      {
+        text: 'No lugar de excluir, use Inativar. A pessoa deixa de receber mensagens e de entrar no sistema, e o histórico fica guardado. Reativar devolve tudo.',
+        where: '/users',
+      },
+      {
+        text: 'Toda alteração no cadastro pede o motivo.',
+      },
+      {
+        text: 'A nova tela Trilha de alterações mostra quem mudou o quê, quando, o antes e o depois, e o motivo. Na lista, a ação Histórico mostra as alterações de uma pessoa.',
+        where: '/trilha',
+      },
+    ],
+  },
+  {
     version: '2026.11.11',
     date: '2026-11-11',
     title: 'WhatsApp só pela Evolution',

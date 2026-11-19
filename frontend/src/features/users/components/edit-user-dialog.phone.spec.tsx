@@ -22,7 +22,10 @@ const base = {
 const withPhone = { ...base, phoneE164: "+5592991234567" };
 const phoneInput = () => screen.getByLabelText("Telefone (WhatsApp)") as HTMLInputElement;
 const open = (user: typeof base) => render(<EditUserDialog user={user} open onOpenChange={() => {}} isSelf={false} />);
-const save = (ui: ReturnType<typeof userEvent.setup>) => ui.click(screen.getByRole("button", { name: "Salvar" }));
+const save = async (ui: ReturnType<typeof userEvent.setup>) => {
+  await ui.type(screen.getByLabelText("Motivo da alteração"), "ajuste");
+  await ui.click(screen.getByRole("button", { name: "Salvar" }));
+};
 
 beforeEach(() => { vi.clearAllMocks(); state.mutateAsync.mockResolvedValue(undefined); });
 

@@ -10,6 +10,9 @@ describe("describeUserError", () => {
     ["users.no_access", 422, "Esta pessoa não tem acesso ao sistema."],
     ["users.already_has_access", 409, "Esta pessoa já tem acesso."],
     ["users.invalid_level", 422, "Nível inválido. Atualize a página e tente de novo."],
+    ["user.reason_required", 422, "Informe o motivo da alteração, de 3 a 200 caracteres."],
+    ["user.authorization_future_date", 422, "A data da autorização não pode ser futura."],
+    ["user.has_history", 409, "Esta pessoa tem histórico e não pode ser excluída. Inative o cadastro."],
   ])("%s vira a mensagem em pt-BR", async (code, status, message) => {
     expect(await describeUserError(httpError(code, status))).toBe(message);
   });

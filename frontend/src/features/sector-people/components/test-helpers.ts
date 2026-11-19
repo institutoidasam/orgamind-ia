@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { fireEvent, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HTTPError } from 'ky';
 
@@ -27,4 +27,12 @@ export function apiError(status: number, code: string) {
 export async function pickOption(label: string, option: string) {
   await userEvent.setup().click(screen.getByRole('combobox', { name: label }));
   await userEvent.setup().click(await screen.findByRole('option', { name: option }));
+}
+
+const NO_AUTHORIZATION_LABEL = 'Sem autorização registrada';
+
+/** Marca a autorização no formulário; origem escolhida traz a data de hoje, que aqui é fixada. */
+export async function chooseAuthorization(label: string, date = '2026-11-10') {
+  await userEvent.setup().click(screen.getByRole('radio', { name: label }));
+  if (label !== NO_AUTHORIZATION_LABEL) fireEvent.change(screen.getByLabelText('Data da autorização'), { target: { value: date } });
 }

@@ -3,6 +3,8 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
+import { authorizationChoiceError, toAuthorizationInput, type AuthorizationChoice } from '@/features/people-record/authorization';
+import { AuthorizationField } from '@/features/people-record/components/authorization-field';
 import { LevelSelect } from '@/features/users/components/level-select';
 import { formatPhoneBR } from '@/lib/format-phone';
 import { useAddPeopleFromContacts, useSectorContactCandidates } from '../api';
@@ -55,6 +57,19 @@ function FailureList({ failures, selected }: { failures: Failure[]; selected: Se
   );
 }
 
+/** Uma escolha para o lote inteiro (A2); o erro só aparece depois da primeira tentativa de enviar. */
+function useBatchAuthorization() {
+  const [choice, setChoice] = useState<AuthorizationChoice | null>(null);
+  const [attempted, setAttempted] = useState(false);
+  const error = attempted ? authorizationChoiceError(choice) : undefined;
+  /** Corpo da API, ou `null` quando a escolha não vale (e o erro passa a aparecer). */
+  const input = () => {
+    setAttempted(true);
+    return choice && !authorizationChoiceError(choice) ? toAuthorizationInput(choice) : null;
+  };
+  return { choice, setChoice, error, input };
+}
+
 /** Seleção e envio do lote; o que falhou fica selecionado, com o motivo (D10). */
 function useContactsBatch(sectorId: string, onDone: () => void) {
   const add = useAddPeopleFromContacts(sectorId);
@@ -62,10 +77,13 @@ function useContactsBatch(sectorId: string, onDone: () => void) {
   const [failures, setFailures] = useState<Failure[]>([]);
   const [levelId, setLevelId] = useState<string | null>(null);
   const [shiftId, setShiftId] = useState('');
+  const authorization = useBatchAuthorization();
 
   const submit = async () => {
+    const contactAuthorization = authorization.input();
+    if (!contactAuthorization) return;
     try {
-      const result = await add.mutateAsync({ contactIds: selected.map((contact) => contact.contactId), levelId, shiftId });
+      const result = await add.mutateAsync({ contactIds: selected.map((contact) => contact.contactId), contactAuthorization, levelId, shiftId });
       if (result.created.length > 0) toast.success(addedPeopleMessage(result.created.length));
       if (result.failed.length === 0) return onDone();
       const failedIds = new Set(result.failed.map((item) => item.contactId));
@@ -78,7 +96,7 @@ function useContactsBatch(sectorId: string, onDone: () => void) {
   const toggle = (contact: SectorContactCandidate, checked: boolean) =>
     setSelected((current) => toggleBy(current, contact, (item) => item.contactId === contact.contactId, checked));
   const canSubmit = selected.length > 0 && shiftId !== '' && !add.isPending;
-  return { selected, failures, levelId, setLevelId, shiftId, setShiftId, submit, toggle, canSubmit };
+  return { selected, failures, levelId, setLevelId, shiftId, setShiftId, authorization, submit, toggle, canSubmit };
 }
 
 /** Vários contatos viram pessoas deste setor; nível e turno valem para todos (D8). */
@@ -108,6 +126,10 @@ export function ContactsTab({ sectorId, options, onDone }: AddTabProps) {
       <div className="grid gap-4 sm:grid-cols-2">
         <LevelSelect value={batch.levelId} onChange={batch.setLevelId} levels={options.levels} />
         <RequiredShiftSelect value={batch.shiftId} onChange={batch.setShiftId} shifts={options.shifts} />
+      </div>
+      <div className="space-y-1">
+        <p className="text-xs text-muted-foreground">A mesma autorização vale para todos os contatos selecionados.</p>
+        <AuthorizationField value={batch.authorization.choice} error={batch.authorization.error} onChange={batch.authorization.setChoice} />
       </div>
       <div className="flex justify-end">
         <Button disabled={!batch.canSubmit} onClick={batch.submit}>

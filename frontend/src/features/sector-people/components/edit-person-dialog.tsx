@@ -6,6 +6,17 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  authorizationLabel,
+  toAuthorizationInput,
+  todayInManaus,
+  type AuthorizationChoice,
+  type ContactAuthorization,
+} from '@/features/people-record/authorization';
+import { AuthorizationField } from '@/features/people-record/components/authorization-field';
+import { ReasonField } from '@/features/people-record/components/reason-field';
+import { RegistrationField } from '@/features/people-record/components/registration-field';
+import { reasonSchema } from '@/features/people-record/reason';
 import { JobTitleField } from '@/features/users/components/job-title-field';
 import { LevelSelect } from '@/features/users/components/level-select';
 import { PhoneField } from '@/features/users/components/phone-field';
@@ -32,6 +43,14 @@ type Props = {
 };
 type Form = UseFormReturn<PersonFormInput>;
 
+/** Autorização atual como escolha da tela; "cadastro anterior" não tem origem a marcar, então fica `null`. */
+function authorizationChoiceOf(authorization: ContactAuthorization): AuthorizationChoice | null {
+  if (authorization.status === 'NAO_AUTORIZADO') return { status: 'NAO_AUTORIZADO' };
+  const { source, note, date } = authorization;
+  if (source === null || source === 'CADASTRO_ANTERIOR') return null;
+  return { status: 'AUTORIZADO', source, ...(note ? { note } : {}), date: date ?? todayInManaus() };
+}
+
 function initialValues(person: SectorPerson): PersonFormInput {
   return {
     name: person.name,
@@ -39,6 +58,9 @@ function initialValues(person: SectorPerson): PersonFormInput {
     levelId: person.level?.id ?? null,
     jobTitle: person.jobTitle ?? '',
     shiftId: person.shift?.id ?? null,
+    registration: person.registration ?? '',
+    authorization: authorizationChoiceOf(person.contactAuthorization),
+    reason: '',
   };
 }
 
@@ -50,6 +72,18 @@ function changedIdentity(data: PersonFormInput, initial: PersonFormInput): Updat
   };
 }
 
+const choiceKey = (choice: AuthorizationChoice | null | undefined) => (choice ? JSON.stringify(toAuthorizationInput(choice)) : '');
+
+/** Matrícula e autorização só vão quando mudaram; sem origem escolhida a autorização atual fica como está. */
+function changedRecord(data: PersonFormInput, initial: PersonFormInput): UpdateSectorPersonInput {
+  const registration = data.registration ?? '';
+  const choice = data.authorization;
+  return {
+    ...(registration !== initial.registration ? { registration: registration || null } : {}),
+    ...(choice && choiceKey(choice) !== choiceKey(initial.authorization) ? { contactAuthorization: toAuthorizationInput(choice) } : {}),
+  };
+}
+
 function changedClassification(data: PersonFormInput, initial: PersonFormInput): UpdateSectorPersonInput {
   return {
     ...((data.levelId ?? null) !== initial.levelId ? { levelId: data.levelId ?? null } : {}),
@@ -58,9 +92,12 @@ function changedClassification(data: PersonFormInput, initial: PersonFormInput):
   };
 }
 
-/** Só o que mudou vai no PATCH; pessoa com acesso nunca leva nome ou telefone. */
+/** Só o que mudou vai no PATCH; pessoa com acesso nunca leva nome, telefone, matrícula ou autorização (D16). */
 function changedPayload(data: PersonFormInput, initial: PersonFormInput, full: boolean): UpdateSectorPersonInput {
-  return { ...(full ? changedIdentity(data, initial) : {}), ...changedClassification(data, initial) };
+  return {
+    ...(full ? { ...changedIdentity(data, initial), ...changedRecord(data, initial) } : {}),
+    ...changedClassification(data, initial),
+  };
 }
 
 async function reportSubmitError(form: Form, error: unknown) {
@@ -76,8 +113,11 @@ function usePersonForm({ sectorId, person, onOpenChange }: Props) {
   const submit = async (data: PersonFormInput) => {
     const payload = changedPayload(data, initial, full);
     if (Object.keys(payload).length === 0) return onOpenChange(false);
+    // A4: editar pessoa do setor exige motivo; sem mudança não há o que justificar.
+    const reason = reasonSchema.safeParse(data.reason ?? '');
+    if (!reason.success) return form.setError('reason', { message: reason.error.issues[0].message });
     try {
-      await update.mutateAsync({ userId: person.id, data: payload });
+      await update.mutateAsync({ userId: person.id, data: { ...payload, reason: reason.data } });
       toast.success('Pessoa atualizada.');
       onOpenChange(false);
     } catch (error) {
@@ -97,6 +137,8 @@ function IdentityFields({ form, person, full }: { form: Form; person: SectorPers
           {form.formState.errors.name && <p className="text-xs text-destructive">{form.formState.errors.name.message}</p>}
         </div>
         <PhoneField id="person-phone" registration={form.register('phone')} error={form.formState.errors.phone?.message} />
+        <RegistrationEdit form={form} />
+        <AuthorizationEdit form={form} person={person} />
       </>
     );
   }
@@ -110,6 +152,53 @@ function IdentityFields({ form, person, full }: { form: Form; person: SectorPers
         <Label htmlFor="person-phone">Telefone (WhatsApp)</Label>
         <Input id="person-phone" value={formatPhoneBR(person.phoneE164)} disabled readOnly />
         <p className="text-xs text-muted-foreground">Nome e telefone de quem tem acesso mudam em Usuários.</p>
+      </div>
+      <ReadOnlyRecord person={person} />
+    </>
+  );
+}
+
+function RegistrationEdit({ form }: { form: Form }) {
+  const registration = useWatch({ control: form.control, name: 'registration' });
+  return (
+    <RegistrationField
+      value={registration ?? ''}
+      onChange={(value) => form.setValue('registration', value)}
+      error={form.formState.errors.registration?.message}
+    />
+  );
+}
+
+/** Origem a marcar só quando houver; a mensagem de erro some assim que a escolha é corrigida. */
+function AuthorizationEdit({ form, person }: { form: Form; person: SectorPerson }) {
+  const choice = useWatch({ control: form.control, name: 'authorization' }) ?? null;
+  const error = form.formState.errors.authorization?.message;
+  return (
+    <div className="space-y-2">
+      {choice === null && (
+        <p className="text-xs text-muted-foreground">Atual: {authorizationLabel(person.contactAuthorization)}. Escolha a origem para regularizar.</p>
+      )}
+      <AuthorizationField
+        value={choice}
+        error={error}
+        onChange={(next) => form.setValue('authorization', next, { shouldValidate: Boolean(error) })}
+      />
+    </div>
+  );
+}
+
+/** D16: pessoa com acesso muda matrícula e autorização em Usuários, nem o ADMIN muda aqui. */
+function ReadOnlyRecord({ person }: { person: SectorPerson }) {
+  return (
+    <>
+      <div className="space-y-1">
+        <Label htmlFor="person-registration">Matrícula</Label>
+        <Input id="person-registration" value={person.registration ?? '—'} disabled readOnly />
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor="person-authorization">Autorização de contato</Label>
+        <Input id="person-authorization" value={authorizationLabel(person.contactAuthorization)} disabled readOnly />
+        <p className="text-xs text-muted-foreground">Matrícula e autorização de quem tem acesso mudam em Usuários.</p>
       </div>
     </>
   );
@@ -140,6 +229,20 @@ function ClassificationFields({ form, person, options }: { form: Form; person: S
   );
 }
 
+function ReasonEdit({ form }: { form: Form }) {
+  const reason = useWatch({ control: form.control, name: 'reason' });
+  return (
+    <ReasonField
+      value={reason ?? ''}
+      onChange={(value) => {
+        form.setValue('reason', value);
+        form.clearErrors('reason');
+      }}
+      error={form.formState.errors.reason?.message}
+    />
+  );
+}
+
 export function EditPersonDialog(props: Props) {
   const { form, submit, pending, full } = usePersonForm(props);
   return (
@@ -148,9 +251,11 @@ export function EditPersonDialog(props: Props) {
         <DialogHeader>
           <DialogTitle>Editar pessoa</DialogTitle>
         </DialogHeader>
-        <form onSubmit={form.handleSubmit(submit)} className="space-y-4 py-2">
+        {/* noValidate: a validação nativa (`max` da data) bloquearia o envio sem mostrar a nossa mensagem. */}
+        <form onSubmit={form.handleSubmit(submit)} noValidate className="space-y-4 py-2">
           <IdentityFields form={form} person={props.person} full={full} />
           <ClassificationFields form={form} person={props.person} options={props.options} />
+          <ReasonEdit form={form} />
           <DialogFooter>
             <Button type="button" variant="ghost" onClick={() => props.onOpenChange(false)}>Cancelar</Button>
             <Button type="submit" disabled={pending}>{pending ? 'Salvando...' : 'Salvar'}</Button>

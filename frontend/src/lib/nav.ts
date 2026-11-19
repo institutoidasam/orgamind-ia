@@ -15,8 +15,10 @@ import {
   Clock,
   CalendarDays,
   Layers,
+  History,
   type LucideIcon,
 } from 'lucide-react';
+import { canQueryAuditTrailUi } from '@/features/people-record/ui-policy';
 
 /**
  * Single source of truth for the app's authenticated navigation.
@@ -88,6 +90,7 @@ export const NAV: NavItem[] = [
   { to: '/niveis', label: 'Níveis', icon: Layers, section: 'admin', roles: ['ADMIN'] },
   { to: '/users', label: 'Usuários', icon: UserCog, section: 'admin', roles: ['ADMIN'] },
   { to: '/connect', label: 'Conexões', icon: Wifi, section: 'admin', roles: ['ADMIN'] },
+  { to: '/trilha', label: 'Trilha de alterações', icon: History, section: 'admin', roles: ALL_INTERNAL_ROLES.filter(canQueryAuditTrailUi) },
 
   // Telas legadas preservam URLs e breadcrumbs, mas não fazem parte do painel
   // interno. O backend legado só aceita ADMIN/OPERATOR; SUPERVISOR/VIEWER não

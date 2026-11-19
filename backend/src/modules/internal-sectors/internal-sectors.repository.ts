@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Prisma, Role } from '@prisma/client';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { SECTOR_CHANNEL_SELECT } from '../team-whatsapp/sector-channel';
+import { sectorAuditSelect, type SectorAuditRow } from './sector-audit';
 
 export const sectorSummarySelect = {
   id: true,
@@ -19,6 +20,16 @@ export const sectorSummarySelect = {
 export type SectorSummaryRecord = Prisma.SectorGetPayload<{
   select: typeof sectorSummarySelect;
 }>;
+type SectorCreateTrail = (
+  tx: Prisma.TransactionClient,
+  row: SectorAuditRow,
+) => Promise<void>;
+type SectorUpdateTrail = (
+  tx: Prisma.TransactionClient,
+  before: SectorAuditRow,
+  after: SectorAuditRow,
+) => Promise<void>;
+
 @Injectable()
 export class InternalSectorsRepository {
   constructor(private readonly prisma: PrismaService) {}
@@ -53,14 +64,38 @@ export class InternalSectorsRepository {
       },
     });
   }
-  create(data: Prisma.SectorCreateInput) {
-    return this.prisma.sector.create({ data, select: sectorSummarySelect });
+  /** Cria o setor e grava a trilha na mesma transação (GC1): falha de uma desfaz a outra. */
+  createWithAudit(data: Prisma.SectorCreateInput, audit: SectorCreateTrail) {
+    return this.prisma.$transaction(async (tx) => {
+      const row = await tx.sector.create({ data, select: sectorSummarySelect });
+      await audit(tx, row);
+      return row;
+    });
   }
-  update(id: string, data: Prisma.SectorUpdateInput) {
-    return this.prisma.sector.update({
-      where: { id },
-      data,
-      select: sectorSummarySelect,
+  /**
+   * Edita o setor e grava a trilha (antes lido no tx) na mesma transação (GC1).
+   * A linha é travada antes de ler o "antes": sem o lock, duas edições
+   * concorrentes leem o mesmo "antes" e a trilha da segunda registraria, em
+   * nome dela, a troca que a primeira fez.
+   */
+  updateWithAudit(
+    id: string,
+    data: Prisma.SectorUpdateInput,
+    audit: SectorUpdateTrail,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Sector" WHERE id = ${id} FOR NO KEY UPDATE`;
+      const before = await tx.sector.findUniqueOrThrow({
+        where: { id },
+        select: sectorAuditSelect,
+      });
+      const row = await tx.sector.update({
+        where: { id },
+        data,
+        select: sectorSummarySelect,
+      });
+      await audit(tx, before, row);
+      return row;
     });
   }
   findMembers(sectorId: string, eligible?: boolean) {

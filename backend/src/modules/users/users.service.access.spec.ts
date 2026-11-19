@@ -7,6 +7,7 @@ import type { UserPhoneService } from './user-phone.service';
 import type { UsersRepository, UserSummary } from './users.repository';
 import type { AuditService } from '../../shared/audit/audit.service';
 import type { RefreshService } from '../auth/refresh.service';
+import { NO_PERSON_RECORD } from './users.test-fixtures';
 import { ConflictError } from '../../shared/errors/domain.error';
 import {
   grantAccessResponseSchema,
@@ -40,6 +41,7 @@ const person = (over: Partial<UserSummary> = {}): UserSummary => ({
   phoneE164: '+5592991234567',
   shiftId: null,
   jobTitle: null,
+  ...NO_PERSON_RECORD,
   levelId: null,
   level: null,
   createdAt: new Date('2026-10-22T12:00:00Z'),
@@ -63,7 +65,7 @@ const createPerson = (over: Record<string, unknown> = {}) =>
   });
 const grant = (role: 'OPERATOR' | 'ADMIN' = 'OPERATOR') =>
   svc.grantAccess('admin', 'p1', { email: '  Maria@IDASAM.org ', role });
-const created = () => repo.createSummary.mock.calls[0]?.[0];
+const created = () => repo.createWithAudit.mock.calls[0]?.[0];
 const patched = () => repo.updateWithLastAdminGuard.mock.calls[0]?.[1];
 // O contrato descreve o JSON (datas viram string).
 const wire = (value: unknown) => JSON.parse(JSON.stringify(value)) as unknown;
@@ -90,7 +92,7 @@ beforeEach(() => {
     id: 'level_employee',
     isActive: true,
   });
-  repo.createSummary.mockResolvedValue(person());
+  repo.createWithAudit.mockResolvedValue(person());
   repo.grantAccess.mockResolvedValue(granted);
   repo.updateWithLastAdminGuard.mockResolvedValue({ updated: {} } as never);
 });
@@ -119,16 +121,8 @@ describe('criar sem acesso', () => {
     expect(userSummarySchema.parse(wire(user))).toMatchObject({
       hasAccess: false,
     });
-    expect(audit.log.mock.calls).toContainEqual([
-      'user.person_created',
-      'User',
-      'p1',
-      {
-        actorId: 'admin',
-        sectorId: 's1',
-        hasAccess: false,
-      },
-    ]);
+    // A trilha da criação é o recordChange no tx (users.service.person-record.spec.ts).
+    expect(audit.log.mock.calls).toEqual([]);
   });
 
   it('sem setor é aceito', async () => {
@@ -147,7 +141,7 @@ describe('criar sem acesso', () => {
       status: 409,
       code: 'user.phone_taken',
     });
-    expect(repo.createSummary.mock.calls).toEqual([]);
+    expect(repo.createWithAudit.mock.calls).toEqual([]);
   });
 
   it('nível Funcionário (level_employee) gravado', async () => {
@@ -174,6 +168,7 @@ describe('dar acesso', () => {
         mustChangePassword: true,
         hasAccess: true,
       },
+      expect.any(Function),
     ]);
     expect(res.temporaryPassword).toMatch(/^[\w-]{12}$/);
     expect(argon2.hash).toHaveBeenCalledWith(
@@ -183,19 +178,8 @@ describe('dar acesso', () => {
     expect(grantAccessResponseSchema.parse(wire(res)).user.hasAccess).toBe(
       true,
     );
-    expect(audit.log.mock.calls).toContainEqual([
-      'user.access_granted',
-      'User',
-      'p1',
-      {
-        actorId: 'admin',
-        role: 'OPERATOR',
-      },
-    ]);
-    // GC8: nada de e-mail, nome, telefone nem senha na auditoria.
-    expect(JSON.stringify(audit.log.mock.calls)).not.toMatch(
-      /maria|@|9299|argon2id-fake/i,
-    );
+    // A trilha é o recordChange no tx (users.service.access-trail.spec.ts).
+    expect(audit.log.mock.calls).toEqual([]);
   });
 });
 
@@ -264,6 +248,7 @@ describe('dar acesso — recusas', () => {
     expect(repo.grantAccess.mock.calls).toContainEqual([
       'p1',
       expect.objectContaining({ role: 'ADMIN', hasAccess: true }),
+      expect.any(Function),
     ]);
   });
 });
@@ -340,16 +325,14 @@ describe('nível no convite (com acesso)', () => {
     );
 
   beforeEach(() => {
-    repo.create.mockResolvedValue({
-      id: 'u9',
-      email: 'nova@idasam.org',
-      role: 'OPERATOR',
-    } as never);
+    repo.createWithAudit.mockResolvedValue(
+      person({ id: 'u9', email: 'nova@idasam.org', role: 'OPERATOR' }),
+    );
   });
 
   it('convite com levelId grava o nível', async () => {
     await invite('level_employee');
-    expect(repo.create.mock.calls[0]?.[0]).toMatchObject({
+    expect(created()).toMatchObject({
       level: { connect: { id: 'level_employee' } },
     });
   });
@@ -365,7 +348,7 @@ describe('nível no convite (com acesso)', () => {
         status: 422,
         code: 'users.invalid_level',
       });
-      expect(repo.create.mock.calls).toEqual([]);
+      expect(repo.createWithAudit.mock.calls).toEqual([]);
       expect(phones.resolveContactId.mock.calls).toEqual([]);
     },
   );

@@ -52,6 +52,24 @@ afterAll(async () => {
   await postgres?.stop();
 });
 
+// Pessoa autorizada de um setor já desativado.
+async function criarAlvoEmSetorDesativado() {
+  const off = await prisma.sector.create({
+    data: { name: 'Desligado', code: 'OFF', isActive: false },
+  });
+  const user = await prisma.user.create({
+    data: {
+      email: 'alvo@test.local',
+      password: 'x',
+      sectorId: off.id,
+      phoneE164: '+5592991230000',
+      contactAuthorization: 'AUTORIZADO',
+      authorizationSource: 'CADASTRO_ANTERIOR',
+    },
+  });
+  return { off, user };
+}
+
 describe('TeamWhatsappRepository — ator e alvo (Postgres real)', () => {
   it('findActor ignora setor desativado em managedSectorIds', async () => {
     const boss = await prisma.user.create({
@@ -79,23 +97,15 @@ describe('TeamWhatsappRepository — ator e alvo (Postgres real)', () => {
   }, 60_000);
 
   it('findTargetUser traz sector.isActive', async () => {
-    const off = await prisma.sector.create({
-      data: { name: 'Desligado', code: 'OFF', isActive: false },
-    });
-    const user = await prisma.user.create({
-      data: {
-        email: 'alvo@test.local',
-        password: 'x',
-        sectorId: off.id,
-        phoneE164: '+5592991230000',
-      },
-    });
+    const { off, user } = await criarAlvoEmSetorDesativado();
     await expect(repo.findTargetUser(user.id)).resolves.toMatchObject({
       id: user.id,
       sectorId: off.id,
       sector: { isActive: false },
       phoneE164: '+5592991230000',
       contact: null,
+      contactAuthorization: 'AUTORIZADO',
+      authorizationSource: 'CADASTRO_ANTERIOR',
     });
   }, 60_000);
 });
@@ -169,21 +179,39 @@ async function criarSetorComTurnos() {
   const prod = await prisma.sector.create({
     data: { name: 'Produção', code: 'PRD' },
   });
-  const user = (email: string, name: string, shiftId: string | null) =>
+  const user = (
+    email: string,
+    name: string,
+    shiftId: string | null,
+    extra: { contactAuthorization?: 'NAO_AUTORIZADO'; phoneE164?: string } = {},
+  ) =>
     prisma.user.create({
-      data: { email, password: 'x', name, sectorId: prod.id, shiftId },
+      data: {
+        email,
+        password: 'x',
+        name,
+        sectorId: prod.id,
+        shiftId,
+        contactAuthorization: 'AUTORIZADO',
+        ...extra,
+      },
     });
   const joao = await user('joao@test.local', 'João', 'shift_second');
   const ze = await user('ze@test.local', 'Zé', null);
+  const rita = await user('rita@test.local', 'Rita', null, {
+    contactAuthorization: 'NAO_AUTORIZADO',
+    phoneE164: '+5592991230001',
+  });
   const channel = await prisma.channel.create({
     data: { name: 'Canal turno', provider: 'GOZAP' },
   });
-  return { prod, joao, ze, channel };
+  return { prod, joao, ze, rita, channel };
 }
 
 const snapshotOf = (
   joaoId: string,
   zeId: string,
+  ritaId: string,
 ): NewTeamDispatchRecipient[] => [
   {
     userId: joaoId,
@@ -201,6 +229,15 @@ const snapshotOf = (
     ...NO_SHIFT,
     status: 'SKIPPED',
     skipReason: 'NO_PHONE',
+    ...NO_SECTOR,
+    ...NO_CHANNEL,
+  },
+  {
+    userId: ritaId,
+    userName: 'Rita',
+    ...NO_SHIFT,
+    status: 'SKIPPED',
+    skipReason: 'NOT_AUTHORIZED',
     ...NO_SECTOR,
     ...NO_CHANNEL,
   },
@@ -227,10 +264,11 @@ function linhasEsperadas(recipients: NewTeamDispatchRecipient[]) {
 
 describe('TeamWhatsappRepository — turno (Postgres real)', () => {
   it('createDispatch grava snapshot do turno e listDispatchRecipients devolve shiftName', async () => {
-    const { prod, joao, ze, channel } = await criarSetorComTurnos();
+    const { prod, joao, ze, rita, channel } = await criarSetorComTurnos();
     const found = await repo.findMembersForDay([prod.id], []);
     expect(found.map((m) => [m.id, m.shiftId, m.workShift])).toEqual([
       [joao.id, 'shift_second', { name: '2º turno' }],
+      [rita.id, null, null],
       [ze.id, null, null],
     ]);
     await expect(repo.findSector(prod.id)).resolves.toEqual({
@@ -242,7 +280,7 @@ describe('TeamWhatsappRepository — turno (Postgres real)', () => {
     await expect(repo.listSectors([prod.id])).resolves.toEqual([
       { id: prod.id, name: 'Produção', code: 'PRD' },
     ]);
-    const recipients = snapshotOf(joao.id, ze.id);
+    const recipients = snapshotOf(joao.id, ze.id, rita.id);
     const created = await repo.createDispatch({
       authorId: joao.id,
       targetType: 'SECTOR',
@@ -262,8 +300,8 @@ describe('TeamWhatsappRepository — turno (Postgres real)', () => {
       created.id,
       FIRST_PAGE,
     );
-    expect(total).toBe(2);
-    expect(rows).toHaveLength(2);
+    expect(total).toBe(3);
+    expect(rows).toHaveLength(3);
     expect(rows).toEqual(
       expect.arrayContaining(
         linhasEsperadas(recipients).map((r): unknown =>
@@ -303,6 +341,27 @@ describe('TeamWhatsappRepository — turno do filtro (Postgres real)', () => {
   }, 60_000);
 });
 
+// Pessoa autorizada de um setor, para a escala do dia.
+function criarUsuarioDoDia(
+  email: string,
+  data: {
+    name: string;
+    sectorId: string;
+    isActive?: boolean;
+    jobTitle?: string;
+    levelId?: string;
+  },
+) {
+  return prisma.user.create({
+    data: {
+      email,
+      password: 'x',
+      contactAuthorization: 'AUTORIZADO',
+      ...data,
+    },
+  });
+}
+
 // Montagem com Ana (ativa) e uma inativa; Caio, Lia e Ivo (inativo) da Logística.
 async function criarSetorComVisitantes() {
   const mnt = await prisma.sector.create({
@@ -311,37 +370,30 @@ async function criarSetorComVisitantes() {
   const log = await prisma.sector.create({
     data: { name: 'Logística', code: 'LGT' },
   });
-  const user = (
-    email: string,
-    data: {
-      name: string;
-      sectorId: string;
-      isActive?: boolean;
-      jobTitle?: string;
-      levelId?: string;
-    },
-  ) => prisma.user.create({ data: { email, password: 'x', ...data } });
   const coord = await prisma.staffLevel.create({
     data: { name: 'Coordenador (escala do dia)', sortOrder: 1 },
     select: { id: true, name: true },
   });
-  const ana = await user('ana.dia@test.local', {
+  const ana = await criarUsuarioDoDia('ana.dia@test.local', {
     name: 'Ana',
     sectorId: mnt.id,
     jobTitle: 'Técnica',
     levelId: coord.id,
   });
-  await user('ina.dia@test.local', {
+  await criarUsuarioDoDia('ina.dia@test.local', {
     name: 'Inativa',
     sectorId: mnt.id,
     isActive: false,
   });
-  const caio = await user('caio.dia@test.local', {
+  const caio = await criarUsuarioDoDia('caio.dia@test.local', {
     name: 'Caio',
     sectorId: log.id,
   });
-  await user('lia.dia@test.local', { name: 'Lia', sectorId: log.id });
-  const ivo = await user('ivo.dia@test.local', {
+  await criarUsuarioDoDia('lia.dia@test.local', {
+    name: 'Lia',
+    sectorId: log.id,
+  });
+  const ivo = await criarUsuarioDoDia('ivo.dia@test.local', {
     name: 'Ivo',
     sectorId: log.id,
     isActive: false,

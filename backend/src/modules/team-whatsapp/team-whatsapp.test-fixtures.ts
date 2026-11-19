@@ -88,6 +88,9 @@ export const member = (over: Partial<TeamMember> = {}): TeamMember => ({
   contact: null,
   shiftId: null,
   workShift: null,
+  // Padrão: autorizada de verdade; o spec que testa a negação diz o contrário.
+  contactAuthorization: 'AUTORIZADO',
+  authorizationSource: 'TERMO_ASSINADO',
   ...over,
 });
 

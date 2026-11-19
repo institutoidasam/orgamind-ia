@@ -53,3 +53,38 @@ export function accessSectorError(
     status: 422,
   });
 }
+
+/** Matrícula repetida (A1): a chave em minúsculas já pertence a outra pessoa. */
+export function registrationTaken(): DomainError {
+  return new DomainError({
+    code: 'user.registration_taken',
+    message: 'Já existe uma pessoa com esta matrícula',
+    status: 422,
+  });
+}
+
+/** A data da autorização é um dia já vivido: hoje no fuso do app ou antes. */
+export function authorizationFutureDate(): DomainError {
+  return new DomainError({
+    code: 'user.authorization_future_date',
+    message: 'A data da autorização não pode ser futura.',
+    status: 422,
+  });
+}
+
+/** Motivo da alteração (A4): de 3 a 200 caracteres, aparado. */
+export function reasonRequired(): DomainError {
+  return new DomainError({
+    code: 'user.reason_required',
+    message: 'Informe o motivo da alteração, de 3 a 200 caracteres.',
+    status: 422,
+  });
+}
+
+/** Exclusão física só de quem não deixou histórico (A3): com histórico, inativa. */
+export function hasHistory(): ConflictError {
+  return new ConflictError(
+    'Esta pessoa tem histórico e não pode ser excluída. Inative o cadastro.',
+    'user.has_history',
+  );
+}

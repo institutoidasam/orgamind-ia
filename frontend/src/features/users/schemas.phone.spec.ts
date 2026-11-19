@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { editUserSchemaFor, inviteUserSchema } from "./schemas";
 
-const edit = { name: "Ana", role: "ADMIN" as const, sectorId: null, isActive: true };
+const edit = { name: "Ana", role: "ADMIN" as const, sectorId: null, reason: "ajuste" };
 
 describe("phone digits rule", () => {
   it("accepts international numbers up to 15 digits and rejects 16", () => {

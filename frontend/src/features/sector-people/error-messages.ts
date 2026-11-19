@@ -13,7 +13,14 @@ const SECTOR_PEOPLE_ERROR_MESSAGES: Record<string, string> = {
   'users.invalid_shift': 'Turno inválido. Atualize a página.',
   'user.sector_required': 'Defina o setor da pessoa em Editar antes de dar acesso a este perfil.',
   'user.sector_invalid': 'O setor da pessoa está inativo. Escolha outro em Editar.',
+  // Tabela C9 (GC7).
+  'user.registration_taken': 'Já existe uma pessoa com esta matrícula',
+  'user.reason_required': 'Informe o motivo da alteração, de 3 a 200 caracteres.',
+  'user.authorization_future_date': 'A data da autorização não pode ser futura.',
 };
+
+/** O texto vem do servidor porque diz qual ação não é permitida (spec B1). */
+const SERVER_TEXT_CODES = new Set(['auth.permission_denied']);
 
 /** Motivo por contato que não virou pessoa (`failed` do lote). */
 export const FAILURE_REASON_MESSAGES: Record<SectorPeopleFailureReason, string> = {
@@ -27,8 +34,10 @@ export const addedPeopleMessage = (count: number) => `${count} pessoa(s) adicion
 
 /** Mensagem pt-BR do código de erro de uma ação sobre pessoa do setor; undefined = erro genérico. */
 export async function describeSectorPeopleError(error: unknown): Promise<string | undefined> {
-  const code = (await readApiErrorBody(error))?.code;
-  return code ? SECTOR_PEOPLE_ERROR_MESSAGES[code] : undefined;
+  const body = await readApiErrorBody(error);
+  const code = body?.code;
+  if (!code) return undefined;
+  return SERVER_TEXT_CODES.has(code) ? body.detail : SECTOR_PEOPLE_ERROR_MESSAGES[code];
 }
 
 /** Leitura da página negada: o gestor de outro setor (ou setor inexistente para ele) recebe 403. */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildSectorTarget, eligibleMembers, filterByLevel, leftOutPeople, noScheduleCount, offMembers,
+  buildSectorTarget, eligibleMembers, filterByLevel, leftOutPeople, noScheduleCount, offMembers, unverifiedCount,
 } from './member-filter';
 import type { RosterMember } from './schemas';
 
@@ -26,6 +26,27 @@ const members = [
   member('lia', work('noite'), { isActive: false }),
 ];
 const ids = (list: RosterMember[]) => list.map((m) => m.id);
+
+describe('autorização do contato', () => {
+  const bloqueado = member('caio', work('noite'), { contactAuthorization: 'NAO_AUTORIZADO' });
+  const antigo = (id: string) => member(id, work('noite'), { authorizationUnverified: true });
+  const lista = [member('ana', work('noite')), bloqueado, antigo('dani'), antigo('edu')];
+
+  it('NAO_AUTORIZADO com telefone fica de fora como "not_authorized" e nunca vira destinatário, nem marcado', () => {
+    expect(leftOutPeople(lista, null)).toEqual([{ name: 'caio', reason: 'not_authorized' }]);
+    const target = buildSectorTarget({
+      sectors: [{ id: 's1', name: 'TI', members: lista }], levels: [], levelFilter: { levelIds: [], withoutLevel: false },
+      shifts: [{ id: 'noite', name: 'Noite' }], shiftIds: ['noite'], date: '2026-11-10', includeOff: false,
+      selectedIds: ['ana', 'caio'],
+    });
+    expect(target.type === 'sector' && target.recipients.map((r) => r.id)).toEqual(['ana']);
+  });
+
+  it('unverifiedCount: null conta quem recebe; com ids, só os marcados; NAO_AUTORIZADO não entra', () => {
+    expect(unverifiedCount([...lista, { ...bloqueado, authorizationUnverified: true }], null)).toBe(2);
+    expect(unverifiedCount(lista, ['ana', 'dani'])).toBe(1);
+  });
+});
 
 describe('eligibleMembers', () => {
   it.each([

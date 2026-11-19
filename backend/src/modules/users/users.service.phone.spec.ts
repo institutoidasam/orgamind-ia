@@ -45,7 +45,7 @@ beforeEach(() => {
   svc = new UsersService(repo, audit, refresh, phones);
   vi.mocked(argon2.hash).mockResolvedValue('hashed');
   repo.findByEmail.mockResolvedValue(null);
-  repo.create.mockResolvedValue({
+  repo.createWithAudit.mockResolvedValue({
     id: 'u-new',
     email: 'a@b.com',
     role: 'ADMIN',
@@ -66,12 +66,13 @@ describe('UsersService.createUser — telefone', () => {
     await invite();
     expect(phones.assertAvailable.mock.calls).toEqual([[NINE]]);
     expect(phones.resolveContactId.mock.calls).toEqual([[NINE, 'a@b.com']]);
-    expect(repo.create.mock.calls).toEqual([
+    expect(repo.createWithAudit.mock.calls).toEqual([
       [
         expect.objectContaining({
           phoneE164: NINE,
           contact: { connect: { id: 'c1' } },
         }),
+        expect.any(Function),
       ],
     ]);
     expect(JSON.stringify(audit.log.mock.calls)).not.toContain(NINE);
@@ -88,17 +89,17 @@ describe('UsersService.createUser — telefone', () => {
     await expect(invite()).rejects.toMatchObject({
       code: 'user.invalid_phone',
     });
-    expect(repo.create.mock.calls).toHaveLength(0);
+    expect(repo.createWithAudit.mock.calls).toHaveLength(0);
     expect(phones.resolveContactId.mock.calls).toHaveLength(0);
   });
 
   it('P2002 de phoneE164 no create vira user.phone_taken', async () => {
-    repo.create.mockRejectedValue(p2002('phoneE164'));
+    repo.createWithAudit.mockRejectedValue(p2002('phoneE164'));
     await expect(invite()).rejects.toMatchObject({ code: 'user.phone_taken' });
   });
 
   it('P2002 de email no create sobe intacto', async () => {
-    repo.create.mockRejectedValue(p2002('email'));
+    repo.createWithAudit.mockRejectedValue(p2002('email'));
     await expect(invite()).rejects.toBeInstanceOf(
       Prisma.PrismaClientKnownRequestError,
     );

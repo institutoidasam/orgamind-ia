@@ -43,3 +43,25 @@ export function sectorPeopleInvalidShift(): DomainError {
     status: 422,
   });
 }
+
+/** C9: a política `canChangePersonStatus` negou; pessoa com login só o administrador. */
+export function sectorPeopleStatusForbidden(): DomainError {
+  return new ForbiddenError(
+    'Você não pode inativar ou reativar esta pessoa. Pessoa com acesso ao sistema, só o administrador.',
+    'sector_people.status_forbidden',
+  );
+}
+
+/** Guardas do `UsersService.updateUser` (em inglês lá); o setor as devolve em pt-BR com o mesmo código. */
+const STATUS_GUARD_TEXTS: Readonly<Record<string, string>> = {
+  'user.cannot_self_deactivate':
+    'Você não pode inativar o seu próprio cadastro.',
+  'user.last_admin':
+    'Este é o último administrador ativo e não pode ser inativado.',
+};
+
+export function translateStatusGuard(error: unknown): unknown {
+  if (!(error instanceof DomainError)) return error;
+  const text = STATUS_GUARD_TEXTS[error.code];
+  return text ? new ForbiddenError(text, error.code) : error;
+}

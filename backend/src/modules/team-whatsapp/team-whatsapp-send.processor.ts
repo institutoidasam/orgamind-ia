@@ -41,6 +41,7 @@ const recipientSelect = {
     select: {
       phoneE164: true,
       contact: { select: { id: true, phoneE164: true } },
+      contactAuthorization: true,
     },
   },
   // D3: o número do envio é o do destinatário; o do envio é só a reserva da linha legada.
@@ -70,7 +71,10 @@ type FailedData = {
 type FinishData =
   | { status: 'SENT'; messageId?: string; acceptedAt: Date }
   | FailedData
-  | { status: 'SKIPPED'; skipReason: 'NO_PHONE' | 'SUPPRESSED' };
+  | {
+      status: 'SKIPPED';
+      skipReason: 'NO_PHONE' | 'SUPPRESSED' | 'NOT_AUTHORIZED';
+    };
 
 /** Telefone de envio: o do contato vinculado, senão o do usuário (spec §1). */
 function sendPhoneOf(user: LoadedRecipient['user']): string | null {
@@ -260,7 +264,11 @@ export class TeamWhatsappSendProcessor extends WorkerHost {
     });
   }
 
-  /** Supressão e telefone (spec §2, passo 1) e canal ainda válido para o envio. */
+  /**
+   * Telefone, supressão e autorização de contato, nesta ordem (C8), e canal
+   * ainda válido para o envio. A autorização é lida na hora do envio: quem a
+   * perdeu depois do agendamento ou da fila não recebe (A2).
+   */
   private async precheck(
     r: LoadedRecipient,
   ): Promise<{ data: FinishData } | Ready> {
@@ -268,6 +276,8 @@ export class TeamWhatsappSendProcessor extends WorkerHost {
     if (!phone) return { data: { status: 'SKIPPED', skipReason: 'NO_PHONE' } };
     if (await this.consent.isSuppressed(phone))
       return { data: { status: 'SKIPPED', skipReason: 'SUPPRESSED' } };
+    if (r.user?.contactAuthorization !== 'AUTORIZADO')
+      return { data: { status: 'SKIPPED', skipReason: 'NOT_AUTHORIZED' } };
     const channel = r.channel ?? r.dispatch.channel;
     if (!channel?.isActive) {
       return {

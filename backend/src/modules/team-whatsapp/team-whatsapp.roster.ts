@@ -223,6 +223,10 @@ export function toRosterMember(m: DayMember): TeamRosterMember {
     fromOtherSector: m.fromOtherSector,
     situation: m.situation,
     level: m.level,
+    contactAuthorization: m.contactAuthorization,
+    authorizationUnverified:
+      m.contactAuthorization === 'AUTORIZADO' &&
+      m.authorizationSource === 'CADASTRO_ANTERIOR',
   };
 }
 

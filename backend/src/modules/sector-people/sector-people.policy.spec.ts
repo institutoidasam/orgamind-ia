@@ -44,6 +44,38 @@ function person(over: Partial<PeoplePerson> = {}): PeoplePerson {
   };
 }
 
+describe('canEditPerson — matrícula e autorização (D16)', () => {
+  it.each<[string, PeoplePerson, PersonField[], boolean]>([
+    ['sem acesso, matrícula', person(), ['registration'], true],
+    [
+      'sem acesso, matrícula e autorização',
+      person(),
+      ['registration', 'contactAuthorization'],
+      true,
+    ],
+    [
+      'com acesso, matrícula',
+      person({ hasAccess: true }),
+      ['registration'],
+      false,
+    ],
+    [
+      'com acesso, autorização (nem o ADMIN edita aqui)',
+      person({ hasAccess: true }),
+      ['levelId', 'contactAuthorization'],
+      false,
+    ],
+    [
+      'sem acesso de outro setor, autorização',
+      person({ sectorId: IT.id }),
+      ['contactAuthorization'],
+      false,
+    ],
+  ])('%s → %s', (_label, target, fields, expected) => {
+    expect(canEditPerson(OPERATION, target, fields)).toBe(expected);
+  });
+});
+
 describe('canManageSector', () => {
   it.each<[string, PeopleActor, PeopleSector, boolean]>([
     ['ADMIN em setor inativo', ADMIN, { ...IT, isActive: false }, true],

@@ -15,7 +15,10 @@ import { useSectorPeople } from "@/features/sector-people/api";
 import { AddPeopleDialog } from "@/features/sector-people/components/add-people-dialog";
 import { EditPersonDialog } from "@/features/sector-people/components/edit-person-dialog";
 import { EmptySector } from "@/features/sector-people/components/empty-sector";
+import { useRefreshAuditTrail } from "@/features/sector-people/components/audit-trail-refresh";
+import { countFlags, filterPeople, type FlagFilter } from "@/features/sector-people/components/people-filter";
 import { PeopleTable } from "@/features/sector-people/components/people-table";
+import { InactiveToggle, PeopleToolbar } from "@/features/sector-people/components/people-toolbar";
 import { isSectorForbidden, SECTOR_FORBIDDEN_MESSAGE } from "@/features/sector-people/error-messages";
 import type { SectorPeopleResponse, SectorPerson } from "@/features/sector-people/schemas";
 
@@ -26,8 +29,21 @@ export { route as Route };
 
 function SectorDetailPage() {
   const { sectorId } = route.useParams();
+  return <SectorDetail key={sectorId} sectorId={sectorId} />;
+}
+
+/** Mantém a última lista enquanto a consulta com outra opção carrega: a tela não pisca nem perde a busca. */
+function useLatestData<T>(data: T | undefined): T | undefined {
+  const [latest, setLatest] = useState(data);
+  if (data !== undefined && data !== latest) setLatest(data);
+  return data ?? latest;
+}
+
+function SectorDetail({ sectorId }: { sectorId: string }) {
   const isAdmin = useAuthStore((state) => state.user?.role === "ADMIN");
-  const people = useSectorPeople(sectorId);
+  const [includeInactive, setIncludeInactive] = useState(false);
+  const people = useSectorPeople(sectorId, { includeInactive });
+  const data = useLatestData(people.data);
   if (people.isError) {
     return isSectorForbidden(people.error) ? (
       <p role="alert" className="rounded-lg border p-6 text-sm">{SECTOR_FORBIDDEN_MESSAGE}</p>
@@ -35,11 +51,11 @@ function SectorDetailPage() {
       <QueryErrorFallback error={people.error} onRetry={people.refetch} />
     );
   }
-  if (!people.data) return <Skeleton className="h-64 w-full" />;
+  if (!data) return <Skeleton className="h-64 w-full" />;
   return (
     <main className="mx-auto max-w-4xl space-y-6">
-      <SectorHeader data={people.data} />
-      <PeopleSection sectorId={sectorId} data={people.data} />
+      <SectorHeader data={data} />
+      <PeopleSection sectorId={sectorId} data={data} includeInactive={includeInactive} onIncludeInactive={setIncludeInactive} />
       {isAdmin && <AdminPanel sectorId={sectorId} />}
     </main>
   );
@@ -62,15 +78,28 @@ function SectorHeader({ data }: { data: SectorPeopleResponse }) {
   );
 }
 
-function PeopleSection({ sectorId, data }: { sectorId: string; data: SectorPeopleResponse }) {
+type SectionProps = {
+  sectorId: string;
+  data: SectorPeopleResponse;
+  includeInactive: boolean;
+  onIncludeInactive: (include: boolean) => void;
+};
+
+function PeopleSection({ sectorId, data, includeInactive, onIncludeInactive }: SectionProps) {
   const [addOpen, setAddOpen] = useState(false);
-  const [editing, setEditing] = useState<SectorPerson | null>(null);
+  const refreshTrail = useRefreshAuditTrail();
   const openAdd = () => setAddOpen(true);
-  const addDialog = <AddPeopleDialog sectorId={sectorId} options={data.options} open={addOpen} onOpenChange={setAddOpen} />;
+  // Mover pessoa para o setor acontece dentro deste diálogo: ao fechar, a trilha é relida.
+  const changeAdd = (open: boolean) => {
+    setAddOpen(open);
+    if (!open) void refreshTrail();
+  };
+  const addDialog = <AddPeopleDialog sectorId={sectorId} options={data.options} open={addOpen} onOpenChange={changeAdd} />;
   if (data.people.length === 0) {
     return (
       <>
         <EmptySector onAddPeople={openAdd} />
+        <InactiveToggle checked={includeInactive} onChange={onIncludeInactive} />
         {addDialog}
       </>
     );
@@ -82,17 +111,43 @@ function PeopleSection({ sectorId, data }: { sectorId: string; data: SectorPeopl
         <Button aria-haspopup="dialog" aria-expanded={addOpen} onClick={openAdd}>Adicionar pessoas</Button>
       </div>
       {addDialog}
-      <PeopleTable sectorId={sectorId} people={data.people} onEdit={setEditing} />
-      {editing && (
-        <EditPersonDialog
-          sectorId={sectorId}
-          person={editing}
-          options={data.options}
-          open
-          onOpenChange={(open) => !open && setEditing(null)}
-        />
-      )}
+      <PeopleList sectorId={sectorId} data={data} includeInactive={includeInactive} onIncludeInactive={onIncludeInactive} />
     </section>
+  );
+}
+
+/** Busca e filtro são locais, sobre as pessoas carregadas (spec A1 e A2); o contador não segue a busca. */
+function PeopleList({ sectorId, data, includeInactive, onIncludeInactive }: SectionProps) {
+  const [query, setQuery] = useState("");
+  const [flag, setFlag] = useState<FlagFilter | null>(null);
+  const [editing, setEditing] = useState<SectorPerson | null>(null);
+  const refreshTrail = useRefreshAuditTrail();
+  const visible = filterPeople(data.people, { query, flag });
+  const closeEdit = (open: boolean) => {
+    if (open) return;
+    setEditing(null);
+    void refreshTrail();
+  };
+  return (
+    <>
+      <PeopleToolbar
+        query={query}
+        onQuery={setQuery}
+        counts={countFlags(data.people)}
+        value={flag}
+        onChange={setFlag}
+        includeInactive={includeInactive}
+        onIncludeInactive={onIncludeInactive}
+      />
+      {visible.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Nenhuma pessoa encontrada.</p>
+      ) : (
+        <PeopleTable sectorId={sectorId} people={visible} onEdit={setEditing} />
+      )}
+      {editing && (
+        <EditPersonDialog sectorId={sectorId} person={editing} options={data.options} open onOpenChange={closeEdit} />
+      )}
+    </>
   );
 }
 

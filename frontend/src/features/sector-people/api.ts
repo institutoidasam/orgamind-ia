@@ -13,12 +13,19 @@ import {
 
 const peopleKey = (sectorId: string) => ['sector-people', sectorId] as const;
 
-export function useSectorPeople(sectorId: string) {
+export type SectorPeopleListOptions = { includeInactive?: boolean };
+
+/** `opts` é opcional (GC13): sem ele a lista só traz quem está ativo e a consulta não manda parâmetro. */
+export function useSectorPeople(sectorId: string, opts: SectorPeopleListOptions = {}) {
+  const includeInactive = opts.includeInactive ?? false;
   return useQuery({
-    queryKey: peopleKey(sectorId),
+    // A chave padrão não muda; quem inclui inativos tem a sua, sob o mesmo prefixo do `refresh`.
+    queryKey: includeInactive ? [...peopleKey(sectorId), 'include-inactive'] : peopleKey(sectorId),
     // O gestor não lê `GET /internal/sectors/:id`; cabeçalho e pessoas vêm daqui (D9).
     queryFn: async () =>
-      sectorPeopleResponseSchema.parse(await api.get(`internal/sectors/${sectorId}/people`).json()),
+      sectorPeopleResponseSchema.parse(
+        await api.get(`internal/sectors/${sectorId}/people`, includeInactive ? { searchParams: { includeInactive: 'true' } } : {}).json(),
+      ),
     retry: false,
   });
 }
@@ -52,6 +59,17 @@ export function useRemoveSectorPerson(sectorId: string) {
 }
 
 const peoplePath = (sectorId: string) => `internal/sectors/${sectorId}/people`;
+
+/** D6: inativar e reativar pela página do setor; o motivo é obrigatório (a API confere). */
+export function useSetSectorPersonStatus(sectorId: string) {
+  const refresh = useRefreshAfterWrite(sectorId);
+  return useMutation({
+    mutationFn: async ({ userId, isActive, reason }: { userId: string; isActive: boolean; reason: string }) => {
+      await api.post(`${peoplePath(sectorId)}/${userId}/status`, { json: { isActive, reason } });
+    },
+    onSuccess: refresh,
+  });
+}
 
 /** Candidatos a mudar para este setor (o gestor só vê quem está sem setor e sem acesso). */
 export function useSectorPersonCandidates(sectorId: string, q: string) {

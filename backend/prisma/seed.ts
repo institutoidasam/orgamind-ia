@@ -1,4 +1,9 @@
-import { PrismaClient, Role } from '@prisma/client';
+import {
+  ContactAuthorizationSource,
+  ContactAuthorizationStatus,
+  PrismaClient,
+  Role,
+} from '@prisma/client';
 import argon2 from 'argon2';
 import { organizationFromEnv } from '../src/modules/organization/organization-identity';
 import {
@@ -12,7 +17,8 @@ const prisma = new PrismaClient();
 /** id do singleton — ver `OrganizationService.ORGANIZATION_ID`. */
 const ORGANIZATION_ID = 'singleton';
 
-export async function runSeed(): Promise<void> {
+/** Cria o admin do seed (se ainda não existe) e devolve o e-mail dele. */
+export async function seedAdmin(): Promise<string> {
   const email = process.env.SEED_ADMIN_EMAIL ?? 'admin@picoa.local';
   const password = process.env.SEED_ADMIN_PASSWORD ?? 'changeme123';
   const hash = await argon2.hash(password, { type: argon2.argon2id });
@@ -31,8 +37,19 @@ export async function runSeed(): Promise<void> {
       role: Role.ADMIN,
       mustChangePassword: true,
       name: 'Admin',
+      // O default do banco é NAO_AUTORIZADO; sem isto o admin de desenvolvimento
+      // ficaria fora dos envios da equipe locais (D13).
+      contactAuthorization: ContactAuthorizationStatus.AUTORIZADO,
+      authorizationSource: ContactAuthorizationSource.OUTRO,
+      authorizationNote: 'Seed de desenvolvimento',
+      authorizationRecordedAt: new Date(),
     },
   });
+  return email;
+}
+
+export async function runSeed(): Promise<void> {
+  const email = await seedAdmin();
 
   const evolutionInstanceName = process.env.EVOLUTION_INSTANCE_NAME ?? 'picoa-dev';
   const apiKey = process.env.EVOLUTION_API_KEY ?? '';

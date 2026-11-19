@@ -3,11 +3,65 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { renderHook, waitFor } from '@testing-library/react';
 import React from 'react';
 import { useAuthStore } from '@/stores/auth.store';
-import { syncAuthStoreOnSelfEdit, useActiveLevels, useUpdateUser, useUsers } from './api';
+import { syncAuthStoreOnSelfEdit, useActiveLevels, useSetUserStatus, useUpdateUser, useUsers } from './api';
 
 function invalidateUserList(qc: QueryClient) {
   qc.invalidateQueries({ predicate: (q) => q.queryKey[0] === 'users' });
 }
+
+const wrapper = ({ children }: { children: React.ReactNode }) =>
+  React.createElement(
+    QueryClientProvider,
+    { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
+    children,
+  );
+const stubJson = (body: unknown, status = 200) =>
+  vi.spyOn(globalThis, 'fetch').mockImplementation(
+    async () => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }),
+  );
+const requestedUrl = (spy: ReturnType<typeof stubJson>) => new URL((spy.mock.calls[0]![0] as Request).url);
+const usersPage = { data: [], total: 0, page: 1, pageSize: 100, authorizationCounts: { unverified: 0, notAuthorized: 0 } };
+
+describe('filtros da ficha', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('q, status e authorization vão na query só quando informados', async () => {
+    const spy = stubJson(usersPage);
+    const { result } = renderHook(() => useUsers(1, 20, { q: 'ab', status: 'active', authorization: 'NOT_AUTHORIZED' }), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(Object.fromEntries(requestedUrl(spy).searchParams)).toEqual({
+      page: '1', pageSize: '20', q: 'ab', status: 'active', authorization: 'NOT_AUTHORIZED',
+    });
+  });
+
+  it('{ hasAccess: true } continua mandando só hasAccess', async () => {
+    const spy = stubJson(usersPage);
+    const { result } = renderHook(() => useUsers(1, 100, { hasAccess: true }), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect([...requestedUrl(spy).searchParams.keys()].sort()).toEqual(['hasAccess', 'page', 'pageSize']);
+  });
+
+  it('resposta da API atual (sem os campos novos) continua válida', async () => {
+    stubJson({ ...usersPage, data: [{ id: 'u1', email: 'a@x.com', hasAccess: true, name: 'Ana', role: 'ADMIN', contactAuthorization: { status: 'NAO_AUTORIZADO', source: null, note: null, date: null, recordedAt: null }, lastLoginAt: null, phoneE164: null, createdAt: '2026-10-10', createdBy: null }] });
+    const { result } = renderHook(() => useUsers(1, 100), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data?.authorizationCounts).toEqual({ unverified: 0, notAuthorized: 0 });
+    expect(result.current.data?.data[0]).toMatchObject({ registration: null, contactAuthorization: { status: 'NAO_AUTORIZADO' } });
+  });
+
+  it('useSetUserStatus faz PATCH users/:id com isActive e motivo', async () => {
+    const sent: { method?: string; path?: string; body?: unknown } = {};
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const request = input as Request;
+      Object.assign(sent, { method: request.method, path: new URL(request.url).pathname, body: await request.json() });
+      return new Response(null, { status: 204 });
+    });
+    const { result } = renderHook(() => useSetUserStatus(), { wrapper });
+    await result.current.mutateAsync({ id: 'u9', isActive: false, reason: 'saiu da empresa' });
+    expect(sent).toMatchObject({ method: 'PATCH', body: { isActive: false, reason: 'saiu da empresa' } });
+    expect(sent.path).toMatch(/\/users\/u9$/);
+  });
+});
 
 describe('users cache invalidation', () => {
   it('predicate invalidates users queries regardless of extra params', () => {
@@ -91,19 +145,6 @@ describe('useUpdateUser — empty 204 body must not throw (regression)', () => {
 
 describe('useUsers e useActiveLevels (leitura)', () => {
   afterEach(() => vi.restoreAllMocks());
-
-  const wrapper = ({ children }: { children: React.ReactNode }) =>
-    React.createElement(
-      QueryClientProvider,
-      { client: new QueryClient({ defaultOptions: { queries: { retry: false } } }) },
-      children,
-    );
-  const stubJson = (body: unknown) =>
-    vi.spyOn(globalThis, 'fetch').mockImplementation(
-      async () => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }),
-    );
-  const requestedUrl = (spy: ReturnType<typeof stubJson>) => new URL((spy.mock.calls[0]![0] as Request).url);
-  const usersPage = { data: [], total: 0, page: 1, pageSize: 100 };
 
   it('com { hasAccess: true } a query tem hasAccess=true', async () => {
     const spy = stubJson(usersPage);

@@ -1,5 +1,32 @@
 import { describe, expect, it } from "vitest";
-import { editableUserPayload } from "../edit-user-payload";
+import { authorizationChanged, authorizationChoiceOf, editableUserPayload } from "../edit-user-payload";
+
+describe("ficha no PATCH", () => {
+  const termo = { status: "AUTORIZADO", source: "TERMO_ASSINADO", note: null, date: "2026-01-10", recordedAt: null } as const;
+
+  it("cadastro anterior não vira escolha pré-marcada; as demais voltam como escolha", () => {
+    expect(authorizationChoiceOf({ ...termo, source: "CADASTRO_ANTERIOR", date: null })).toBeNull();
+    expect(authorizationChoiceOf(termo)).toEqual({ status: "AUTORIZADO", source: "TERMO_ASSINADO", date: "2026-01-10" });
+    expect(authorizationChoiceOf({ ...termo, status: "NAO_AUTORIZADO", source: null, date: null })).toEqual({ status: "NAO_AUTORIZADO" });
+  });
+
+  it("autorização só conta como alterada quando a escolha difere da atual", () => {
+    const atual = authorizationChoiceOf(termo);
+    expect(authorizationChanged(atual, atual)).toBe(false);
+    expect(authorizationChanged(null, atual)).toBe(false);
+    expect(authorizationChanged({ status: "AUTORIZADO", source: "TERMO_ASSINADO", date: "2026-02-01" }, atual)).toBe(true);
+    expect(authorizationChanged({ status: "NAO_AUTORIZADO" }, atual)).toBe(true);
+    expect(authorizationChanged({ status: "NAO_AUTORIZADO" }, null)).toBe(true);
+  });
+
+  it("matrícula vazia limpa; motivo e autorização escolhida acompanham o PATCH", () => {
+    const data = { name: "Ana", registration: " ", reason: "ajuste", authorization: { status: "NAO_AUTORIZADO" } as const };
+    expect(editableUserPayload(data, false, { registration: true, authorization: true })).toEqual({
+      name: "Ana", reason: "ajuste", registration: null, contactAuthorization: { status: "NAO_AUTORIZADO" },
+    });
+    expect(editableUserPayload(data, true)).toEqual({ name: "Ana", reason: "ajuste" });
+  });
+});
 
 describe("editableUserPayload", () => {
   it("omits protected fields when the administrator edits their own profile", () => {

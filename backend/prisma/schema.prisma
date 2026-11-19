@@ -41,6 +41,32 @@ model Organization {
   updatedAt        DateTime @updatedAt
 }
 
+// Autorização de contato da pessoa (ficha, Lote A): só quem está AUTORIZADO
+// recebe envio da equipe. `CADASTRO_ANTERIOR` só existe pela migração
+// 20261119091000 (a API não o aceita na entrada).
+enum ContactAuthorizationStatus {
+  AUTORIZADO
+  NAO_AUTORIZADO
+}
+
+enum ContactAuthorizationSource {
+  TERMO_ASSINADO
+  FICHA_ADMISSAO
+  ACEITE_WHATSAPP
+  OUTRO
+  CADASTRO_ANTERIOR
+}
+
+// Categoria do evento da trilha (derivada do prefixo da ação). PERMISSIONS fica
+// reservada ao Lote B.
+enum AuditCategory {
+  PERSON
+  ASSIGNMENT
+  SCHEDULE
+  STRUCTURE
+  PERMISSIONS
+}
+
 model User {
   id                    String         @id @default(cuid())
   // Pessoa sem acesso (D1): `hasAccess = false`, e-mail e senha NULL, papel
@@ -64,6 +90,21 @@ model User {
   level                 StaffLevel?    @relation(fields: [levelId], references: [id], onDelete: Restrict)
   // Função exibida na escala (texto livre, aparado); null = sem função.
   jobTitle              String?        @db.VarChar(80)
+  // Matrícula como digitada (aparada) e a chave em minúsculas, só para
+  // unicidade e busca (D1). Sem índice funcional `lower()`: o Prisma não o
+  // representa e geraria drift.
+  registration          String?        @db.VarChar(30)
+  registrationKey       String?        @unique @db.VarChar(30)
+  // Autorização de contato (D2). O default do banco é NAO_AUTORIZADO; a migração
+  // 20261119091000 marcou as pessoas existentes como AUTORIZADO/CADASTRO_ANTERIOR.
+  // `authorizationRecordedById` sem FK, como `AuditEvent.actorId`: não bloqueia
+  // exclusão nem cria relação nova.
+  contactAuthorization      ContactAuthorizationStatus @default(NAO_AUTORIZADO)
+  authorizationSource       ContactAuthorizationSource?
+  authorizationNote         String?                    @db.VarChar(120)
+  authorizationDate         DateTime?                  @db.Date
+  authorizationRecordedById String?
+  authorizationRecordedAt   DateTime?
   isActive              Boolean        @default(true)
   // Incremented whenever an identity-affecting mutation invalidates a bearer.
   // Tokens issued before this column existed are treated as version zero.
@@ -1215,10 +1256,19 @@ model AuditEvent {
   ip        String?
   userAgent String?
   createdAt DateTime @default(now())
+  // Trilha da pessoa e das estruturas (D3). `subjectUserId` sem FK: o histórico
+  // sobrevive à exclusão. `changes` = lista de campos alterados (`FieldChange`);
+  // nos eventos antigos fica nulo e o detalhe segue em `metadata`.
+  subjectUserId String?
+  category      AuditCategory?
+  reason        String?        @db.VarChar(200)
+  changes       Json?
 
   @@index([entity, entityId, createdAt])
   @@index([actorId, createdAt])
   @@index([action, createdAt])
+  @@index([subjectUserId, createdAt])
+  @@index([category, createdAt])
 }
 
 model WhatsappConnectionEvent {
@@ -1647,10 +1697,12 @@ enum TeamWhatsappRecipientStatus {
 }
 
 // INACTIVE = usuário inativo ou apagado na hora do disparo agendado (T9).
+// NOT_AUTHORIZED = pessoa sem autorização de contato na montagem ou no disparo.
 enum TeamWhatsappSkipReason {
   NO_PHONE
   SUPPRESSED
   INACTIVE
+  NOT_AUTHORIZED
 }
 
 model TeamWhatsappDispatch {

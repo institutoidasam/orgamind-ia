@@ -6,17 +6,25 @@ import type {
   MovePeopleResponse,
   SectorPeopleFailureReason,
   SectorPerson,
+  SectorPersonStatusInput,
   UpdateSectorPersonInput,
 } from '../../schemas/contracts/sector-people.schema';
 import { AuditService } from '../../shared/audit/audit.service';
+import {
+  canChangePersonStatus,
+  canEditContactAuthorization,
+} from '../../shared/authz/person-actions.policy';
 import { DomainError } from '../../shared/errors/domain.error';
+import { optionalReason, requireReason } from '../users/change-reason';
 import { invalidLevel } from '../users/users.errors';
-import { UsersService } from '../users/users.service';
+import { UsersService, type PersonChangeMeta } from '../users/users.service';
 import {
   sectorPeopleForbidden,
   sectorPeopleHasAccess,
   sectorPeopleInvalidShift,
   sectorPeoplePersonNotFound,
+  sectorPeopleStatusForbidden,
+  translateStatusGuard,
 } from './sector-people.errors';
 import {
   canEditPerson,
@@ -34,7 +42,11 @@ import {
 } from './sector-people.repository';
 import { SectorPeopleService } from './sector-people.service';
 
-type BatchOptions = { levelId?: string | null; shiftId: string };
+type BatchOptions = {
+  levelId?: string | null;
+  shiftId: string;
+  contactAuthorization?: AddFromContactsInput['contactAuthorization'];
+};
 type ItemOutcome = { userId: string } | { reason: SectorPeopleFailureReason };
 
 /** Erros do `UserPhoneService` que viram motivo por item no lote. */
@@ -43,10 +55,35 @@ const PHONE_FAILURES: Readonly<Record<string, SectorPeopleFailureReason>> = {
   'user.phone_taken': 'phone_taken',
 };
 
-/** Só os campos do contrato chegam ao `updateUser`: nunca setor, papel, acesso ou e-mail. */
-function personPatch(patch: UpdateSectorPersonInput): UpdateSectorPersonInput {
+/** Registro de lote fica fora da trilha; o evento por pessoa já traz antes e depois. */
+const BATCH_LOG = { category: null } as const;
+
+/** Mover e tirar do setor entram na trilha como vínculo (A5), com o motivo opcional (D14). */
+function assignmentMeta(
+  action: 'sector_people.person_moved' | 'sector_people.person_removed',
+  reason: string | undefined,
+): PersonChangeMeta {
+  return { reason: optionalReason(reason), action, category: 'ASSIGNMENT' };
+}
+
+/**
+ * Só os campos do contrato chegam ao `updateUser`: nunca setor, papel, acesso
+ * ou e-mail; o motivo viaja à parte, na `meta` da trilha.
+ */
+function personPatch(
+  patch: UpdateSectorPersonInput,
+): Omit<UpdateSectorPersonInput, 'reason'> {
   const { name, phone, levelId, jobTitle, shiftId } = patch;
-  const picked = { name, phone, levelId, jobTitle, shiftId };
+  const { registration, contactAuthorization } = patch;
+  const picked = {
+    name,
+    phone,
+    levelId,
+    jobTitle,
+    shiftId,
+    registration,
+    contactAuthorization,
+  };
   return Object.fromEntries(
     Object.entries(picked).filter(([, value]) => value !== undefined),
   );
@@ -134,6 +171,7 @@ export class SectorPeopleWriteService {
     actorId: string,
     sectorId: string,
     userIds: string[],
+    reason?: string,
   ): Promise<MovePeopleResponse> {
     const { actor, sector } = await this.people.requireManageable(
       actorId,
@@ -148,14 +186,21 @@ export class SectorPeopleWriteService {
     if (!people.every((p) => p && canPickExisting(actor, sector, p))) {
       throw sectorPeopleForbidden();
     }
+    const meta = assignmentMeta('sector_people.person_moved', reason);
     for (const id of ids) {
-      await this.users.updateUser(id, { sectorId: sector.id }, actorId);
+      await this.users.updateUser(id, { sectorId: sector.id }, actorId, meta);
     }
-    await this.audit.log('sector_people.moved', 'Sector', sector.id, {
-      actorId,
-      sectorId: sector.id,
-      count: ids.length,
-    });
+    await this.audit.log(
+      'sector_people.moved',
+      'Sector',
+      sector.id,
+      {
+        actorId,
+        sectorId: sector.id,
+        count: ids.length,
+      },
+      BATCH_LOG,
+    );
     return { moved: await this.readPeople(actor, ids) };
   }
 
@@ -173,7 +218,15 @@ export class SectorPeopleWriteService {
     const data = personPatch(patch);
     const fields = Object.keys(data) as PersonField[];
     if (!canEditPerson(sector, person, fields)) throw sectorPeopleForbidden();
-    await this.users.updateUser(userId, data, actorId);
+    // D16: guarda explícita da autorização (hoje só é falsa para pessoa com login, já barrada acima).
+    if (
+      data.contactAuthorization &&
+      !canEditContactAuthorization(actor, { hasAccess: person.hasAccess })
+    ) {
+      throw sectorPeopleForbidden();
+    }
+    const meta = { reason: requireReason(patch.reason) };
+    await this.users.updateUser(userId, data, actorId, meta);
     const [row] = await this.readPeople(actor, [userId]);
     return row;
   }
@@ -182,17 +235,63 @@ export class SectorPeopleWriteService {
     actorId: string,
     sectorId: string,
     userId: string,
+    reason?: string,
   ): Promise<void> {
     const { sector } = await this.people.requireManageable(actorId, sectorId);
     const person = await this.requirePerson(userId);
     if (person.sectorId !== sector.id) throw sectorPeopleForbidden();
     if (!canRemove(sector, person)) throw sectorPeopleHasAccess();
-    await this.users.updateUser(userId, { sectorId: null }, actorId);
-    await this.audit.log('sector_people.removed', 'Sector', sector.id, {
+    const meta = assignmentMeta('sector_people.person_removed', reason);
+    await this.users.updateUser(userId, { sectorId: null }, actorId, meta);
+    await this.audit.log(
+      'sector_people.removed',
+      'Sector',
+      sector.id,
+      {
+        actorId,
+        sectorId: sector.id,
+        userId,
+      },
+      BATCH_LOG,
+    );
+  }
+
+  /**
+   * A3/D6: inativar e reativar pela página do setor. A pessoa pode estar
+   * inativa (por isso não usa `requirePerson`); fora do setor é 403 até para o
+   * ADMIN; quem decide é `canChangePersonStatus`. A gravação, a trilha
+   * (`user.deactivated`/`user.reactivated`) e o fim das sessões são do
+   * `updateUser`, cujas guardas (si mesmo, último ADMIN) voltam em pt-BR.
+   */
+  async setStatus(
+    actorId: string,
+    sectorId: string,
+    userId: string,
+    body: SectorPersonStatusInput,
+  ): Promise<SectorPerson> {
+    const { actor, sector } = await this.people.requireManageable(
       actorId,
-      sectorId: sector.id,
-      userId,
-    });
+      sectorId,
+    );
+    const person = await this.repo.findPerson(userId);
+    if (!person) throw sectorPeoplePersonNotFound();
+    if (person.sectorId !== sector.id) throw sectorPeopleForbidden();
+    if (!canChangePersonStatus(actor, person, true)) {
+      throw sectorPeopleStatusForbidden();
+    }
+    const meta = { reason: requireReason(body.reason) };
+    try {
+      await this.users.updateUser(
+        userId,
+        { isActive: body.isActive },
+        actorId,
+        meta,
+      );
+    } catch (error) {
+      throw translateStatusGuard(error);
+    }
+    const [row] = await this.readPeople(actor, [userId]);
+    return row;
   }
 
   /** Q3: nível e turno do pedido inteiro valem antes de criar qualquer pessoa. */
@@ -221,6 +320,7 @@ export class SectorPeopleWriteService {
         sectorId: ctx.sectorId,
         levelId: ctx.options.levelId ?? null,
         shiftId: ctx.options.shiftId,
+        contactAuthorization: ctx.options.contactAuthorization,
       });
       return { userId: user.id };
     } catch (error) {
@@ -275,10 +375,16 @@ export class SectorPeopleWriteService {
     sectorId: string,
     counts: { source: 'new' | 'contacts'; created: number; failed: number },
   ): Promise<void> {
-    return this.audit.log('sector_people.added', 'Sector', sectorId, {
-      actorId,
+    return this.audit.log(
+      'sector_people.added',
+      'Sector',
       sectorId,
-      ...counts,
-    });
+      {
+        actorId,
+        sectorId,
+        ...counts,
+      },
+      BATCH_LOG,
+    );
   }
 }

@@ -5,6 +5,7 @@ import {
   passesLevel,
   sectorTargetLabel,
   shiftsLabel,
+  toRosterMember,
   type DayMember,
   type DispatchFilter,
   type LevelFilter,
@@ -22,6 +23,54 @@ const label = (over: Partial<LabelInput>): string =>
     selected: null,
     ...over,
   });
+
+describe('toRosterMember — autorização de contato (C8)', () => {
+  const rosterOf = (over: Partial<DayMember>) =>
+    toRosterMember({
+      ...dayPerson(),
+      fromOtherSector: false,
+      situation: { kind: 'OFF', reason: 'DAY_OFF', source: 'CYCLE' },
+      ...over,
+    });
+
+  it.each<[string, Partial<DayMember>, string, boolean]>([
+    [
+      'autorizada com origem verificável',
+      { contactAuthorization: 'AUTORIZADO', authorizationSource: 'OUTRO' },
+      'AUTORIZADO',
+      false,
+    ],
+    [
+      'autorizada pela migração (CADASTRO_ANTERIOR)',
+      {
+        contactAuthorization: 'AUTORIZADO',
+        authorizationSource: 'CADASTRO_ANTERIOR',
+      },
+      'AUTORIZADO',
+      true,
+    ],
+    [
+      'sem autorização',
+      { contactAuthorization: 'NAO_AUTORIZADO', authorizationSource: null },
+      'NAO_AUTORIZADO',
+      false,
+    ],
+    [
+      'sem autorização, mesmo com origem antiga (CADASTRO_ANTERIOR)',
+      {
+        contactAuthorization: 'NAO_AUTORIZADO',
+        authorizationSource: 'CADASTRO_ANTERIOR',
+      },
+      'NAO_AUTORIZADO',
+      false,
+    ],
+  ])('%s', (_caso, over, contactAuthorization, authorizationUnverified) => {
+    expect(rosterOf(over)).toMatchObject({
+      contactAuthorization,
+      authorizationUnverified,
+    });
+  });
+});
 
 describe('sectorTargetLabel (GC12)', () => {
   it.each<[string, Partial<LabelInput>, string]>([

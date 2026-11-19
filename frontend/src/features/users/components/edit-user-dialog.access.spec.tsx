@@ -25,7 +25,10 @@ const base = {
 const withAccess = { ...base, email: "ana@gbr.test", hasAccess: true, role: "OPERATOR" } as UserSummary;
 const withoutAccess = { ...base, id: "p1", name: "Rita", email: null, hasAccess: false, role: "VIEWER" } as UserSummary;
 const open = (user: UserSummary) => render(<EditUserDialog user={user} open onOpenChange={() => {}} isSelf={false} />);
-const save = (ui: ReturnType<typeof userEvent.setup>) => ui.click(screen.getByRole("button", { name: "Salvar" }));
+const save = async (ui: ReturnType<typeof userEvent.setup>) => {
+  await ui.type(screen.getByLabelText("Motivo da alteração"), "ajuste");
+  await ui.click(screen.getByRole("button", { name: "Salvar" }));
+};
 
 beforeEach(() => { vi.clearAllMocks(); state.mutateAsync.mockResolvedValue(undefined); });
 
@@ -70,19 +73,6 @@ describe("EditUserDialog pessoa sem acesso", () => {
     expect(data).not.toHaveProperty("role");
   });
 
-  it("mostra Situação Ativa/Inativa sem a frase de sessões e ainda deixa inativar", async () => {
-    const ui = userEvent.setup();
-    open(withoutAccess);
-    expect(screen.queryByText("Acesso")).toBeNull();
-    expect(screen.queryByText(/encerra sessões/)).toBeNull();
-    expect(screen.getByText("Situação")).toBeInTheDocument();
-    await ui.click(screen.getByRole("combobox", { name: "Situação" }));
-    await ui.click(await screen.findByRole("option", { name: "Inativa" }));
-    await save(ui);
-    await waitFor(() => expect(state.mutateAsync).toHaveBeenCalledTimes(1));
-    expect(state.mutateAsync.mock.calls[0][0].data).toMatchObject({ isActive: false });
-  });
-
   it("não deixa apagar o nome", async () => {
     const ui = userEvent.setup();
     open(withoutAccess);
@@ -90,13 +80,5 @@ describe("EditUserDialog pessoa sem acesso", () => {
     await save(ui);
     expect(await screen.findByText("Informe o nome")).toBeInTheDocument();
     expect(state.mutateAsync).not.toHaveBeenCalled();
-  });
-});
-
-describe("EditUserDialog usuário com acesso", () => {
-  it("mantém o campo Acesso com o aviso de sessões", () => {
-    open(withAccess);
-    expect(screen.getByText("Acesso")).toBeInTheDocument();
-    expect(screen.getByText("Acesso inativo encerra sessões existentes.")).toBeInTheDocument();
   });
 });

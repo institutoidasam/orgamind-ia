@@ -25,6 +25,7 @@ import { serializeErrorForLog } from './shared/logging/pino-error-serializer';
 import { sanitizeReqForLog } from './shared/logging/pino-req-serializer';
 import { AuditModule } from './shared/audit/audit.module';
 import { AuditContextInterceptor } from './shared/audit/audit-context.interceptor';
+import { AuditTrailModule } from './modules/audit-trail/audit-trail.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { ContactsModule } from './modules/contacts/contacts.module';
@@ -108,6 +109,7 @@ export const LOG_REDACT_PATHS = [
     ShiftsModule,
     LevelsModule,
     SectorPeopleModule,
+    AuditTrailModule,
     StaffScheduleModule,
     TeamWhatsappModule,
     InternalNumbersModule,

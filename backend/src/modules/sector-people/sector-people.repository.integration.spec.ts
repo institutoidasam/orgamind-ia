@@ -59,6 +59,8 @@ async function seedPeople(): Promise<void> {
     role: 'OPERATOR',
     sectorId: ids.it,
     phoneE164: '+5592977770004',
+    registration: 'AB-12',
+    registrationKey: 'ab-12',
   });
   ids.nina = await user({ ...WITHOUT_ACCESS, name: 'Nina' });
   await user({ ...WITHOUT_ACCESS, name: 'Ivo', isActive: false });
@@ -108,9 +110,57 @@ function names(items: readonly { name: string | null }[]): (string | null)[] {
   return items.map((item) => item.name);
 }
 
+describe('SectorPeopleRepository — busca de candidatos sem coringa de LIKE', () => {
+  it('"_" e "%" valem como texto em nome, telefone e matrícula; a busca normal acha', async () => {
+    const args = {
+      sectorId: ids.operation,
+      onlyUnassignedWithoutAccess: false,
+    };
+
+    // Sem escape, "_" casaria um caractere qualquer (Tiago, +5592977770004, ab-12) e "%" casaria todos.
+    for (const q of ['T_ago', '92977_70004', 'ab_12', '%']) {
+      expect(await repo.listCandidates({ ...args, q }), q).toEqual([]);
+    }
+    for (const q of ['tia', '77770004', 'ab-1']) {
+      const found = await repo.listCandidates({ ...args, q });
+      expect(names(found), q).toEqual(['Tiago']);
+    }
+  });
+});
+
+describe('SectorPeopleRepository — inativos e matrícula (A3, A1)', () => {
+  it('listPeople só traz o inativo (com isActive false) quando a flag vem', async () => {
+    const active = await repo.listPeople(ids.operation, false);
+    const all = await repo.listPeople(ids.operation, true);
+
+    expect(names(active)).toEqual(['Ágata', 'Ana', 'Bruno']);
+    expect(all.map((row) => [row.name, row.isActive])).toEqual([
+      ['Abel', false],
+      ['Ágata', true],
+      ['Ana', true],
+      ['Bruno', true],
+    ]);
+  });
+
+  it('candidatos acham pela matrícula, sem diferenciar maiúsculas, e devolvem registration', async () => {
+    const args = {
+      sectorId: ids.operation,
+      onlyUnassignedWithoutAccess: false,
+    };
+
+    const lower = await repo.listCandidates({ ...args, q: 'ab-1' });
+    const upper = await repo.listCandidates({ ...args, q: 'AB-12' });
+
+    expect(lower).toEqual([
+      expect.objectContaining({ id: ids.tiago, registration: 'AB-12' }),
+    ]);
+    expect(upper).toEqual(lower);
+  });
+});
+
 describe('SectorPeopleRepository — pessoas do setor', () => {
   it('lista ativos do setor por nome com nível, função, turno e hasAccess', async () => {
-    const rows = await repo.listPeople(ids.operation);
+    const rows = await repo.listPeople(ids.operation, false);
 
     // Ordem pt-BR (Ágata antes de Ana), sem a pessoa inativa nem a de TI.
     expect(names(rows)).toEqual(['Ágata', 'Ana', 'Bruno']);
@@ -177,7 +227,13 @@ describe('SectorPeopleRepository — candidatos', () => {
     });
 
     expect(items).toEqual([
-      { id: ids.nina, name: 'Nina', hasAccess: false, sector: null },
+      {
+        id: ids.nina,
+        name: 'Nina',
+        hasAccess: false,
+        sector: null,
+        registration: null,
+      },
     ]);
   });
 
@@ -198,6 +254,7 @@ describe('SectorPeopleRepository — candidatos', () => {
         name: 'Tiago',
         hasAccess: true,
         sector: { id: ids.it, name: 'TI' },
+        registration: 'AB-12',
       },
     ]);
     expect(byPhone).toEqual(byName);

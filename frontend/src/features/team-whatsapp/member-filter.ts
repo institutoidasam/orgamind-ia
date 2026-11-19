@@ -3,7 +3,11 @@ import type { LeftOutPerson, RecipientPreview, RosterMember, SendTarget, TeamLev
 
 export const memberName = (m: RosterMember): string => m.name ?? m.email ?? 'Sem nome';
 
-export const canReceive = (m: RosterMember): boolean => !!m.phoneE164;
+/** Tem telefone e não está `NAO_AUTORIZADO` (C8); `contactAuthorization` ausente = autorizado. */
+export const canReceive = (m: RosterMember): boolean => !!m.phoneE164 && m.contactAuthorization !== 'NAO_AUTORIZADO';
+
+/** Tem telefone, mas está `NAO_AUTORIZADO`: fica de fora, em "Contato não autorizado". Sem telefone vale "Sem telefone". */
+export const isNotAuthorized = (m: RosterMember): boolean => !!m.phoneE164 && m.contactAuthorization === 'NAO_AUTORIZADO';
 
 /** Filtro de nível do envio: vazio e sem `withoutLevel` = todos (C5). */
 export type LevelFilter = { levelIds: readonly string[]; withoutLevel: boolean };
@@ -42,9 +46,16 @@ export function noScheduleCount(members: readonly RosterMember[]): number {
   return members.filter((m) => m.isActive && m.situation.kind === 'NONE').length;
 }
 
-/** Ids marcados que seguem na lista, na ordem do back (não na do clique). */
+/** Ids marcados que seguem na lista e podem receber, na ordem do back (não na do clique). */
 export function selectedIdsIn(visible: readonly RosterMember[], selected: ReadonlySet<string>): string[] {
-  return visible.filter((m) => selected.has(m.id)).map((m) => m.id);
+  return visible.filter((m) => canReceive(m) && selected.has(m.id)).map((m) => m.id);
+}
+
+/** Destinatários de origem de autorização não verificada; `selectedIds` null = todos que recebem. */
+export function unverifiedCount(members: readonly RosterMember[], selectedIds: readonly string[] | null): number {
+  return members.filter((m) => (
+    canReceive(m) && m.authorizationUnverified === true && (!selectedIds || selectedIds.includes(m.id))
+  )).length;
 }
 
 /** Marca todos os habilitados; se já estavam todos marcados, desmarca. */
@@ -62,15 +73,17 @@ export function toggleAllEnabled(visible: readonly RosterMember[], selected: Rea
 const preview = (m: RosterMember): RecipientPreview => ({ id: m.id, name: memberName(m) });
 
 /**
- * Quem fica de fora da lista conferida, na ordem da lista: sem telefone (`no_phone`) e, quando há
- * seleção ("só os marcados"), quem tem telefone e não foi marcado (`unselected`). `null` = todos.
+ * Quem fica de fora da lista conferida, na ordem da lista: sem telefone (`no_phone`), contato não
+ * autorizado (`not_authorized`) e, quando há seleção ("só os marcados"), quem pode receber e não foi
+ * marcado (`unselected`). `null` = todos.
  */
 export function leftOutPeople(
   members: readonly RosterMember[],
   selectedIds: readonly string[] | null,
 ): LeftOutPerson[] {
   return members.flatMap((m): LeftOutPerson[] => {
-    if (!canReceive(m)) return [{ name: memberName(m), reason: 'no_phone' }];
+    if (!m.phoneE164) return [{ name: memberName(m), reason: 'no_phone' }];
+    if (isNotAuthorized(m)) return [{ name: memberName(m), reason: 'not_authorized' }];
     return selectedIds && !selectedIds.includes(m.id) ? [{ name: memberName(m), reason: 'unselected' }] : [];
   });
 }
@@ -132,7 +145,7 @@ export function buildSectorTarget(input: SectorTargetInput): SendTarget {
   const visible = input.sectors.flatMap((s) => (
     eligibleMembers(filterByLevel(s.members, levelFilter), input.shiftIds, includeOff)
   ));
-  const chosen = selectedIds ? visible.filter((m) => selectedIds.includes(m.id)) : null;
+  const chosen = selectedIds ? visible.filter((m) => canReceive(m) && selectedIds.includes(m.id)) : null;
   return {
     type: 'sector',
     sectorIds: input.sectors.map((s) => s.id),

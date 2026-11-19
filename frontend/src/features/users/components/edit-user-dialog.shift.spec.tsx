@@ -30,7 +30,10 @@ const morningUser = {
 };
 const open = (isSelf: boolean) => render(<EditUserDialog user={morningUser} open onOpenChange={() => {}} isSelf={isSelf} />);
 const shiftTrigger = () => screen.getByRole("combobox", { name: "Turno" });
-const save = (ui: ReturnType<typeof userEvent.setup>) => ui.click(screen.getByRole("button", { name: "Salvar" }));
+const save = async (ui: ReturnType<typeof userEvent.setup>) => {
+  await ui.type(screen.getByLabelText("Motivo da alteração"), "ajuste");
+  await ui.click(screen.getByRole("button", { name: "Salvar" }));
+};
 
 beforeEach(() => { vi.clearAllMocks(); state.mutateAsync.mockResolvedValue(undefined); });
 

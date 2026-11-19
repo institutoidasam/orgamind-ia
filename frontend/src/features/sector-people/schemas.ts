@@ -1,5 +1,11 @@
 import { z } from 'zod';
 import { sectorChannelSchema } from '@/features/internal-admin/schemas';
+import {
+  authorizationChoiceError,
+  contactAuthorizationSchema,
+  type AuthorizationChoice,
+  type ContactAuthorizationInput,
+} from '@/features/people-record/authorization';
 
 /**
  * Espelho à mão do contrato do back (`backend/src/schemas/contracts/sector-people.schema.ts`).
@@ -20,6 +26,9 @@ export const sectorPersonSchema = z.object({
   jobTitle: z.string().nullable(),
   shift: idNameSchema.nullable(),
   editable: z.enum(['full', 'limited']),
+  registration: z.string().nullable(),
+  isActive: z.boolean(),
+  contactAuthorization: contactAuthorizationSchema,
 });
 
 export const sectorPeopleResponseSchema = z.object({
@@ -42,14 +51,27 @@ export type SectorPerson = z.infer<typeof sectorPersonSchema>;
 export type SectorPeopleResponse = z.infer<typeof sectorPeopleResponseSchema>;
 export type SectorPeopleOptions = SectorPeopleResponse['options'];
 
-/** PATCH: só os campos que mudaram; pessoa com acesso aceita só `levelId`, `jobTitle` e `shiftId`. */
+/**
+ * PATCH: só os campos que mudaram, mais o `reason` (A4); pessoa com acesso aceita só
+ * `levelId`, `jobTitle` e `shiftId` (matrícula e autorização dela mudam em Usuários, D16).
+ */
 export type UpdateSectorPersonInput = {
   name?: string;
   phone?: string;
+  registration?: string | null;
+  contactAuthorization?: ContactAuthorizationInput;
   levelId?: string | null;
   jobTitle?: string | null;
   shiftId?: string;
+  reason?: string;
 };
+
+/** Escolha da autorização conferida por `authorizationChoiceError`; `required` recusa o "nada escolhido". */
+const authorizationFieldSchema = (required: boolean) =>
+  z.custom<AuthorizationChoice | null>().superRefine((choice, ctx) => {
+    const message = choice || required ? authorizationChoiceError(choice ?? null) : undefined;
+    if (message) ctx.addIssue({ code: 'custom', message });
+  });
 
 const phoneDigitsOk = (value: string) => {
   const digits = value.replace(/\D/g, '');
@@ -66,6 +88,10 @@ export const personFormSchema = z.object({
   levelId: z.string().nullable().optional(),
   jobTitle: z.string().trim().max(80, 'Use até 80 caracteres').nullable().optional(),
   shiftId: z.string().nullable().optional(),
+  registration: z.string().trim().max(30, 'Use até 30 caracteres').optional(),
+  // `null` = nada escolhido (cadastro anterior sem origem): a edição não manda a autorização.
+  authorization: authorizationFieldSchema(false).optional(),
+  reason: z.string().optional(),
 });
 export type PersonFormInput = z.infer<typeof personFormSchema>;
 
@@ -84,6 +110,7 @@ export const sectorPersonCandidatesSchema = z.object({
       id: z.string(),
       name: z.string(),
       hasAccess: z.boolean(),
+      registration: z.string().nullable(),
       sector: idNameSchema.nullable(),
     })
     .array(),
@@ -116,15 +143,23 @@ export type SectorContactCandidate = z.infer<typeof sectorContactCandidatesSchem
 export type SectorPeopleFailureReason = z.infer<typeof sectorPeopleFailureReasonSchema>;
 export type AddFromContactsResponse = z.infer<typeof addFromContactsResponseSchema>;
 
-/** Q3: `shiftId` obrigatório ao adicionar (turno ativo; o servidor confere). */
+/** Q3: `shiftId` obrigatório ao adicionar (turno ativo; o servidor confere). A2: a autorização é sempre escolhida. */
 export type CreateSectorPersonInput = {
   name: string;
   phone: string;
+  registration?: string;
+  contactAuthorization: ContactAuthorizationInput;
   levelId: string | null;
   jobTitle: string | null;
   shiftId: string;
 };
-export type AddFromContactsInput = { contactIds: string[]; levelId: string | null; shiftId: string };
+/** Uma autorização para o lote inteiro; nada é derivado do contato (A2). */
+export type AddFromContactsInput = {
+  contactIds: string[];
+  contactAuthorization: ContactAuthorizationInput;
+  levelId: string | null;
+  shiftId: string;
+};
 
 /** Aba "Nova pessoa": nome e telefone obrigatórios; turno sem pré-seleção ('' até o gestor escolher). */
 export const newPersonFormSchema = z.object({
@@ -134,6 +169,8 @@ export const newPersonFormSchema = z.object({
     .trim()
     .min(1, 'Informe o telefone')
     .refine(phoneDigitsOk, 'Informe DDD + número'),
+  registration: z.string().trim().max(30, 'Use até 30 caracteres'),
+  authorization: authorizationFieldSchema(true),
   levelId: z.string().nullable(),
   jobTitle: z.string().trim().max(80, 'Use até 80 caracteres'),
   shiftId: z.string().min(1, 'Escolha o turno'),

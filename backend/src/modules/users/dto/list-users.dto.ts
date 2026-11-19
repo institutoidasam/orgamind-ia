@@ -10,6 +10,12 @@ export const listUsersQuerySchema = z.object({
     .enum(['true', 'false'])
     .transform((value) => value === 'true')
     .optional(),
+  // Busca por nome ou matrícula (C5); vazia = sem busca.
+  q: z.string().trim().max(80).optional(),
+  // Situação (D9): `all` por padrão, para os chamadores que não a mandam.
+  status: z.enum(['active', 'inactive', 'all']).default('all'),
+  // Filtro por autorização de contato; outro valor = 400.
+  authorization: z.enum(['UNVERIFIED', 'NOT_AUTHORIZED']).optional(),
 });
 
 export class ListUsersDto extends createZodDto(listUsersQuerySchema) {}

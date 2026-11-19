@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { civilDateSchema } from './civil-date.schema';
+import { contactAuthorizationStatusSchema } from './contact-authorization.schema';
 import { levelRefSchema } from './level.schema';
 import { shiftRefSchema } from './shift.schema';
 import { daySituationSchema } from './staff-schedule.schema';
@@ -11,10 +12,13 @@ import { daySituationSchema } from './staff-schedule.schema';
 
 export const teamProviderSchema = z.enum(['GOZAP', 'EVOLUTION']);
 // INACTIVE = usuário inativo ou apagado na hora do disparo agendado.
+// NOT_AUTHORIZED = pessoa sem autorização de contato (A2): fica fora do envio na
+// montagem e é conferida de novo no worker.
 export const teamSkipReasonSchema = z.enum([
   'NO_PHONE',
   'SUPPRESSED',
   'INACTIVE',
+  'NOT_AUTHORIZED',
 ]);
 export const teamTargetTypeSchema = z.enum(['user', 'sector']);
 // Último estado de conexão do canal; null = sem evento ou fora destes valores.
@@ -149,6 +153,8 @@ export const teamRosterQuerySchema = z.preprocess(
  * trabalha em outro setor no dia, mais ativos de fora com WORK aqui
  * (`fromOtherSector`). `phoneE164` = o que o envio usaria (contato ligado, senão
  * o do usuário), para o grupo "Sem telefone". `level` = nível do cadastro (C4).
+ * `contactAuthorization` agrupa a prévia (C8/D11); `authorizationUnverified` =
+ * autorizada pela migração (`CADASTRO_ANTERIOR`): ainda recebe, com aviso.
  */
 const teamRosterMemberSchema = personSchema.extend({
   phoneE164: z.string().nullable(),
@@ -157,6 +163,8 @@ const teamRosterMemberSchema = personSchema.extend({
   fromOtherSector: z.boolean(),
   situation: daySituationSchema,
   level: levelRefSchema.nullable(),
+  contactAuthorization: contactAuthorizationStatusSchema,
+  authorizationUnverified: z.boolean(),
 });
 
 /**

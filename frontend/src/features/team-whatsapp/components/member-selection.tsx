@@ -4,7 +4,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { formatPhoneBR } from '@/lib/format-phone';
 import { OFF_REASON_LABEL } from '../error-messages';
-import { canReceive, memberName, selectedIdsIn } from '../member-filter';
+import { canReceive, isNotAuthorized, memberName, selectedIdsIn, unverifiedCount } from '../member-filter';
 import type { RosterMember } from '../schemas';
 
 type ShiftNames = ReadonlyMap<string, string>;
@@ -92,6 +92,16 @@ function NoScheduleNote({ count }: { count: number }) {
   );
 }
 
+/** Linha informativa, sem bloqueio: quantos destinatários vêm de cadastro anterior (origem não verificada). */
+function UnverifiedNote({ count }: { count: number }) {
+  const who = count === 1 ? '1 destinatário' : `${count} destinatários`;
+  return (
+    <p className="text-sm text-muted-foreground">
+      {who} com origem de autorização não verificada (cadastro anterior)
+    </p>
+  );
+}
+
 function IncludeOffToggle({ checked, onChange }: { checked: boolean; onChange: (on: boolean) => void }) {
   return (
     <div className="flex items-center gap-2">
@@ -139,7 +149,8 @@ function SectorMembers({ group, multi, shiftNames, includeOff, selected, onToggl
           />
         ))}
       </ul>
-      <InfoGroup title="Sem telefone" label={named('Sem telefone')} people={visible.filter((m) => !canReceive(m))} shiftNames={shiftNames} />
+      <InfoGroup title="Sem telefone" label={named('Sem telefone')} people={visible.filter((m) => !m.phoneE164)} shiftNames={shiftNames} />
+      <InfoGroup title="Contato não autorizado" label={named('Contato não autorizado')} people={visible.filter(isNotAuthorized)} shiftNames={shiftNames} />
       {!includeOff && <InfoGroup title="De folga" label={named('De folga')} people={off} shiftNames={shiftNames} />}
     </div>
   );
@@ -149,7 +160,9 @@ export function MemberSelection(props: Props) {
   const { shiftIds, groups, includeOff, shiftNames, selected, onToggle } = props;
   const visible = groups.flatMap((g) => g.visible);
   const receiving = visible.filter(canReceive);
-  const marked = selectedIdsIn(visible, selected).length;
+  const markedIds = selectedIdsIn(visible, selected);
+  const marked = markedIds.length;
+  const unverified = unverifiedCount(visible, marked > 0 ? markedIds : null);
   return (
     <section className="space-y-3 rounded-md border p-4" style={{ borderColor: 'var(--border)' }}>
       {shiftIds.length === 0 && <IncludeOffToggle checked={includeOff} onChange={props.onToggleOff} />}
@@ -159,6 +172,7 @@ export function MemberSelection(props: Props) {
           includeOff={includeOff} selected={selected} onToggle={onToggle}
         />
       ))}
+      {unverified > 0 && <UnverifiedNote count={unverified} />}
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="outline" onClick={props.onToggleAll} disabled={receiving.length === 0}>Marcar todos</Button>
         <Button disabled={receiving.length === 0} onClick={props.onSendAll}>Enviar para todos ({receiving.length})</Button>

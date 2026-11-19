@@ -21,12 +21,22 @@ export type PeoplePerson = {
   hasAccess: boolean;
   isActive: boolean;
 };
-export type PersonField = 'name' | 'phone' | 'levelId' | 'jobTitle' | 'shiftId';
+export type PersonField =
+  | 'name'
+  | 'phone'
+  | 'levelId'
+  | 'jobTitle'
+  | 'shiftId'
+  | 'registration'
+  | 'contactAuthorization';
 
 /** Papéis de escrita: VIEWER nunca passa, mesmo que seja `managerId` do setor. */
 const WRITE_ROLES: readonly Role[] = ['ADMIN', 'SUPERVISOR', 'OPERATOR'];
 
-/** Pessoa com acesso: nome e telefone ficam com o cadastro de Usuários (ADMIN). */
+/**
+ * Pessoa com acesso: nome, telefone, matrícula e autorização de contato ficam
+ * com o cadastro de Usuários (ADMIN); aqui nem o ADMIN os edita (D16).
+ */
 const LIMITED_FIELDS: readonly PersonField[] = [
   'levelId',
   'jobTitle',
@@ -52,7 +62,7 @@ export function canManageSector(
   return sector.isActive && sector.managerId === actor.id;
 }
 
-/** Pessoa deste setor; com acesso, só nível, função e turno (ADMIN e gestor). */
+/** Pessoa deste setor; com acesso, só nível, função e turno (ADMIN e gestor); matrícula e autorização só sem acesso. */
 export function canEditPerson(
   sector: PeopleSector,
   person: PeoplePerson,

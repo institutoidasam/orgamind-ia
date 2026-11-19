@@ -6,102 +6,127 @@ import {
   type StartedPostgreSqlContainer,
 } from '@testcontainers/postgresql';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { AuditRepository } from '../../shared/audit/audit.repository';
+import { AuditService } from '../../shared/audit/audit.service';
 import { InternalSectorsRepository } from './internal-sectors.repository';
 import { InternalSectorsService } from './internal-sectors.service';
 
-describe('Setores BDD (Postgres exclusivo)', () => {
-  let postgres: StartedPostgreSqlContainer;
-  let prisma: PrismaClient;
-  let sectors: InternalSectorsService;
+const ACTOR = 'admin-1';
 
-  beforeAll(async () => {
-    const credential = randomUUID().replaceAll('-', '');
-    postgres = await new PostgreSqlContainer('postgres:16-alpine')
-      .withDatabase('database_test')
-      .withUsername(`user_${credential}`)
-      .withPassword(randomUUID())
-      .start();
-    const url = postgres.getConnectionUri();
-    execFileSync(
-      process.execPath,
-      [require.resolve('prisma/build/index.js'), 'migrate', 'deploy'],
-      {
-        stdio: 'inherit',
-        timeout: 60_000,
-        env: { ...process.env, DATABASE_URL: url },
-      },
-    );
-    prisma = new PrismaClient({ datasources: { db: { url } } });
-    sectors = new InternalSectorsService(
-      new InternalSectorsRepository(prisma as never),
-    );
-  }, 180_000);
+let postgres: StartedPostgreSqlContainer;
+let prisma: PrismaClient;
+let sectors: InternalSectorsService;
 
-  afterAll(async () => {
-    await prisma?.$disconnect();
-    await postgres?.stop();
+beforeAll(async () => {
+  const credential = randomUUID().replaceAll('-', '');
+  postgres = await new PostgreSqlContainer('postgres:16-alpine')
+    .withDatabase('database_test')
+    .withUsername(`user_${credential}`)
+    .withPassword(randomUUID())
+    .start();
+  const url = postgres.getConnectionUri();
+  execFileSync(
+    process.execPath,
+    [require.resolve('prisma/build/index.js'), 'migrate', 'deploy'],
+    {
+      stdio: 'inherit',
+      timeout: 60_000,
+      env: { ...process.env, DATABASE_URL: url },
+    },
+  );
+  prisma = new PrismaClient({ datasources: { db: { url } } });
+  sectors = new InternalSectorsService(
+    new InternalSectorsRepository(prisma as never),
+    new AuditService(new AuditRepository(prisma as never), {
+      get: () => undefined,
+    } as never),
+  );
+}, 180_000);
+
+afterAll(async () => {
+  await prisma?.$disconnect();
+  await postgres?.stop();
+});
+
+// Setor Compras com a gestora ativa que o responde.
+async function createComprasWithManager() {
+  const manager = await prisma.user.create({
+    data: {
+      name: 'Gestora ativa',
+      email: 'gestora@test.local',
+      password: randomUUID(),
+      role: 'SUPERVISOR',
+    },
   });
-
-  it('ADMIN cria, edita e consulta setor com gestor, membros e o número efetivo', async () => {
-    const manager = await prisma.user.create({
-      data: {
-        name: 'Gestora ativa',
-        email: 'gestora@test.local',
-        password: randomUUID(),
-        role: 'SUPERVISOR',
-      },
-    });
-    const created = await sectors.create({
+  const created = await sectors.create(
+    {
       name: 'Compras',
       code: 'COM',
       description: 'Suprimentos',
       managerId: manager.id,
       isActive: true,
-    });
-    await Promise.all([
-      prisma.user.create({
-        data: {
-          name: 'Operador elegível',
-          email: 'operador@test.local',
-          password: randomUUID(),
-          role: 'OPERATOR',
-          sectorId: created.id,
-        },
-      }),
-      prisma.user.create({
-        data: {
-          name: 'Leitor',
-          email: 'leitor@test.local',
-          password: randomUUID(),
-          role: 'VIEWER',
-          sectorId: created.id,
-        },
-      }),
-      prisma.user.create({
-        data: {
-          name: 'Inativo',
-          email: 'inativo@test.local',
-          password: randomUUID(),
-          role: 'SUPERVISOR',
-          sectorId: created.id,
-          isActive: false,
-        },
-      }),
-      prisma.channel.create({
-        data: {
-          name: 'Compras Zap',
-          provider: 'EVOLUTION',
-          phoneE164: '+5592999990001',
-          isActive: true,
-          sectors: { connect: { id: created.id } },
-        },
-      }),
-    ]);
+    },
+    ACTOR,
+  );
+  return { manager, created };
+}
 
-    const updated = await sectors.update(created.id, {
-      name: 'Compras estratégicas',
-      description: 'Suprimentos e contratos',
-    });
+// Operador elegível, leitor, inativo e o canal Evolution do setor.
+function addComprasMembersAndChannel(sectorId: string) {
+  return Promise.all([
+    prisma.user.create({
+      data: {
+        name: 'Operador elegível',
+        email: 'operador@test.local',
+        password: randomUUID(),
+        role: 'OPERATOR',
+        sectorId,
+      },
+    }),
+    prisma.user.create({
+      data: {
+        name: 'Leitor',
+        email: 'leitor@test.local',
+        password: randomUUID(),
+        role: 'VIEWER',
+        sectorId,
+      },
+    }),
+    prisma.user.create({
+      data: {
+        name: 'Inativo',
+        email: 'inativo@test.local',
+        password: randomUUID(),
+        role: 'SUPERVISOR',
+        sectorId,
+        isActive: false,
+      },
+    }),
+    prisma.channel.create({
+      data: {
+        name: 'Compras Zap',
+        provider: 'EVOLUTION',
+        phoneE164: '+5592999990001',
+        isActive: true,
+        sectors: { connect: { id: sectorId } },
+      },
+    }),
+  ]);
+}
+
+describe('Setores BDD — ficha do setor (Postgres exclusivo)', () => {
+  it('ADMIN cria, edita e consulta setor com gestor, membros e o número efetivo', async () => {
+    const { manager, created } = await createComprasWithManager();
+    await addComprasMembersAndChannel(created.id);
+
+    const updated = await sectors.update(
+      created.id,
+      {
+        name: 'Compras estratégicas',
+        description: 'Suprimentos e contratos',
+      },
+      ACTOR,
+    );
     const detail = await sectors.get(created.id);
 
     expect(updated).toMatchObject({
@@ -120,22 +145,27 @@ describe('Setores BDD (Postgres exclusivo)', () => {
     expect(detail).not.toHaveProperty('numbers');
     expect(detail.members).toHaveLength(3);
   });
+});
 
+describe('Setores BDD — nomes duplicados, listagem e membros', () => {
   it('rejeita nome e sigla duplicados, inclusive nome normalizado', async () => {
     await expect(
-      sectors.create({ name: 'compras estratégicas', code: 'OUT' }),
+      sectors.create({ name: 'compras estratégicas', code: 'OUT' }, ACTOR),
     ).rejects.toMatchObject({ status: 409, code: 'sector.conflict' });
     await expect(
-      sectors.create({ name: 'Outros', code: 'COM' }),
+      sectors.create({ name: 'Outros', code: 'COM' }, ACTOR),
     ).rejects.toMatchObject({ status: 409, code: 'sector.conflict' });
   });
 
   it('lista ativos somente quando activeOnly é verdadeiro e mantém inativos no histórico administrativo', async () => {
-    const inactive = await sectors.create({
-      name: 'Arquivo',
-      code: 'ARQ',
-      isActive: false,
-    });
+    const inactive = await sectors.create(
+      {
+        name: 'Arquivo',
+        code: 'ARQ',
+        isActive: false,
+      },
+      ACTOR,
+    );
 
     const activeOnly = await sectors.list(1, 100, true);
     const all = await sectors.list(1, 100, false);
@@ -162,7 +192,9 @@ describe('Setores BDD (Postgres exclusivo)', () => {
       'VIEWER',
     ]);
   });
+});
 
+describe('Setores BDD — setor ou gestor inválido', () => {
   it('retorna 404 para setor ausente e 409 para gestor ausente, inativo ou VIEWER', async () => {
     const inactive = await prisma.user.findUniqueOrThrow({
       where: { email: 'inativo@test.local' },
@@ -176,28 +208,39 @@ describe('Setores BDD (Postgres exclusivo)', () => {
       code: 'sector.not_found',
     });
     await expect(
-      sectors.create({
-        name: 'Gestor ausente',
-        code: 'GAS',
-        managerId: 'ausente',
-      }),
+      sectors.create(
+        {
+          name: 'Gestor ausente',
+          code: 'GAS',
+          managerId: 'ausente',
+        },
+        ACTOR,
+      ),
     ).rejects.toMatchObject({ status: 409, code: 'sector.manager_invalid' });
     await expect(
-      sectors.create({
-        name: 'Gestor inativo',
-        code: 'GIN',
-        managerId: inactive.id,
-      }),
+      sectors.create(
+        {
+          name: 'Gestor inativo',
+          code: 'GIN',
+          managerId: inactive.id,
+        },
+        ACTOR,
+      ),
     ).rejects.toMatchObject({ status: 409, code: 'sector.manager_invalid' });
     await expect(
-      sectors.create({
-        name: 'Gestor leitor',
-        code: 'GLE',
-        managerId: viewer.id,
-      }),
+      sectors.create(
+        {
+          name: 'Gestor leitor',
+          code: 'GLE',
+          managerId: viewer.id,
+        },
+        ACTOR,
+      ),
     ).rejects.toMatchObject({ status: 409, code: 'sector.manager_invalid' });
   });
+});
 
+describe('Setores BDD — canal do setor', () => {
   it('canal inativo ou de outro provedor deixa o setor sem número, sem apagar a associação', async () => {
     const sector = await prisma.sector.findUniqueOrThrow({
       where: { code: 'COM' },

@@ -9,6 +9,10 @@ const USER_ERROR_MESSAGES: Record<string, string> = {
   "user.email_taken": "Este e-mail já está em uso por outro usuário.",
   "user.sector_required": "Defina o setor da pessoa em Editar antes de dar acesso a este perfil.",
   "user.sector_invalid": "O setor da pessoa está inativo. Escolha outro em Editar.",
+  "user.registration_taken": "Já existe uma pessoa com esta matrícula",
+  "user.reason_required": "Informe o motivo da alteração, de 3 a 200 caracteres.",
+  "user.authorization_future_date": "A data da autorização não pode ser futura.",
+  "user.has_history": "Esta pessoa tem histórico e não pode ser excluída. Inative o cadastro.",
 };
 
 /** Mensagem pt-BR do código de erro da API de usuários; undefined = erro genérico. */

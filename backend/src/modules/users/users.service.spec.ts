@@ -6,6 +6,7 @@ import { RefreshService } from '../auth/refresh.service';
 import { UserPhoneService } from './user-phone.service';
 import argon2 from 'argon2';
 import { Prisma } from '@prisma/client';
+import { NO_PERSON_RECORD } from './users.test-fixtures';
 
 vi.mock('argon2');
 
@@ -29,6 +30,7 @@ const adminUser = {
   createdById: null,
   createdBy: null,
   invitedUsers: [],
+  ...NO_PERSON_RECORD,
 };
 
 const operatorUser = {
@@ -41,10 +43,12 @@ const operatorUser = {
 
 type UsersRepositoryDouble = {
   findMany: ReturnType<typeof vi.fn>;
+  countAuthorizationPending: ReturnType<typeof vi.fn>;
   findById: ReturnType<typeof vi.fn>;
   findByEmail: ReturnType<typeof vi.fn>;
   findActiveSector: ReturnType<typeof vi.fn>;
-  create: ReturnType<typeof vi.fn>;
+  findIdByRegistrationKey: ReturnType<typeof vi.fn>;
+  createWithAudit: ReturnType<typeof vi.fn>;
   deleteWithLastAdminGuard: ReturnType<typeof vi.fn>;
   updateWithLastAdminGuard: ReturnType<typeof vi.fn>;
   resetPassword: ReturnType<typeof vi.fn>;
@@ -61,10 +65,14 @@ type PhonesDouble = {
 const makeRepo = (overrides: Partial<UsersRepositoryDouble> = {}) =>
   ({
     findMany: vi.fn().mockResolvedValue({ data: [adminUser], total: 1 }),
+    countAuthorizationPending: vi
+      .fn()
+      .mockResolvedValue({ unverified: 0, notAuthorized: 0 }),
     findById: vi.fn().mockResolvedValue(adminUser),
     findByEmail: vi.fn().mockResolvedValue(null),
     findActiveSector: vi.fn().mockResolvedValue({ id: 'sector-1' }),
-    create: vi.fn().mockResolvedValue(adminUser),
+    findIdByRegistrationKey: vi.fn().mockResolvedValue(null),
+    createWithAudit: vi.fn().mockResolvedValue(adminUser),
     deleteWithLastAdminGuard: vi.fn().mockResolvedValue({ deleted: adminUser }),
     updateWithLastAdminGuard: vi.fn().mockResolvedValue({ updated: adminUser }),
     resetPassword: vi.fn().mockResolvedValue(undefined),
@@ -119,6 +127,22 @@ describe('UsersService.listUsers', () => {
     expect(result.pageSize).toBe(25);
     expect(result.total).toBe(1);
   });
+
+  it('repassa os filtros ao repositório e devolve os contadores de autorização', async () => {
+    const counts = { unverified: 3, notAuthorized: 2 };
+    const repo = makeRepo({
+      countAuthorizationPending: vi.fn().mockResolvedValue(counts),
+    });
+    const svc = makeService(repo, makeAudit(), makeRefresh());
+    const filters = {
+      q: 'ab-12',
+      status: 'active',
+      authorization: 'UNVERIFIED',
+    } as const;
+    const result = await svc.listUsers(2, 10, filters);
+    expect(repo.findMany).toHaveBeenCalledWith(2, 10, filters);
+    expect(result.authorizationCounts).toEqual(counts);
+  });
 });
 
 describe('UsersService.createUser', () => {
@@ -149,7 +173,7 @@ describe('UsersService.createUser', () => {
       'c1',
     );
     expect(result.temporaryPassword).toHaveLength(12);
-    expect(result.user!.email).toBe(adminUser.email);
+    expect(result.user.email).toBe(adminUser.email);
   });
 
   it('does NOT include `password` in the returned user', async () => {
@@ -193,11 +217,15 @@ describe('UsersService.updateUser', () => {
     const repo = makeRepo({ findById: vi.fn().mockResolvedValue(adminUser) });
     const svc = makeService(repo, makeAudit(), makeRefresh());
     await svc.updateUser('u1', { name: 'New Name' }, 'other');
-    expect(repo.updateWithLastAdminGuard).toHaveBeenCalledWith('u1', {
-      name: 'New Name',
-    });
+    expect(repo.updateWithLastAdminGuard).toHaveBeenCalledWith(
+      'u1',
+      { name: 'New Name' },
+      expect.any(Function),
+    );
   });
+});
 
+describe('UsersService.updateUser sessions and contention', () => {
   it("revokes the target user's sessions when their role changes", async () => {
     const repo = makeRepo({ findById: vi.fn().mockResolvedValue(adminUser) });
     const refresh = makeRefresh();
@@ -248,7 +276,7 @@ describe('UsersService.deleteUser', () => {
   it('throws ForbiddenError when deleting self', async () => {
     const repo = makeRepo({ findById: vi.fn().mockResolvedValue(adminUser) });
     const svc = makeService(repo, makeAudit(), makeRefresh());
-    await expect(svc.deleteUser('u1', 'u1')).rejects.toMatchObject({
+    await expect(svc.deleteUser('u1', 'u1', 'ADMIN')).rejects.toMatchObject({
       code: 'user.cannot_delete_self',
     });
   });
@@ -259,25 +287,23 @@ describe('UsersService.deleteUser', () => {
       deleteWithLastAdminGuard: vi.fn().mockResolvedValue({ lastAdmin: true }),
     });
     const svc = makeService(repo, makeAudit(), makeRefresh());
-    await expect(svc.deleteUser('u1', 'other')).rejects.toMatchObject({
+    await expect(svc.deleteUser('u1', 'other', 'ADMIN')).rejects.toMatchObject({
       code: 'user.last_admin',
     });
   });
 
-  it('deletes and logs audit event', async () => {
+  it('deletes through the guard with the trail inside it (no audit.log)', async () => {
     const audit = makeAudit();
     const repo = makeRepo({
       findById: vi.fn().mockResolvedValue(operatorUser),
     });
     const svc = makeService(repo, audit, makeRefresh());
-    await svc.deleteUser('u2', 'u1');
-    expect(repo.deleteWithLastAdminGuard).toHaveBeenCalledWith('u2');
-    expect(audit.log).toHaveBeenCalledWith(
-      'user.deleted',
-      'User',
+    await svc.deleteUser('u2', 'u1', 'ADMIN');
+    expect(repo.deleteWithLastAdminGuard).toHaveBeenCalledWith(
       'u2',
-      expect.any(Object),
+      expect.any(Function),
     );
+    expect(audit.log).not.toHaveBeenCalled();
   });
 
   it("revokes the deleted user's refresh families", async () => {
@@ -286,7 +312,7 @@ describe('UsersService.deleteUser', () => {
     });
     const refresh = makeRefresh();
     const svc = makeService(repo, makeAudit(), refresh);
-    await svc.deleteUser('u2', 'u1');
+    await svc.deleteUser('u2', 'u1', 'ADMIN');
     expect(refresh.revokeAllForUser).toHaveBeenCalledWith('u2');
   });
 
@@ -297,7 +323,7 @@ describe('UsersService.deleteUser', () => {
     });
     const refresh = makeRefresh();
     const svc = makeService(repo, makeAudit(), refresh);
-    await expect(svc.deleteUser('u1', 'other')).rejects.toMatchObject({
+    await expect(svc.deleteUser('u1', 'other', 'ADMIN')).rejects.toMatchObject({
       code: 'user.last_admin',
     });
     expect(refresh.revokeAllForUser).not.toHaveBeenCalled();
@@ -320,6 +346,7 @@ describe('UsersService.resetPassword', () => {
       'User',
       'u2',
       expect.any(Object),
+      { subjectUserId: 'u2' },
     );
   });
 

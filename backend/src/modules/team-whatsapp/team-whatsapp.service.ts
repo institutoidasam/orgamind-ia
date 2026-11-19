@@ -111,6 +111,9 @@ type TargetMember = {
   routeSectorId: string;
 };
 
+/** Motivos que a montagem grava (C8); `INACTIVE` só nasce no disparo agendado. */
+type ClassifySkip = 'NO_PHONE' | 'SUPPRESSED' | 'NOT_AUTHORIZED';
+
 /** Alvo pessoa: sem setor do envio nem nível no destinatário. */
 const NO_SECTOR_SNAPSHOT: RecipientSnapshot = {
   sectorId: null,
@@ -636,8 +639,8 @@ export class TeamWhatsappService {
 
   /**
    * O contato carrega a grafia que o merge elegeu como a que entrega. Sem
-   * telefone/suprimido → SKIPPED já aqui, também no agendamento (D9); o resto
-   * fica `pending` (QUEUED agora, SCHEDULED no agendado).
+   * telefone, suprimido ou sem autorização de contato → SKIPPED já aqui, também
+   * no agendamento (D9); o resto fica `pending` (QUEUED agora, SCHEDULED no agendado).
    */
   private async classify(
     targets: readonly TargetMember[],
@@ -647,7 +650,6 @@ export class TeamWhatsappService {
     const recipients: NewTeamDispatchRecipient[] = [];
     for (const target of targets) {
       const { member: m, shiftId, shiftName, snapshot } = target;
-      const phone = m.contact?.phoneE164 ?? m.phoneE164;
       const base = {
         userId: m.id,
         userName: displayName(m),
@@ -656,19 +658,25 @@ export class TeamWhatsappService {
         ...snapshot,
         ...recipientChannel(numbers.get(target.routeSectorId)),
       };
-      if (!phone) {
-        recipients.push({ ...base, status: 'SKIPPED', skipReason: 'NO_PHONE' });
-      } else if (await this.consent.isSuppressed(phone)) {
-        recipients.push({
-          ...base,
-          status: 'SKIPPED',
-          skipReason: 'SUPPRESSED',
-        });
-      } else {
-        recipients.push({ ...base, status: pending, skipReason: null });
-      }
+      const skipReason = await this.skipReasonOf(m);
+      recipients.push(
+        skipReason
+          ? { ...base, status: 'SKIPPED', skipReason }
+          : { ...base, status: pending, skipReason: null },
+      );
     }
     return recipients;
+  }
+
+  /**
+   * Ordem C8: sem telefone → supressão → sem autorização de contato. A supressão
+   * (pedido de saída) vale por cima; `CADASTRO_ANTERIOR` autorizado não bloqueia.
+   */
+  private async skipReasonOf(m: TeamMember): Promise<ClassifySkip | null> {
+    const phone = m.contact?.phoneE164 ?? m.phoneE164;
+    if (!phone) return 'NO_PHONE';
+    if (await this.consent.isSuppressed(phone)) return 'SUPPRESSED';
+    return m.contactAuthorization === 'AUTORIZADO' ? null : 'NOT_AUTHORIZED';
   }
 }
 

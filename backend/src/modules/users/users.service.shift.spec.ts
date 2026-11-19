@@ -5,6 +5,7 @@ import { UsersService } from './users.service';
 import type { UserPhoneService } from './user-phone.service';
 import type { UsersRepository, UserSummary } from './users.repository';
 import type { AuditService } from '../../shared/audit/audit.service';
+import { NO_PERSON_RECORD } from './users.test-fixtures';
 import type { RefreshService } from '../auth/refresh.service';
 import { createUserSchema } from './dto/create-user.dto';
 import { updateUserSchema } from './dto/update-user.dto';
@@ -32,6 +33,7 @@ const fullUser = (over: Partial<UserSummary> = {}): UserSummary => ({
   phoneE164: '+5592991234567',
   shiftId: 'shift_first',
   jobTitle: null,
+  ...NO_PERSON_RECORD,
   levelId: null,
   level: null,
   createdAt: new Date('2026-10-01T12:00:00Z'),
@@ -54,7 +56,7 @@ beforeEach(() => {
   svc = new UsersService(repo, mockDeep<AuditService>(), refresh, phones);
   vi.mocked(argon2.hash).mockResolvedValue('hashed');
   repo.findByEmail.mockResolvedValue(null);
-  repo.create.mockResolvedValue({
+  repo.createWithAudit.mockResolvedValue({
     id: 'u-new',
     email: 'a@idasam.org',
   } as never);
@@ -74,8 +76,10 @@ describe('UsersService — turno (shiftId) no cadastro e na edição', () => {
     await invite();
     await svc.updateUser('u1', { shiftId: 'shift_first' }, 'admin');
     const connect = { workShift: { connect: { id: 'shift_first' } } };
-    expect(repo.create.mock.calls[0][0]).toMatchObject(connect);
-    expect(repo.create.mock.calls[1][0]).not.toHaveProperty('workShift');
+    expect(repo.createWithAudit.mock.calls[0][0]).toMatchObject(connect);
+    expect(repo.createWithAudit.mock.calls[1][0]).not.toHaveProperty(
+      'workShift',
+    );
     expect(patchData()).toEqual(connect);
     expect(repo.findShiftForAssignment.mock.calls).toEqual([
       ['shift_first'],
@@ -94,7 +98,7 @@ describe('UsersService — turno (shiftId) no cadastro e na edição', () => {
     await expect(
       svc.updateUser('u1', { shiftId: 'shift_old' }, 'admin'),
     ).rejects.toMatchObject(invalidShift);
-    expect(repo.create.mock.calls).toEqual([]);
+    expect(repo.createWithAudit.mock.calls).toEqual([]);
     expect(repo.updateWithLastAdminGuard.mock.calls).toEqual([]);
   });
 
@@ -121,6 +125,10 @@ describe('Contrato de usuário — shiftId', () => {
         fullUser({ id: 'u2', shiftId: 'shift_second' }),
       ],
       total: 2,
+    });
+    repo.countAuthorizationPending.mockResolvedValue({
+      unverified: 0,
+      notAuthorized: 0,
     });
     const res = await svc.listUsers(1, 20);
     const wire = userListResponseSchema.parse(JSON.parse(JSON.stringify(res)));

@@ -1,13 +1,11 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useConversations } from '../api';
 import { ConversationRow } from './conversation-row';
 import { QueryErrorFallback } from '@/components/query-error-fallback';
 import { InboxTabs } from './inbox-tabs';
-import { ProviderTabs } from './provider-tabs';
 import { AssigneeTabs, type AssigneeFilter } from './assignee-tabs';
-import { useInstances, useProviders } from '@/features/whatsapp/api';
-import { useProviderScope, type ProviderScope } from '@/features/whatsapp/provider-scope';
+import { useInstances } from '@/features/whatsapp/api';
 import { useAuthStore } from '@/stores/auth.store';
 
 const ASSIGNEE_FILTERS: AssigneeFilter[] = [null, 'me', 'unassigned'];
@@ -50,27 +48,6 @@ export function ConversationsList({ activeId }: { activeId?: string }) {
   const [assignee, setAssignee] = useState<AssigneeFilter>(() => readStoredAssignee(userId));
   const navigate = useNavigate();
 
-  // Provider filter (multi-provider channels — F4b): the initial value comes
-  // from the global provider scope (topbar selector), but changing it here is
-  // purely local — it does NOT call the global setScope, so the operator can
-  // narrow the inbox to one provider without re-scoping the rest of the app.
-  // Applied server-side (passed to useConversations below) instead of
-  // filtering client-side over an already-paginated page: with Evolution at
-  // high volume and Twilio in warm-up (low volume), a client-side filter over
-  // just the first page could show "no conversations" for Twilio even though
-  // matches exist further down — see chat.repository.ts (backend) for the
-  // where.instance.provider filter this now drives.
-  const { scope } = useProviderScope();
-  const [providerFilter, setProviderFilter] = useState<ProviderScope>(scope);
-  // Pedido do cliente (2026-08-25): GOZAP é o canal padrão do inbox. Sem uma
-  // preferência EXPLÍCITA já escolhida no escopo global (topbar) — isto é,
-  // com `scope === 'all'` — a aba pré-seleciona GOZAP sozinha assim que a
-  // lista de provedores carrega. Um `scope` explícito (ex.: o operador já
-  // fixou EVOLUTION no topbar) nunca é sobrescrito por este default local, e
-  // o efeito só age UMA VEZ (o ref trava depois do primeiro veredito) — não
-  // reimpõe GOZAP se o operador trocar de aba na sequência.
-  const gozapDefaultedRef = useRef(false);
-
   // Persist the selected assignee tab so an operator returns to their view.
   useEffect(() => {
     try { localStorage.setItem(assigneeStorageKey(userId), assignee ?? ''); } catch { /* storage unavailable */ }
@@ -80,43 +57,15 @@ export function ConversationsList({ activeId }: { activeId?: string }) {
     setAssignee(ASSIGNEE_FILTERS.includes(next) ? next : null);
   }
   const instancesQuery = useInstances();
-  const providersQuery = useProviders();
-  useEffect(() => {
-    if (gozapDefaultedRef.current || scope !== 'all') return;
-    const hasGozap = (providersQuery.data?.providers ?? []).some((p) => p.provider === 'GOZAP');
-    if (!hasGozap) return;
-    gozapDefaultedRef.current = true;
-    setProviderFilter('GOZAP');
-  }, [scope, providersQuery.data]);
-  const connected = (instancesQuery.data ?? [])
+  // Só números Evolution conectados entram na barra de abas "número": é o único
+  // provedor ligado (R14); canais de integrações desligadas não são oferecidos.
+  const channels = (instancesQuery.data ?? [])
     .filter((i) => i.lastConnectionState === 'open')
     .map((i) => ({ id: i.id, name: i.name }));
-  // T7 (twilio-platform): canais não-Evolution não têm estado de conexão
-  // Evolution — não existe 'open' para filtrar. Todo canal ATIVO fora do
-  // Evolution entra na barra de abas "número" junto dos Evolution conectados.
-  // O dot da aba é cor de identidade (instanceColor), não indicador de
-  // conexão, então vale igual para eles. GET /whatsapp/instances é
-  // Evolution-only no backend, por isso os demais canais vêm de useProviders().
-  //
-  // O filtro é `provider !== 'EVOLUTION'`, NÃO `!traits.sessionBased`: GOZAP
-  // também é session-based (par pairing por QR, como o Evolution) mas não
-  // tem NENHUMA outra fonte de canal — filtrar por sessionBased o descartava
-  // por inteiro, deixando a barra de abas e o badge cegos para GOZAP.
-  // Pedido do cliente (2026-08-25): TWILIO nunca aparece na barra de número
-  // do inbox — mesma exclusão do ProviderTabs (provider-tabs.tsx). O enum do
-  // provider continua intacto; só a oferta na UI some.
-  const cloudChannels = (providersQuery.data?.providers ?? [])
-    .filter((p) => p.provider !== 'EVOLUTION' && p.provider !== 'TWILIO')
-    .flatMap((p) => p.channels)
-    .filter((c) => c.isActive)
-    .map((c) => ({ id: c.id, name: c.name }));
-  const channels = [...connected, ...cloudChannels];
   const showBadge = instanceId === null && channels.length >= 2;
   // If the number behind the active tab disconnects (or is removed), the tab
   // bar hides but the list would stay silently filtered to a gone instance.
   // Fall back to "Todos" so the operator never gets a stuck empty list.
-  // Canais cloud contam como sempre-presentes enquanto ativos (nunca são
-  // "desconectados" — só somem se desativados).
   const channelsKey = channels.map((c) => c.id).join(',');
   useEffect(() => {
     if (instanceId !== null && !channels.some((c) => c.id === instanceId)) {
@@ -130,7 +79,6 @@ export function ConversationsList({ activeId }: { activeId?: string }) {
     debouncedSearch,
     instanceId ?? undefined,
     assignee ?? undefined,
-    providerFilter === 'all' ? undefined : providerFilter,
   );
 
   const items = data?.items ?? [];
@@ -160,12 +108,10 @@ export function ConversationsList({ activeId }: { activeId?: string }) {
     observer.observe(loadMoreEl);
     return () => observer.disconnect();
   }, [loadMoreEl, hasNextPage, fetchNextPage]);
-  // Badge visibility: once the provider filter narrows the list server-side,
-  // every row already shares the same provider — the badge would be pure
-  // noise, so it only shows on the unfiltered ('all') view when the loaded
-  // page actually mixes 2+ providers. With a single provider configured
-  // overall the filter itself never mounts (see ProviderTabs).
-  const showProviderBadge = providerFilter === 'all' && new Set(items.map((c) => c.provider).filter(Boolean)).size >= 2;
+  // O badge de provedor por linha fica: o histórico é misto (conversas de
+  // números hoje desligados convivem com as da Evolution) e o badge ajuda a
+  // ler a origem. Só aparece quando a página carregada mistura 2+ provedores.
+  const showProviderBadge = new Set(items.map((c) => c.provider).filter(Boolean)).size >= 2;
 
   return (
     <div className="flex h-full flex-col" style={{ background: 'var(--surface)', borderRight: '1px solid var(--border)' }}>
@@ -209,7 +155,6 @@ export function ConversationsList({ activeId }: { activeId?: string }) {
         </div>
         <AssigneeTabs value={assignee} onChange={selectAssignee} />
         <InboxTabs instances={channels} value={instanceId} onChange={setInstanceId} />
-        <ProviderTabs value={providerFilter} onChange={setProviderFilter} />
       </div>
       {/* `min-h-0`: um filho flex tem `min-height: auto`, que o proíbe de
           encolher abaixo do conteúdo — ele cresceria até caber as 138 conversas
@@ -237,8 +182,6 @@ export function ConversationsList({ activeId }: { activeId?: string }) {
               </button>
             )}
           </>
-        ) : providerFilter !== 'all' ? (
-          <p className="p-4 text-sm" style={{ color: 'var(--foreground-muted)' }}>Nenhuma conversa deste provedor.</p>
         ) : (
           <p className="p-4 text-sm" style={{ color: 'var(--foreground-muted)' }}>Nenhuma conversa ainda.</p>
         )}

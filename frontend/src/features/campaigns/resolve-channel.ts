@@ -1,21 +1,19 @@
 /**
- * T15 — A REGRA ÚNICA PARA ACHAR O CANAL DE UMA CAMPANHA (todo provedor).
+ * T15 — A REGRA ÚNICA PARA ACHAR O CANAL DE UMA CAMPANHA.
  *
- * `GET /whatsapp/instances` (`useInstances()`) só devolve canais EVOLUTION
- * (whatsapp-instances.repository.ts). O cabeçalho de progresso da campanha
- * (T8) e o passo final do assistente (T11) resolviam o canal da campanha por
- * ali — então para GOZAP (o canal de PRODUÇÃO), ZERNIO, TWILIO e META o canal
- * buscado ficava `undefined` PARA SEMPRE: as duas telas mostravam "Canal não
- * encontrado — verifique em Canais" e bloqueavam o envio mesmo com o canal
- * saudável e com quota sobrando.
+ * `GET /whatsapp/providers` (`useProviders()`) é a fonte do canal nas DUAS
+ * telas que precisam dele: o cabeçalho de progresso da campanha (T8) e o passo
+ * final do assistente (T11). Este módulo é a ÚNICA regra de como interpretar
+ * essa query — para as duas nunca divergirem sobre o que "canal carregando" ou
+ * "canal não encontrado" significam.
  *
- * `GET /whatsapp/providers` (`useProviders()`) já lista os canais de TODO
- * provedor configurado (e já é a query que o seletor de canal do assistente
- * usa). Este módulo é a ÚNICA regra de como interpretar essa query nas DUAS
- * telas que precisam do canal da campanha — para as duas nunca divergirem de
- * novo sobre o que "canal carregando" ou "canal não encontrado" significam.
+ * Somente-Evolution (R12/R15): só canal EVOLUTION conta. Uma campanha antiga
+ * cujo `defaultInstanceId` aponta para um canal de provedor desligado
+ * (GOZAP/TWILIO/ZERNIO/META) cai em "não encontrado": a tela não oferece envio
+ * por ele, e o back (B7) é quem recusa com `channel.provider_disabled`.
  */
 import type { ChannelSummary, ProvidersResponse } from '@/features/whatsapp/api';
+import { isEnabledProvider } from '@/features/whatsapp/disabled-provider';
 
 /** O recorte de `useProviders()` (UseQueryResult) que este helper precisa. */
 export type ProvidersQueryState = {
@@ -71,7 +69,7 @@ export function resolveCampaignChannel(
   const stale = providersQuery.isError;
   const canal = data.providers
     .flatMap((p) => p.channels)
-    .find((c) => c.id === defaultInstanceId);
+    .find((c) => c.id === defaultInstanceId && isEnabledProvider(c.provider));
 
   // Fix round 1 (minor, review Opus) — `dailySendLimit` é OPCIONAL no
   // contrato; sem ele `capDeHoje`/`quotaRestante` (channel-quota.ts) não têm

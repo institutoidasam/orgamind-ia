@@ -128,51 +128,16 @@ describe('buildTemplatePayload', () => {
       }
     });
 
-    it('includes the selected provider in the create payload', () => {
+    it('sempre cria como EVOLUTION, ignorando provedor/Content SID do form', () => {
       const out = buildTemplatePayload({
         mode: 'create',
         kind: 'TEXT',
         values: { ...baseValues, provider: 'TWILIO', twilioContentSid: 'HX0123456789abcdef0123456789abcdef' },
         interactiveConfig: null,
       });
-      if (out.mode === 'create') {
-        expect(out.input.provider).toBe('TWILIO');
-      }
-    });
-
-    it('defaults provider to EVOLUTION when the form value is undefined', () => {
-      const out = buildTemplatePayload({
-        mode: 'create',
-        kind: 'TEXT',
-        values: { ...baseValues, provider: undefined },
-        interactiveConfig: null,
-      });
+      expect(out.mode).toBe('create');
       if (out.mode === 'create') {
         expect(out.input.provider).toBe('EVOLUTION');
-      }
-    });
-
-    it('includes twilioContentSid in the create payload when set', () => {
-      const HX = 'HX0123456789abcdef0123456789abcdef';
-      const out = buildTemplatePayload({
-        mode: 'create',
-        kind: 'TEXT',
-        values: { ...baseValues, twilioContentSid: HX },
-        interactiveConfig: null,
-      });
-      if (out.mode === 'create') {
-        expect(out.input.twilioContentSid).toBe(HX);
-      }
-    });
-
-    it('omits twilioContentSid from the create payload when empty', () => {
-      const out = buildTemplatePayload({
-        mode: 'create',
-        kind: 'TEXT',
-        values: { ...baseValues, twilioContentSid: '' },
-        interactiveConfig: null,
-      });
-      if (out.mode === 'create') {
         expect('twilioContentSid' in out.input).toBe(false);
       }
     });
@@ -208,7 +173,7 @@ describe('buildTemplatePayload', () => {
   });
 
   describe('edit mode', () => {
-    it('builds a TEXT edit payload that includes body, null interactiveConfig, provider and a null twilioContentSid', () => {
+    it('builds a TEXT edit payload that includes body and null interactiveConfig', () => {
       const out = buildTemplatePayload({
         mode: 'edit',
         id: 'tpl-1',
@@ -225,8 +190,6 @@ describe('buildTemplatePayload', () => {
           category: 'UTILITY',
           kind: 'TEXT',
           interactiveConfig: null,
-          provider: 'EVOLUTION',
-          twilioContentSid: null,
         },
       });
     });
@@ -249,8 +212,6 @@ describe('buildTemplatePayload', () => {
             category: 'UTILITY',
             kind,
             interactiveConfig: config,
-            provider: 'EVOLUTION',
-            twilioContentSid: null,
           },
         });
         // explicitly assert body key is absent for interactive edit
@@ -260,44 +221,18 @@ describe('buildTemplatePayload', () => {
       }
     });
 
-    it('includes the selected provider in the edit payload', () => {
+    it('não envia provider nem twilioContentSid na edição (omitidos = manter)', () => {
       const out = buildTemplatePayload({
         mode: 'edit',
-        id: 'tpl-8',
+        id: 'tpl-3',
         kind: 'TEXT',
-        values: { ...baseValues, provider: 'TWILIO' },
+        values: { ...baseValues, provider: 'TWILIO', twilioContentSid: 'HX0123456789abcdef0123456789abcdef' },
         interactiveConfig: null,
       });
+      expect(out.mode).toBe('edit');
       if (out.mode === 'edit') {
-        expect(out.input.provider).toBe('TWILIO');
-      }
-    });
-
-    it('includes twilioContentSid in the edit payload when set', () => {
-      const HX = 'HX0123456789abcdef0123456789abcdef';
-      const out = buildTemplatePayload({
-        mode: 'edit',
-        id: 'tpl-7',
-        kind: 'TEXT',
-        values: { ...baseValues, twilioContentSid: HX },
-        interactiveConfig: null,
-      });
-      if (out.mode === 'edit') {
-        expect(out.input.twilioContentSid).toBe(HX);
-      }
-    });
-
-    it('sends an explicit null (never omits) twilioContentSid on edit when empty — clearing it server-side rather than leaving a stale value', () => {
-      const out = buildTemplatePayload({
-        mode: 'edit',
-        id: 'tpl-10',
-        kind: 'TEXT',
-        values: { ...baseValues, twilioContentSid: '' },
-        interactiveConfig: null,
-      });
-      if (out.mode === 'edit') {
-        expect('twilioContentSid' in out.input).toBe(true);
-        expect(out.input.twilioContentSid).toBeNull();
+        expect('provider' in out.input).toBe(false);
+        expect('twilioContentSid' in out.input).toBe(false);
       }
     });
 
@@ -363,34 +298,6 @@ describe('mapTemplateSubmitError', () => {
     }
   });
 
-  it('maps template.twilio_content_sid_required to a twilioContentSid field error + toast', async () => {
-    const err = makeKyError(400, {
-      code: 'template.twilio_content_sid_required',
-      detail: 'Templates do provedor TWILIO exigem o campo twilioContentSid (Content SID aprovado).',
-    });
-    const out = await mapTemplateSubmitError(err);
-    expect(out).toEqual({
-      kind: 'providerTwilioMismatch',
-      field: 'twilioContentSid',
-      fieldMessage:
-        'Templates do provedor TWILIO exigem o campo twilioContentSid (Content SID aprovado).',
-      toast: 'Provedor e Content SID inconsistentes',
-    });
-  });
-
-  it('maps template.twilio_content_sid_not_allowed to a twilioContentSid field error + toast', async () => {
-    const err = makeKyError(400, {
-      code: 'template.twilio_content_sid_not_allowed',
-    });
-    const out = await mapTemplateSubmitError(err);
-    expect(out).toEqual({
-      kind: 'providerTwilioMismatch',
-      field: 'twilioContentSid',
-      fieldMessage: 'Content SID inconsistente com o provedor selecionado',
-      toast: 'Provedor e Content SID inconsistentes',
-    });
-  });
-
   it('maps HTTP 403 to the admin-only toast', async () => {
     const err = makeKyError(403, { code: 'forbidden' });
     const out = await mapTemplateSubmitError(err);
@@ -439,36 +346,6 @@ describe('mapTemplateSubmitError', () => {
   it('maps a non-Error thrown value to the network toast', async () => {
     const out = await mapTemplateSubmitError('string thrown');
     expect(out).toEqual({ kind: 'network', toast: 'Erro de rede' });
-  });
-});
-
-/**
- * ZB — o backend passou a recusar provider=ZERNIO neste endpoint (a row nasceria
- * "aprovada" sem existir na Meta). Sem este mapeamento o 400 caía no ramo
- * genérico: toast "Falha ao salvar template", sem campo em erro e sem uma pista
- * de que existe o botão "Novo template Zernio" ao lado — um fluxo que falha mudo.
- */
-describe('mapTemplateSubmitError — ZERNIO', () => {
-  it('aponta o caminho certo quando o backend recusa provider=ZERNIO', async () => {
-    const err = makeKyError(400, {
-      code: 'template.zernio_requires_remote_create',
-    });
-    const out = await mapTemplateSubmitError(err);
-    expect(out.kind).toBe('zernioRequiresRemoteCreate');
-    expect(out.toast).toContain('Novo template Zernio');
-    if (out.kind === 'zernioRequiresRemoteCreate') {
-      expect(out.field).toBe('provider');
-    }
-  });
-
-  it('não deixa o operador forjar APPROVED numa row ZERNIO por edição', async () => {
-    const err = makeKyError(400, {
-      code: 'template.zernio_status_not_editable',
-      detail: 'status=PENDING → APPROVED',
-    });
-    const out = await mapTemplateSubmitError(err);
-    expect(out.kind).toBe('zernioRequiresRemoteCreate');
-    expect(out.toast).toContain('Meta');
   });
 });
 

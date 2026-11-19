@@ -1,6 +1,5 @@
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router';
 import {
-  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -10,7 +9,6 @@ import {
 } from 'react';
 import { ShieldOff, Sliders } from 'lucide-react';
 import { useProviders, type ChannelSummary } from '@/features/whatsapp/api';
-import { ProviderBadge, useProviderScope } from '@/features/whatsapp/provider-scope';
 import { useConsentPurposes, type ConsentPurpose } from '@/features/consent/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -69,6 +67,7 @@ import {
   tamanhoInicialDoLote,
 } from '@/features/campaigns/channel-quota';
 import { resolveCampaignChannel } from '@/features/campaigns/resolve-channel';
+import { isEnabledProvider } from '@/features/whatsapp/disabled-provider';
 import { extractApiError } from '@/lib/api-error';
 import { toast } from 'sonner';
 
@@ -324,19 +323,16 @@ const TEMPLATE_BUTTONS_BLOCKED =
  * para a tela. Reimplementar a regra no frontend seria criar uma segunda
  * verdade que diverge silenciosamente da primeira.
  *
- * `null` = disparável. Só templates ZERNIO recebem `consentButtons` (lá o
- * clique chega como RÓTULO e o reconhecimento é lista fechada); nos demais o
- * campo é ausente/nulo e nada é bloqueado.
+ * `null` = disparável. O campo `consentButtons` só vem preenchido quando o
+ * backend avalia os botões do template; ausente/nulo, nada é bloqueado.
  */
 export function templateBlockedReason(t: Template): string | null {
   const problems = t.consentButtons?.problems ?? [];
   return problems.length > 0 ? TEMPLATE_BUTTONS_BLOCKED : null;
 }
 
-/** A single selectable channel (multi-provider). */
+/** A single selectable channel (Evolution). */
 type Channel = ChannelSummary;
-/** One provider's channels, as returned grouped by `useProviders()`. */
-type ProviderGroup = { provider: Channel['provider']; channels: Channel[] };
 
 /**
  * All cross-cutting side-effects of the wizard, lifted out of the page body so
@@ -385,9 +381,8 @@ function useCampaignWizardEffects(args: {
   } = args;
 
   // Auto-select a default channel when none is selected yet — or when the
-  // current selection is no longer visible under the active provider scope
-  // (e.g. the operator narrowed the topbar scope to another provider). Prefer a
-  // connected default channel, then any connected channel, then whatever is
+  // current selection is no longer offered (e.g. the channel was deactivated or
+  // turned off). Prefer a connected default channel, then any connected channel, then whatever is
   // available so the wizard always lands on a usable channel.
   useEffect(() => {
     if (!channels || channels.length === 0) return;
@@ -506,7 +501,7 @@ function Step1NameTemplate({
   purposes,
   onSelectChannel,
   templates,
-  groups,
+  channels,
   onNext,
 }: {
   name: string;
@@ -519,16 +514,14 @@ function Step1NameTemplate({
   purposes: ConsentPurpose[] | undefined;
   onSelectChannel: (channel: Channel) => void;
   templates: Template[] | undefined;
-  /** Channels grouped by provider, already filtered by the global scope. */
-  groups: ProviderGroup[];
+  /** Active Evolution channels — the only ones a campaign can send from. */
+  channels: Channel[];
   onNext: () => void;
 }) {
-  // With multi-provider channels there's no single global sender: every
-  // configured channel (Evolution QR connections, Twilio senders, …) is listed
-  // and grouped by its provider. The list is pre-filtered by the topbar's
-  // provider scope, so `groups` already respects "Todos os canais" vs a single
-  // provider. `defaultInstanceId` stays the id of the chosen channel.
-  const hasChannels = groups.some((g) => g.channels.length > 0);
+  // Somente-Evolution (R12/R15): there is no provider to pick — the wizard
+  // lists the Evolution connections as a flat list. `defaultInstanceId` is the
+  // id of the chosen channel.
+  const hasChannels = channels.length > 0;
   const selectedPurpose = purposes?.find((p) => p.key === purposeKey);
 
   // ★ Botões ilegíveis: o wizard precisa dizer ANTES, não no 400 do último
@@ -620,42 +613,30 @@ function Step1NameTemplate({
               <p className="text-xs text-[var(--foreground-muted)]">
                 Contatos com histórico continuam saindo do canal que já falou com eles.
               </p>
-              {groups.map((group) => (
-                <div key={group.provider} className="space-y-2">
-                  <div className="flex items-center gap-2">
-                    <ProviderBadge provider={group.provider} />
-                    <span className="text-[11px] text-[var(--foreground-muted)]">
-                      {group.channels.length}{' '}
-                      {group.channels.length === 1 ? 'canal' : 'canais'}
+              {channels.map((c) => (
+                <label
+                  key={c.id}
+                  className="flex items-center gap-2 rounded border px-3 py-2 text-sm"
+                  style={{ opacity: c.isActive ? 1 : 0.5 }}
+                >
+                  <input
+                    type="radio"
+                    name="defaultInstanceId"
+                    value={c.id}
+                    checked={defaultInstanceId === c.id}
+                    onChange={() => onSelectChannel(c)}
+                    disabled={!c.isActive || !c.phoneE164}
+                  />
+                  <strong>{c.name}</strong>
+                  {c.isDefault && (
+                    <span className="rounded bg-[var(--surface-sunken)] px-1.5 py-0.5 text-[10px] uppercase tracking-wider">
+                      padrão
                     </span>
-                  </div>
-                  {group.channels.map((c) => (
-                    <label
-                      key={c.id}
-                      className="flex items-center gap-2 rounded border px-3 py-2 text-sm"
-                      style={{ opacity: c.isActive ? 1 : 0.5 }}
-                    >
-                      <input
-                        type="radio"
-                        name="defaultInstanceId"
-                        value={c.id}
-                        checked={defaultInstanceId === c.id}
-                        onChange={() => onSelectChannel(c)}
-                        disabled={!c.isActive || !c.phoneE164}
-                      />
-                      <ProviderBadge provider={c.provider} />
-                      <strong>{c.name}</strong>
-                      {c.isDefault && (
-                        <span className="rounded bg-[var(--surface-sunken)] px-1.5 py-0.5 text-[10px] uppercase tracking-wider">
-                          padrão
-                        </span>
-                      )}
-                      <span className="ml-auto font-mono text-xs text-[var(--foreground-muted)]">
-                        {c.phoneE164 ?? 'desconectada'}
-                      </span>
-                    </label>
-                  ))}
-                </div>
+                  )}
+                  <span className="ml-auto font-mono text-xs text-[var(--foreground-muted)]">
+                    {c.phoneE164 ?? 'desconectada'}
+                  </span>
+                </label>
               ))}
               {!defaultInstanceId && (
                 <p className="text-xs text-destructive">Selecione o canal</p>
@@ -928,13 +909,9 @@ function Step4Confirm({
     canal é conhecido; enquanto não é, o botão de enviar fica travado com um
     estado explícito (ver o rodapé).
 
-    T15 — o canal vem de `useProviders()` (TODO provedor) via
-    `resolveCampaignChannel` (resolve-channel.ts), a MESMA regra que o
-    cabeçalho de progresso da campanha usa. `useInstances()`
-    (GET /whatsapp/instances) é EVOLUTION-only: para GOZAP (o canal de
-    PRODUÇÃO), ZERNIO, TWILIO e META o canal buscado por ali ficava
-    `undefined` para sempre, e o envio ficava bloqueado com "Canal não
-    encontrado" mesmo com o canal são.
+    T15 — o canal vem de `useProviders()` via `resolveCampaignChannel`
+    (resolve-channel.ts), a MESMA regra que o cabeçalho de progresso da
+    campanha usa (somente-Evolution: só canal EVOLUTION é reconhecido).
 
     Fix round 1 (#2, review Opus) — `refetchOnMount: 'always'`: sem isto, o
     `staleTime: Infinity` do `useProviders()` deixaria este passo propor um
@@ -1348,7 +1325,7 @@ function Step4Confirm({
                     : canalComErro
                       ? 'Não deu para consultar os canais — tente de novo'
                       : canalDesconhecido
-                        ? 'O canal desta campanha não foi encontrado — verifique em Canais.'
+                        ? 'O número desta campanha não está disponível (pode usar uma integração desligada). Escolha um número da Evolution.'
                         : canal
                           ? `Teto de hoje do canal "${defaultInstanceName}" (já enviou ${(canal.sentToday ?? 0).toLocaleString('pt-BR')} de ${tetoDoDia.toLocaleString('pt-BR')}).`
                           : 'Teto de hoje do canal escolhido.'}
@@ -1459,7 +1436,6 @@ function Step4Confirm({
 function NewCampaignPage() {
   const navigate = useNavigate();
   const { data: providersData } = useProviders();
-  const { scope } = useProviderScope();
   const create = useCreateCampaign();
   // ★ `useSendFirstBatch` e não `useSendBatch(id)`: aqui o id só existe DEPOIS
   // do create, e um `setState` com o id novo não vale dentro da mesma função —
@@ -1470,26 +1446,25 @@ function NewCampaignPage() {
   const sendFirstBatch = useSendFirstBatch();
   const preview = usePreviewCampaign();
 
-  // Channels grouped by provider, then narrowed to the active topbar scope:
-  // a specific provider shows only its group; 'all' shows every group.
+  // Somente-Evolution (R12/R15): campanha só sai por canal EVOLUTION, e não há
+  // escolha de provedor. `useProviders()` já devolve só EVOLUTION; o filtro por
+  // provedor aqui é defensivo (um canal de provedor desligado nunca é oferta).
   //
   // CANAL DESATIVADO NÃO É OPÇÃO. O filtro por `isActive` acontece AQUI, na
-  // origem, e não na renderização — porque `groups` também alimenta o
+  // origem, e não na renderização — porque `channels` também alimenta o
   // auto-select do passo 1, cujos últimos fallbacks
   // (`?? channels.find(c => c.isDefault) ?? channels[0]`) não olhavam isActive.
   // Filtrar só no JSX deixaria o canal desativado PRÉ-SELECIONADO e disparável.
   //
   // O canal desativado continua existindo (histórico, conversas) — ele só deixa
   // de ser oferecido como saída de envio. Religa-se na tela Canais.
-  const groups = useMemo<ProviderGroup[]>(() => {
-    const all = providersData?.providers ?? [];
-    const scoped = scope === 'all' ? all : all.filter((g) => g.provider === scope);
-    return scoped.map((g) => ({ ...g, channels: g.channels.filter((c) => c.isActive) }));
-  }, [providersData, scope]);
-
-  // Flattened selectable channels (respecting scope) — used for auto-select,
-  // lookups and validation.
-  const channels = useMemo(() => groups.flatMap((g) => g.channels), [groups]);
+  const channels = useMemo<Channel[]>(
+    () =>
+      (providersData?.providers ?? [])
+        .flatMap((g) => g.channels)
+        .filter((c) => isEnabledProvider(c.provider) && c.isActive),
+    [providersData],
+  );
 
   const {
     step,
@@ -1513,13 +1488,9 @@ function NewCampaignPage() {
     clearDraft,
   } = useWizardDraft();
 
-  // The provider that owns the currently-selected channel — scopes the template
-  // list (templates are provider-owned) so the wizard only offers templates the
-  // chosen channel can actually send.
-  const selectedProvider = channels.find(
-    (c) => c.id === defaultInstanceId,
-  )?.provider;
-  const { data: templates } = useTemplates(selectedProvider);
+  // Somente-Evolution (R12): templates de outros provedores ficam só no banco;
+  // o assistente pede sempre a lista do EVOLUTION.
+  const { data: templates } = useTemplates('EVOLUTION');
   // A.3 — o nome do canal escolhido, para a frase do teto de hoje no passo 4.
   const defaultInstanceName =
     channels.find((c) => c.id === defaultInstanceId)?.name ?? '';
@@ -1530,22 +1501,6 @@ function NewCampaignPage() {
   // para ninguém — antes, o wizard liberava EVOLUTION e a campanha nascia morta,
   // em silêncio. O backend recusa com `campaign.purpose_required`.
   const { data: purposes } = useConsentPurposes();
-
-  // Picking a channel from a *different* provider invalidates the selected
-  // template (templates are provider-owned — one never belongs to another
-  // provider), so drop it and its variable mapping. Switching between channels
-  // of the *same* provider keeps the template.
-  const handleSelectChannel = useCallback(
-    (channel: Channel) => {
-      const prev = channels.find((c) => c.id === defaultInstanceId);
-      if (prev && prev.provider !== channel.provider) {
-        setTemplateId('');
-        setVariableMap({});
-      }
-      setDefaultInstanceId(channel.id);
-    },
-    [channels, defaultInstanceId, setDefaultInstanceId, setTemplateId, setVariableMap],
-  );
 
   const [previewResult, setPreviewResult] = useState<PreviewResult | null>(null);
 
@@ -1560,9 +1515,7 @@ function NewCampaignPage() {
   // de propósito). Mesmo padrão de `override` acima: lido por handleConfirm
   // ao montar o payload de criação. Nome do campo espelha
   // `createCampaignSchema.respeitarJanelaDeEnvio`
-  // (backend/src/schemas/contracts/campaign.schema.ts) — a janela só tem
-  // efeito visível em canal DE SESSÃO (EVOLUTION); canais oficiais (ZERNIO em
-  // produção) nunca a respeitaram.
+  // (backend/src/schemas/contracts/campaign.schema.ts).
   const [respeitarJanelaDeEnvio, setRespeitarJanelaDeEnvio] = useState(true);
 
   // Pedido do cliente (2026-08-25) — "excluir quem já recebeu parece não
@@ -1724,9 +1677,9 @@ function NewCampaignPage() {
         purposeKey={purposeKey}
         setPurposeKey={setPurposeKey}
         purposes={purposes}
-        onSelectChannel={handleSelectChannel}
+        onSelectChannel={(channel) => setDefaultInstanceId(channel.id)}
         templates={templates}
-        groups={groups}
+        channels={channels}
         onNext={() => setStep(2)}
       />
     ),

@@ -303,3 +303,24 @@ describe("MessagesTable — a linha cancelada diz POR QUE foi cancelada", () => 
     expect(screen.queryByTestId("cancelled-reason")).toBeNull();
   });
 });
+
+/**
+ * Somente-Evolution (R12): uma campanha agendada num número de integração
+ * desligada falha no disparo com `channel.provider_disabled` — o resultado
+ * mostra o rótulo do motivo (GC11), não só o código.
+ */
+describe("MessagesTable — falha por integração desligada", () => {
+  it("FAILED com channel.provider_disabled mostra 'Número de integração desligada'", () => {
+    state.items = [
+      msg("FAILED", {
+        errorCode: "channel.provider_disabled",
+        errorMessage: "Este número usa uma integração desligada (GoZap).",
+      }),
+    ];
+    render(<MessagesTable campaignId="camp1" />);
+
+    expect(screen.getByTestId("failed-reason")).toHaveTextContent(
+      "Número de integração desligada",
+    );
+  });
+});

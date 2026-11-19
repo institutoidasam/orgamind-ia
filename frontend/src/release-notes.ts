@@ -31,6 +31,17 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.11.11',
+    date: '2026-11-11',
+    title: 'WhatsApp só pela Evolution',
+    items: [
+      {
+        text: 'O WhatsApp agora funciona só pela Evolution. Números de outras integrações aparecem em Conexões como desligados; ligue as áreas a um número Evolution.',
+        where: '/connect',
+      },
+    ],
+  },
+  {
     version: '2026.11.10',
     date: '2026-11-10',
     title: 'Número próprio por área e envio mais rastreável no WhatsApp da equipe',

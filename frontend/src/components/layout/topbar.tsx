@@ -9,7 +9,6 @@ import { initials } from '@/lib/initials';
 import { WORKSPACE_SHORT_NAME } from '@/lib/brand';
 import { canUseLegacyModules, navLabelFor, type NavRole } from '@/lib/nav';
 import { ROLE_LABEL } from '@/features/users/role';
-import { ProviderScopeSelector } from '@/features/whatsapp/provider-scope';
 import { WhatsappStatusIndicator } from './whatsapp-status-indicator';
 import { ReleaseNotesButton } from './release-notes-button';
 
@@ -57,7 +56,6 @@ export function Topbar({
       <Breadcrumb pageName={pageName} />
 
       {showLegacyControls && <WhatsappStatusIndicator />}
-      {showLegacyControls && <ProviderScopeSelector />}
 
       <CommandSearch onCmdOpen={onCmdOpen} />
 

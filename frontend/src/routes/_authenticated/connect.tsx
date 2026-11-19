@@ -1,17 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useProviders, type ProvidersResponse } from "@/features/whatsapp/api";
-import {
-  useProviderScope,
-  ProviderBadge,
-  type ProviderScope,
-} from "@/features/whatsapp/provider-scope";
 import { EvolutionSection } from "@/features/whatsapp/components/evolution-section";
-import { GozapSection } from "@/features/whatsapp/components/gozap-section";
-import { CloudProviderSection } from "@/features/whatsapp/components/cloud-provider-section";
-import { WebhookDropsBanner } from "@/features/whatsapp/components/webhook-drops-banner";
+import { DisabledChannelsSection } from "@/features/whatsapp/components/disabled-channels-section";
 import { SectorsWithoutNumberNotice } from "@/features/whatsapp/components/sectors-without-number-notice";
 import { useAuthStore } from "@/stores/auth.store";
 import { QueryErrorFallback } from "@/components/query-error-fallback";
+import { isEnabledProvider } from "@/features/whatsapp/disabled-provider";
 
 const route = createFileRoute("/_authenticated/connect")({
   component: ConnectPage,
@@ -19,23 +13,15 @@ const route = createFileRoute("/_authenticated/connect")({
 export { route as Route };
 
 /**
- * "Canais": one section per configured provider (respecting the global provider
- * scope). EVOLUTION and GOZAP are both session-based (pair by QR) but
- * provision differently — EVOLUTION spins up a local Baileys session,
- * GOZAP calls out to create an instance on the GoZap SaaS — so each gets its
- * own section rather than a forced-generic one; TWILIO/ZERNIO/META list their
- * registered channels + a registration form. A provider that isn't configured
- * on this deploy simply has no section — so a single-provider (Evolution-only)
- * deploy renders exactly the old page, with no empty extras. No topo, um aviso
- * único das áreas sem número (D15); associar número a área é por linha, no botão
- * `Áreas` de cada conexão (só o ADMIN).
+ * "Conexões": só a seção Evolution (nenhuma escolha de provedor na UI). No topo,
+ * um aviso único das áreas sem número (D15); associar número a área é por linha,
+ * no botão `Áreas` de cada conexão (só o ADMIN). Para o ADMIN, números de
+ * integrações desligadas que ainda existem aparecem no bloco "Números
+ * desligados", com a ação Remover (a autorização é do back; aqui só se esconde).
  */
 function ConnectPage() {
-  const role = useAuthStore((s) =>
-    s.user?.role === "ADMIN" ? "ADMIN" : "OPERATOR",
-  );
+  const isAdmin = useAuthStore((s) => s.user?.role === "ADMIN");
   const providers = useProviders();
-  const { scope } = useProviderScope();
 
   if (providers.isError) {
     return (
@@ -46,28 +32,27 @@ function ConnectPage() {
     );
   }
 
-  const all = providers.data?.providers ?? [];
-  if (providers.data && all.length === 0) return <NoProvidersState />;
-  return <ConnectContent role={role} providers={getVisibleProviders(all, scope)} />;
+  const data = providers.data;
+  if (data && !data.providers.some((g) => isEnabledProvider(g.provider))) return <NoProvidersState />;
+  return <ConnectContent isAdmin={isAdmin} data={data} />;
 }
 
-type ProviderGroup = ProvidersResponse["providers"][number];
-
-function getVisibleProviders(all: ProviderGroup[], scope: ProviderScope) {
-  const filtered = scope === "all" ? all : all.filter((item) => item.provider === scope);
-  return filtered.length > 0 ? filtered : all;
+/** `data` indefinido = carregando: só o aviso de áreas, sem seções nem estado vazio. */
+function ConnectContent({ isAdmin, data }: { isAdmin: boolean; data: ProvidersResponse | undefined }) {
+  const disabled = isAdmin && data ? data.disabledChannels : [];
+  return (
+    <div className="mx-auto max-w-[720px] space-y-8">
+      <SectorsWithoutNumberNotice />
+      {data ? <EvolutionSection role={isAdmin ? "ADMIN" : "OPERATOR"} /> : null}
+      {disabled.length > 0 ? <DisabledChannelsSection channels={disabled} /> : null}
+    </div>
+  );
 }
 
 function NoProvidersState() {
-  return <div className="mx-auto max-w-[720px] space-y-4"><WebhookDropsBanner /><p className="text-sm text-muted-foreground">Nenhum provedor configurado no servidor.</p></div>;
-}
-
-function ConnectContent({ role, providers }: { role: "ADMIN" | "OPERATOR"; providers: ProviderGroup[] }) {
-  const showHeaders = providers.length > 1;
-  return <div className="mx-auto max-w-[720px] space-y-8"><SectorsWithoutNumberNotice /><WebhookDropsBanner />{providers.map((group) => <ProviderSection key={group.provider} group={group} role={role} showHeader={showHeaders} />)}</div>;
-}
-
-function ProviderSection({ group, role, showHeader }: { group: ProviderGroup; role: "ADMIN" | "OPERATOR"; showHeader: boolean }) {
-  const { provider, channels } = group;
-  return <section className="space-y-3">{showHeader ? <div className="flex items-center gap-2 border-b border-[var(--border)] pb-2"><ProviderBadge provider={provider} /></div> : null}{provider === "EVOLUTION" ? <EvolutionSection role={role} /> : provider === "GOZAP" ? <GozapSection role={role} channels={channels} /> : <CloudProviderSection provider={provider} channels={channels} role={role} />}</section>;
+  return (
+    <div className="mx-auto max-w-[720px] space-y-4">
+      <p className="text-sm text-muted-foreground">Nenhum provedor configurado no servidor.</p>
+    </div>
+  );
 }

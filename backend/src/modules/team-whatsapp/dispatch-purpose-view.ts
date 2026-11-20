@@ -6,10 +6,12 @@ import type {
 } from '@prisma/client';
 import {
   audienceExcludedSnapshotSchema,
+  audienceLateJoinedSnapshotSchema,
   audienceRuleSnapshotSchema,
   type TeamActivity,
   type TeamAudienceBase,
   type TeamAudienceExcludedPerson,
+  type TeamAudiencePerson,
   type TeamAudienceRuleView,
   type TeamPurpose,
 } from '../../schemas/contracts/team-whatsapp.schema';
@@ -59,6 +61,10 @@ export type DispatchPurposeDetail = {
 
 type SectorRef = { id: string; name: string };
 
+/** Colunas Json do envio que o histórico lê pelo schema do contrato. */
+type SnapshotColumn =
+  'audienceRule' | 'audienceExcluded' | 'audienceLateJoined';
+
 const logger = new Logger('DispatchPurposeView');
 
 /** Atividade gravada; as três colunas nulas = sem atividade. */
@@ -91,10 +97,10 @@ export function purposeView(row: PurposeRow): DispatchPurposeView {
  * Json gravado lido pelo schema do contrato. Ausente = null; fora do formato
  * também, com registro só do envio e da coluna (nunca o conteúdo, que tem nomes).
  */
-function readSnapshot<T>(
+function readSnapshot<T, C extends SnapshotColumn>(
   schema: { safeParse(json: unknown): { success: boolean; data?: T } },
-  row: DetailPurposeRow,
-  column: 'audienceRule' | 'audienceExcluded',
+  row: { id: string } & Record<C, unknown>,
+  column: C,
 ): T | null {
   const json = row[column];
   if (json === null || json === undefined) return null;
@@ -107,7 +113,8 @@ function readSnapshot<T>(
 /**
  * Painel da regra (F3) lido do que foi gravado, nunca recalculado. Null no envio
  * sem finalidade e quando a regra gravada falta ou está fora do formato.
- * `when` = início do turno quando há `scheduledFor`, senão agora.
+ * `when` = o gravado (DG8); envio anterior ao Lote G não o grava e fica
+ * inferido: início do turno quando há `scheduledFor`, senão agora.
  */
 export function ruleView(
   row: DetailPurposeRow,
@@ -129,23 +136,24 @@ export function ruleView(
     selectedCount: rule.selectedUserIds?.length ?? null,
     activity: view.activity,
     urgencyReason: view.urgencyReason,
-    when: row.scheduledFor ? 'shift_start' : 'now',
+    when: rule.when ?? inferredWhen(row),
     scheduledFor: row.scheduledFor?.toISOString() ?? null,
     schedulePolicy: fromDbPolicy(row.schedulePolicy),
   };
 }
 
+const inferredWhen = (row: { scheduledFor: Date | null }) =>
+  row.scheduledFor ? 'shift_start' : 'now';
+
 /**
- * Excluídos gravados, com o nome pela regra da chave (GF8). Com a chave a ordem
- * fica a gravada; sem ela, pelo nome exibido com desempate pelo id. Ausente ou
- * fora do formato = [] (o parse descarta chave fora do contrato, como telefone).
+ * Pessoas gravadas (excluídos, entraram depois), com o nome pela regra da chave
+ * (GF8). Gravadas na ordem do nome real: com a chave a ordem fica; sem ela,
+ * pelo nome exibido com desempate pelo id.
  */
-export function excludedView(
-  row: DetailPurposeRow,
+function viewedPeople<P extends { userId: string; name: string }>(
+  people: readonly P[],
   full: boolean,
-): TeamAudienceExcludedPerson[] {
-  const people =
-    readSnapshot(audienceExcludedSnapshotSchema, row, 'audienceExcluded') ?? [];
+): P[] {
   const viewed = people.map((p) => ({
     ...p,
     name: nameView(p.name, { full }),
@@ -155,6 +163,35 @@ export function excludedView(
     name: p.name,
     id: p.userId,
   }));
+}
+
+/**
+ * Excluídos gravados (GF8). Ausente ou fora do formato = [] (o parse descarta
+ * chave fora do contrato, como telefone).
+ */
+export function excludedView(
+  row: DetailPurposeRow,
+  full: boolean,
+): TeamAudienceExcludedPerson[] {
+  return viewedPeople(
+    readSnapshot(audienceExcludedSnapshotSchema, row, 'audienceExcluded') ?? [],
+    full,
+  );
+}
+
+/**
+ * "Entraram depois do agendamento" gravados na reconferência (CG3, G3), sem
+ * telefone (o parse do contrato o descarta). Ausente ou fora do formato = [].
+ */
+export function lateJoinedView(
+  row: { id: string; audienceLateJoined: unknown },
+  full: boolean,
+): TeamAudiencePerson[] {
+  return viewedPeople(
+    readSnapshot(audienceLateJoinedSnapshotSchema, row, 'audienceLateJoined') ??
+      [],
+    full,
+  );
 }
 
 /** Campos de finalidade do detalhe (CF3): sempre presentes, nulos/[] no envio antigo. */

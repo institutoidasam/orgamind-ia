@@ -25,6 +25,42 @@ const send = (extra: Body = {}, target: Body = SECTOR) =>
 const failingPaths = (r: ReturnType<typeof send>) =>
   r.success ? [] : r.error.issues.map((i) => i.path.join('.'));
 
+// DG8: data e hora livres em Manaus (dia civil e HH:mm).
+const AT = { date: '2026-10-22', time: '14:30' };
+
+describe('createTeamDispatchSchema — data e hora (DG8)', () => {
+  it('when at exige at com data e HH:mm; at sem when at é recusado', () => {
+    const r = send({ ...SEND, when: 'at', at: AT });
+    expect(r.success && r.data.at).toEqual(AT);
+    expect(failingPaths(send({ ...SEND, when: 'at' }))).toEqual(['at']);
+    const badTime = { ...AT, time: '9:00' };
+    expect(failingPaths(send({ ...SEND, when: 'at', at: badTime }))).toEqual([
+      'at.time',
+    ]);
+    const badDate = { ...AT, date: '2026-02-30' };
+    expect(failingPaths(send({ ...SEND, when: 'at', at: badDate }))).toEqual([
+      'at.date',
+    ]);
+    expect(failingPaths(send({ ...SEND, at: AT }))).toEqual(['at']);
+    const oneShift = { ...SECTOR, shiftIds: ['d'] };
+    expect(
+      failingPaths(send({ ...SEND, when: 'shift_start', at: AT }, oneShift)),
+    ).toEqual(['at']);
+  });
+
+  it('alvo pessoa com when at é 400', () => {
+    expect(failingPaths(send({ when: 'at', at: AT }, USER))).toEqual(['when']);
+  });
+
+  it('prévia aceita when at', () => {
+    const r = preview({ when: 'at', at: AT }, { shiftIds: ['d', 'n'] });
+    expect(r.success && r.data.at).toEqual(AT);
+    expect(preview({ when: 'at', at: AT }).success).toBe(true);
+    expect(failingPaths(preview({ when: 'at' }))).toEqual(['at']);
+    expect(failingPaths(preview({ at: AT }))).toEqual(['at']);
+  });
+});
+
 describe('teamAudienceRequestSchema — audienceKey ignorada tem limite', () => {
   it('prévia recusa audienceKey com 65 caracteres e aceita 64', () => {
     expect(failingPaths(preview({ audienceKey: 'a'.repeat(65) }))).toEqual([

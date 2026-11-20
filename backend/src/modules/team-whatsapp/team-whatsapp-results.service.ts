@@ -4,11 +4,12 @@ import type {
   TeamDispatchChannels,
   TeamDispatchCounts,
   TeamDispatchDetail,
+  TeamDispatchRecheck,
   TeamDispatchRecipientPage,
   TeamRosterPerson,
 } from '../../schemas/contracts/team-whatsapp.schema';
-import { nameView } from '../../shared/authz/phone-visibility';
-import { purposeDetail } from './dispatch-purpose-view';
+import { nameView, phoneView } from '../../shared/authz/phone-visibility';
+import { lateJoinedView, purposeDetail } from './dispatch-purpose-view';
 import type { DispatchRecipientsQuery } from './dto/dispatch-recipients-query.dto';
 import { dispatchNotFound, teamForbidden } from './team-whatsapp.errors';
 import {
@@ -25,6 +26,7 @@ import {
 } from './team-whatsapp.policy';
 import {
   TeamWhatsappRepository,
+  type DispatchDetailRow,
   type DispatchRecipientRow,
   type TeamChannelCount,
   type TeamStatusCount,
@@ -127,13 +129,23 @@ const shownKey = (p: {
 
 const iso = (date: Date | null) => date?.toISOString() ?? null;
 
+type RecipientItem = TeamDispatchRecipientPage['items'][number];
+type RecipientPage = { items: RecipientItem[]; total: number };
+
+/** Telefone usado no envio (G4): completo só com `telefone.ver_completo`, senão a máscara; null = não gravado. */
+function usedPhone(phoneE164: string | null | undefined, full: boolean) {
+  const view = phoneView(phoneE164, { full });
+  return view.phoneE164 ?? view.phoneMasked;
+}
+
 function toRecipientItem(
   r: DispatchRecipientRow,
   full: boolean,
-): TeamDispatchRecipientPage['items'][number] {
+): RecipientItem {
   return {
     id: r.id,
     userName: nameView(r.userName, { full }),
+    phone: usedPhone(r.phoneE164, full),
     sectorName: r.sectorName,
     levelName: r.levelName,
     shiftName: r.shiftName,
@@ -147,6 +159,34 @@ function toRecipientItem(
     readAt: iso(r.readAt),
     repliedAt: iso(r.repliedAt),
     repeatable: isRepeatable(r.status, r.errorCode),
+  };
+}
+
+/** NFD sem diacríticos e em minúsculas: "Ána" e "ANA" casam com "ana" (DG13). */
+const folded = (text: string) =>
+  text.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
+
+/**
+ * Busca por nome (DG13) sobre os itens já pela visão do leitor: compara o nome
+ * EXIBIDO, então sem a chave um nome mascarado nunca é achado pelo número real.
+ * Sem a chave os achados saem pelo nome exibido (desempate pelo id); a página
+ * é cortada em memória e `total` conta os achados.
+ */
+function searchPage(
+  items: readonly RecipientItem[],
+  query: { q: string; page: number; pageSize: number },
+  full: boolean,
+): RecipientPage {
+  const term = folded(query.q);
+  const found = sortByViewedName(
+    items.filter((i) => folded(i.userName).includes(term)),
+    full,
+    (i) => ({ group: 0, name: i.userName, id: i.id }),
+  );
+  const start = (query.page - 1) * query.pageSize;
+  return {
+    items: found.slice(start, start + query.pageSize),
+    total: found.length,
   };
 }
 
@@ -167,10 +207,11 @@ export class TeamWhatsappResultsService {
     const row = await this.repo.findDispatchDetail(dispatchId);
     if (!row) throw dispatchNotFound();
     const ids = [dispatchId];
-    const [statuses, channels, leftOut] = await Promise.all([
+    const [statuses, channels, leftOut, recheck] = await Promise.all([
       this.repo.countByStatus(ids),
       this.repo.channelsByDispatch(ids),
       this.leftOut(dispatchId, row.roster, full),
+      this.recheck(row, full),
     ]);
     const sectors = row.sectors
       .map((s) => ({ id: s.sectorId, name: s.sectorName }))
@@ -190,6 +231,7 @@ export class TeamWhatsappResultsService {
       leftOut,
       // F3: finalidade, painel e excluídos lidos do gravado; envio antigo → null/[].
       ...purposeDetail(row, sectors, full),
+      recheck,
     };
   }
 
@@ -198,17 +240,58 @@ export class TeamWhatsappResultsService {
     dispatchId: string,
     query: DispatchRecipientsQuery,
   ): Promise<TeamDispatchRecipientPage> {
-    const actor = await this.requireVisible(actorId, dispatchId);
+    const full = seesFullPhone(await this.requireVisible(actorId, dispatchId));
+    const { q } = query;
+    const { items, total } = q
+      ? await this.searchItems(dispatchId, { ...query, q }, full)
+      : await this.pageItems(dispatchId, query, full);
+    return { items, total, page: query.page, pageSize: query.pageSize };
+  }
+
+  /** Sem busca, a página de hoje: o banco pagina e conta (C5). */
+  private async pageItems(
+    dispatchId: string,
+    query: DispatchRecipientsQuery,
+    full: boolean,
+  ): Promise<RecipientPage> {
     const { rows, total } = await this.repo.listDispatchRecipients(
       dispatchId,
       query,
     );
-    const full = seesFullPhone(actor);
+    return { items: rows.map((r) => toRecipientItem(r, full)), total };
+  }
+
+  /** Com busca (DG13): todos os destinatários do envio no filtro de situação, achados em memória. */
+  private async searchItems(
+    dispatchId: string,
+    query: DispatchRecipientsQuery & { q: string },
+    full: boolean,
+  ): Promise<RecipientPage> {
+    const rows = await this.repo.listAllDispatchRecipients(
+      dispatchId,
+      query.status,
+    );
+    return searchPage(
+      rows.map((r) => toRecipientItem(r, full)),
+      query,
+      full,
+    );
+  }
+
+  /**
+   * Reconferência do agendado (CG3, G3); null = envio não reconferido. `skipped`
+   * conta os pulados por ela; "entraram depois" sai sem telefone e pela visão
+   * do leitor.
+   */
+  private async recheck(
+    row: DispatchDetailRow,
+    full: boolean,
+  ): Promise<TeamDispatchRecheck | null> {
+    if (!row.recheckedAt) return null;
     return {
-      items: rows.map((r) => toRecipientItem(r, full)),
-      total,
-      page: query.page,
-      pageSize: query.pageSize,
+      at: row.recheckedAt.toISOString(),
+      skipped: await this.repo.countRecheckSkips(row.id),
+      lateJoined: lateJoinedView(row, full),
     };
   }
 

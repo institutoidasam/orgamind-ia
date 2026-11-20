@@ -14,11 +14,20 @@ export const teamProviderSchema = z.enum(['GOZAP', 'EVOLUTION']);
 // INACTIVE = usuário inativo ou apagado na hora do disparo agendado.
 // NOT_AUTHORIZED = pessoa sem autorização de contato (A2): fica fora do envio na
 // montagem e é conferida de novo no worker.
+// Reconferência do agendado no disparo (DG4): VACATION = de férias; DAY_OFF = de
+// folga; LEFT_SECTOR = saiu do setor, do turno ou do nível; PHONE_CHANGED =
+// telefone mudou depois da criação do envio. EXPIRED = agendado que não disparou
+// até 2 horas depois da hora marcada.
 export const teamSkipReasonSchema = z.enum([
   'NO_PHONE',
   'SUPPRESSED',
   'INACTIVE',
   'NOT_AUTHORIZED',
+  'VACATION',
+  'DAY_OFF',
+  'LEFT_SECTOR',
+  'PHONE_CHANGED',
+  'EXPIRED',
 ]);
 export const teamTargetTypeSchema = z.enum(['user', 'sector']);
 // Último estado de conexão do canal; null = sem evento ou fora destes valores.
@@ -42,12 +51,14 @@ export const teamRecipientStatusSchema = z.enum([
   'SCHEDULED',
   'CANCELLED',
 ]);
-// DISPATCHED = imediato ou agendado já disparado; SCHEDULED = aguardando o início
-// do turno; CANCELLED = cancelado antes do disparo.
+// DISPATCHED = imediato ou agendado já disparado; SCHEDULED = aguardando a hora
+// marcada; CANCELLED = cancelado antes do disparo.
+// EXPIRED = agendado que não disparou até 2 horas depois da hora marcada.
 export const teamDispatchStateSchema = z.enum([
   'DISPATCHED',
   'SCHEDULED',
   'CANCELLED',
+  'EXPIRED',
 ]);
 
 // CF3: finalidade e base do público, em minúsculas na API (o banco guarda em
@@ -75,8 +86,9 @@ export const teamExclusionReasonSchema = z.enum([
 ]);
 // Política do agendado; null = regra antiga (envio sem política gravada).
 export const teamSchedulePolicySchema = z.enum(['immediate', 'frozen_recheck']);
-// Momento do disparo: agora ou no início do turno escolhido.
-export const teamWhenSchema = z.enum(['now', 'shift_start']);
+// Momento do disparo: agora, no início do turno escolhido ou numa data e hora
+// livres de Manaus (`'at'`, DG8).
+export const teamWhenSchema = z.enum(['now', 'shift_start', 'at']);
 
 /** Dados da atividade gravados (Reunião, Palestra, Hora extra; opcional no Alinhamento). */
 export const teamActivitySchema = z.object({
@@ -147,10 +159,19 @@ export const audienceRuleSnapshotSchema = z.object({
   withoutLevel: z.boolean(),
   // null = sem seleção nominal.
   selectedUserIds: z.string().array().nullable(),
+  // DG8: momento escolhido; ausente (envio anterior ao Lote G) = inferido,
+  // `scheduledFor ? 'shift_start' : 'now'`.
+  when: teamWhenSchema.optional(),
 });
 /** Excluídos gravados no envio (Json). O parse descarta chaves fora do contrato (telefone). */
 export const audienceExcludedSnapshotSchema =
   teamAudienceExcludedPersonSchema.array();
+/**
+ * "Entraram depois do agendamento" gravados na reconferência (Json, GG8): o
+ * parse descarta chaves fora do contrato, inclusive telefone.
+ */
+export const audienceLateJoinedSnapshotSchema =
+  teamAudiencePersonSchema.array();
 
 /** Turno gravado no envio (cópia de nome e horários no momento do POST). */
 export const teamShiftSnapshotSchema = z.object({
@@ -320,7 +341,8 @@ export const teamPersonRouteResponseSchema = z.object({
 
 /**
  * C7: envio imediato → `queued` > 0, `scheduled` 0, `scheduledFor` null;
- * agendado → `queued` 0, `scheduled` > 0, `scheduledFor` = início do turno (ISO).
+ * agendado → `queued` 0, `scheduled` > 0, `scheduledFor` = hora marcada (ISO:
+ * início do turno ou data e hora).
  */
 export const createTeamDispatchResponseSchema = z.object({
   dispatchId: z.string(),
@@ -404,7 +426,7 @@ export const teamDispatchListResponseSchema = z.object({
       // Data da escala do envio; null = envio anterior à foto da escala.
       rosterDate: civilDateSchema.nullable(),
       state: teamDispatchStateSchema,
-      // Início do turno do agendado (ISO); null = envio imediato.
+      // Hora marcada do agendado (ISO); null = envio imediato.
       scheduledFor: z.string().nullable(),
       // Hora real do disparo do agendado (ISO); null = imediato ou não disparado.
       firedAt: z.string().nullable(),
@@ -412,6 +434,18 @@ export const teamDispatchListResponseSchema = z.object({
     })
     .array(),
   ...pageMetaShape,
+});
+
+/**
+ * CG3: reconferência do agendado no disparo. `at` = hora da reconferência
+ * (ISO); `skipped` = destinatários pulados por VACATION, DAY_OFF, LEFT_SECTOR
+ * ou INACTIVE; `lateJoined` = quem entrou no público depois do agendamento e
+ * não recebeu (sem telefone).
+ */
+export const teamDispatchRecheckSchema = z.object({
+  at: z.string(),
+  skipped: countSchema,
+  lateJoined: teamAudiencePersonSchema.array(),
 });
 
 /**
@@ -442,12 +476,16 @@ export const teamDispatchDetailResponseSchema = z.object({
   base: dispatchPurposeShape.base,
   rule: teamAudienceRuleViewSchema.nullable(),
   excluded: teamAudienceExcludedPersonSchema.array(),
+  // null = envio não reconferido (imediato, antigo, cancelado, vencido ou ainda
+  // agendado). Opcional só até a T11; a API devolve sempre, nulo quando não há.
+  recheck: teamDispatchRecheckSchema.nullable().optional(),
 });
 
 /**
  * C5: `GET dispatches/:id/recipients`, uma página por nome. `reason` = skipReason
- * ?? errorCode; `channel` = número do snapshot (null = sem número); `repeatable`
- * é decisão do servidor (`isRepeatable`). Sem telefone de pessoa (GC8).
+ * (`teamSkipReasonSchema`) ?? errorCode; `channel` = número do snapshot (null =
+ * sem número); `repeatable` é decisão do servidor (`isRepeatable`). `phone` =
+ * telefone gravado do destinatário pela visão de quem pede (CG3, `phoneView`).
  */
 export const teamDispatchRecipientPageSchema = z.object({
   items: z
@@ -471,6 +509,9 @@ export const teamDispatchRecipientPageSchema = z.object({
       readAt: z.string().nullable(),
       repliedAt: z.string().nullable(),
       repeatable: z.boolean(),
+      // null = não gravado (envio antigo). Opcional só até a T11; a API devolve
+      // sempre, nulo quando não há.
+      phone: z.string().nullable().optional(),
     })
     .array(),
   ...pageMetaShape,
@@ -478,8 +519,10 @@ export const teamDispatchRecipientPageSchema = z.object({
 
 /**
  * C9: agendados ainda não disparados (`state = SCHEDULED`), por `scheduledFor`
- * asc. `shift` = snapshot gravado no agendamento; `recipientCount` = quantos
- * estão SCHEDULED; channel/author null = removidos depois do agendamento.
+ * asc. `shift` = snapshot gravado no agendamento (null = "data e hora" com
+ * vários ou todos os turnos, que não grava turno); `rosterDate` sempre vem (o
+ * alvo setor o grava); `recipientCount` = quantos estão SCHEDULED;
+ * channel/author null = removidos depois do agendamento.
  */
 export const teamScheduledListResponseSchema = z.object({
   items: z
@@ -487,7 +530,7 @@ export const teamScheduledListResponseSchema = z.object({
       id: z.string(),
       scheduledFor: z.string(),
       rosterDate: civilDateSchema,
-      shift: teamShiftSnapshotSchema,
+      shift: teamShiftSnapshotSchema.nullable(),
       label: z.string(),
       recipientCount: z.number().int().nonnegative(),
       channel: z.object({ id: z.string(), name: z.string() }).nullable(),
@@ -555,3 +598,9 @@ export type AudienceRuleSnapshot = z.infer<typeof audienceRuleSnapshotSchema>;
 export type AudienceExcludedSnapshot = z.infer<
   typeof audienceExcludedSnapshotSchema
 >;
+export type AudienceLateJoinedSnapshot = z.infer<
+  typeof audienceLateJoinedSnapshotSchema
+>;
+export type TeamDispatchState = z.infer<typeof teamDispatchStateSchema>;
+export type TeamSkipReason = z.infer<typeof teamSkipReasonSchema>;
+export type TeamDispatchRecheck = z.infer<typeof teamDispatchRecheckSchema>;

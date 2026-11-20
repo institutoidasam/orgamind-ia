@@ -124,6 +124,8 @@ describe('agendar no início do turno', () => {
           dispatchId: 'd1',
           purpose: 'shift_notice',
           base: 'on_duty',
+          when: 'shift_start',
+          policy: 'frozen_recheck',
           scheduled: 1,
           skipped: 1,
         },

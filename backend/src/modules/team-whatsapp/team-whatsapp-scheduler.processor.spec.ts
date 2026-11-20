@@ -58,8 +58,8 @@ describe('TeamWhatsappScheduleService.fireDue — isolamento de erro', () => {
 
     expect(repo.findDueScheduled.mock.calls).toEqual([[NOW, 50]]);
     expect(repo.claimScheduled.mock.calls).toEqual([
-      ['d1', NOW],
-      ['d2', NOW],
+      ['d1', NOW, expect.any(Function)],
+      ['d2', NOW, expect.any(Function)],
     ]);
     expect(queue.addBulk.mock.calls).toEqual([
       [[{ name: 'send', data: { recipientId: 'r1' }, opts: { jobId: 'r1' } }]],

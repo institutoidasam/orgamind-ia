@@ -33,8 +33,13 @@ import { resolveDay } from '../staff-schedule/schedule-resolver';
 import { ChannelLiveStateService } from '../whatsapp-providers/channel-live-state.service';
 import { purposeView } from './dispatch-purpose-view';
 import type { CreateTeamDispatchInput } from './dto/create-team-dispatch.dto';
-import type { PageQuery } from './dto/page-query.dto';
-import { phoneSkipReason, type PhoneSkipReason } from './recipient-skip';
+import { dispatchListFilter } from './dispatch-list-filter';
+import type { DispatchListQuery } from './dto/dispatch-list-query.dto';
+import {
+  phoneSkipReason,
+  sendPhoneOf,
+  type PhoneSkipReason,
+} from './recipient-skip';
 import {
   TeamAudienceService,
   type AudienceRequest,
@@ -54,13 +59,12 @@ import {
   noSector,
   teamForbidden,
 } from './team-whatsapp.errors';
-import { blocksFor } from './team-whatsapp.purpose';
+import { blocksFor, scheduledForOf } from './team-whatsapp.purpose';
 import {
   requireNoBlock,
   sectorDispatchFields,
   sectorRecipients,
   sectorRequestOf,
-  sectorScheduledFor,
   sectorTrail,
   shiftColumns,
   type SectorTrail,
@@ -277,7 +281,12 @@ export class TeamWhatsappService {
     const resolved = await this.audience.resolve(actor, input);
     if (resolved.audienceKey !== input.audienceKey) throw audienceChanged();
     if (resolved.unknownSelected.length > 0) throw invalidSelection();
-    const scheduledFor = sectorScheduledFor(input, resolved);
+    // Um instante só para prévia e envio (DG8): o "data e hora" chega às travas.
+    const scheduledFor = scheduledForOf({
+      request: input,
+      date: resolved.date,
+      shifts: resolved.shifts,
+    });
     const found = await this.repo.findSectorChannels(
       resolved.sectors.map((s) => s.id),
     );
@@ -309,12 +318,12 @@ export class TeamWhatsappService {
       trail: {
         targetType: 'SECTOR',
         targetId: resolved.sectors[0].id,
-        ...sectorTrail(resolved),
+        ...sectorTrail(resolved, input.when),
       },
     };
   }
 
-  /** Agendado (T8): nada vai para a fila agora; o disparo é do worker (T9). */
+  /** Agendado (início do turno ou data e hora): nada vai para a fila agora; o disparo é do worker. */
   private async scheduled(
     { actorId, trail, created, skipped }: CreatedDispatch,
     scheduledFor: Date,
@@ -329,9 +338,12 @@ export class TeamWhatsappService {
       {
         actorId,
         dispatchId: created.id,
-        // GF12: finalidade e base (valores da API), sem nome, telefone nem texto.
+        // GF12/DG6: finalidade, base, momento e política (valores da API),
+        // sem nome, telefone nem texto.
         purpose: trail.purpose,
         base: trail.base,
+        when: trail.when,
+        policy: trail.policy,
         scheduled,
         skipped: skipped.length,
       },
@@ -362,7 +374,7 @@ export class TeamWhatsappService {
       created.id,
       {
         actorId,
-        // Setor: + setores, finalidade e base (GF12); pessoa: como hoje.
+        // Setor: + setores, finalidade, base e política (GF12/DG6); pessoa: como hoje.
         ...trail,
         channelIds,
         queued: queuedIds.length,
@@ -463,16 +475,21 @@ export class TeamWhatsappService {
     return user ? this.daySector(user, date) : null;
   }
 
-  /** Uma página do histórico: ADMIN vê todos; os demais, os próprios (GC5). */
+  /**
+   * Uma página do histórico: ADMIN vê todos; os demais, os próprios (GC5). Os
+   * filtros (DG14) entram somados ao autor; sem filtro, a lista de hoje.
+   */
   async listDispatches(
     actorId: string,
-    page: PageQuery,
+    query: DispatchListQuery,
   ): Promise<TeamDispatchListResponse> {
     const actor = await this.requireSender(actorId);
-    const { rows, total } = await this.repo.listDispatches(
-      actor.role === 'ADMIN' ? null : actor.id,
-      page,
-    );
+    const authorId = actor.role === 'ADMIN' ? null : actor.id;
+    const page = { page: query.page, pageSize: query.pageSize };
+    const filter = dispatchListFilter(query);
+    const { rows, total } = await (filter
+      ? this.repo.listDispatches(authorId, page, filter)
+      : this.repo.listDispatches(authorId, page));
     const ids = rows.map((r) => r.id);
     const [statuses, channels] = await Promise.all([
       this.repo.countByStatus(ids),
@@ -636,7 +653,7 @@ export class TeamWhatsappService {
   /**
    * Alvo pessoa: o contato carrega a grafia que o merge elegeu como a que
    * entrega. Sem telefone, suprimido ou sem autorização de contato → SKIPPED;
-   * o resto fica QUEUED.
+   * o resto fica QUEUED. O telefone do envio fica gravado (DG7); sem política.
    */
   private async classify(
     targets: readonly TargetMember[],
@@ -652,6 +669,7 @@ export class TeamWhatsappService {
         shiftName,
         ...snapshot,
         ...recipientChannel(numbers.get(target.routeSectorId)),
+        phoneE164: sendPhoneOf(m),
       };
       const skipReason = await this.skipReasonOf(m);
       recipients.push(

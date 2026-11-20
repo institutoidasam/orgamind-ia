@@ -92,7 +92,10 @@ export function tooManyPeople(): DomainError {
   });
 }
 
-/** "No início do turno" com o início (data + turno, em Manaus) agora ou no passado. */
+/**
+ * "No início do turno" com o início (data + turno, em Manaus) agora ou no
+ * passado; em "data e hora" o texto é `SCHEDULE_AT_IN_PAST_TEXT` (CG4).
+ */
 export function scheduleInPast(): DomainError {
   return blocked(audienceBlock('schedule_in_past'));
 }
@@ -175,7 +178,11 @@ export const BLOCK_TEXT = {
   missing_activity: 'Informe a data, a hora e o local da atividade.',
   missing_urgency_reason: 'Informe o motivo da urgência.',
   overtime_without_selection: 'Marque pelo menos uma pessoa para a hora extra.',
+  // "No início do turno"; "data e hora" usa SCHEDULE_AT_IN_PAST_TEXT.
   schedule_in_past: 'O início deste turno já passou',
+  // DG8: "data e hora" além de hoje (Manaus) + 30 dias.
+  schedule_too_far: 'O envio pode ser agendado para até 30 dias à frente.',
+  // Vale no "agora", no início do turno e em "data e hora".
   after_activity_start: 'A mensagem precisa sair antes do início da atividade.',
   // Público vazio.
   no_recipients: 'Nenhum destinatário válido',
@@ -185,6 +192,9 @@ export const BLOCK_TEXT = {
 /** Alinhamento com atividade incompleta: mesmo código `missing_activity`, sem exigir o local. */
 export const MISSING_ACTIVITY_DATE_TIME_TEXT =
   'Informe a data e a hora da atividade.';
+
+/** "Data e hora" (`when: 'at'`) agora ou no passado: mesmo código `schedule_in_past` (CG4). */
+export const SCHEDULE_AT_IN_PAST_TEXT = 'A data e a hora do envio já passaram.';
 
 export type BlockCode = keyof typeof BLOCK_TEXT;
 

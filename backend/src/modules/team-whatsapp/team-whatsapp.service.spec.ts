@@ -288,6 +288,7 @@ const NUMBER = {
   channelName: numberRow().name,
   channelPhoneE164: numberRow().phoneE164,
 };
+const FIN_AREA = { ...FIN_SNAPSHOT, ...NUMBER };
 
 describe('TeamWhatsappService.dispatch — setor grava o envio', () => {
   beforeEach(() => {
@@ -295,7 +296,7 @@ describe('TeamWhatsappService.dispatch — setor grava o envio', () => {
     givenSector(h, recordedMembers());
   });
 
-  it('grava o envio com o alvo e um destinatário por pessoa, sem telefone', async () => {
+  it('grava o envio com o alvo e um destinatário por pessoa, com o telefone da criação (DG7)', async () => {
     await sendSector('m');
     const data = h.repo.createDispatch.mock.calls[0][0];
     expect(data).toMatchObject({
@@ -314,8 +315,8 @@ describe('TeamWhatsappService.dispatch — setor grava o envio', () => {
         ...FIRST,
         status: 'QUEUED',
         skipReason: null,
-        ...FIN_SNAPSHOT,
-        ...NUMBER,
+        ...FIN_AREA,
+        phoneE164: PHONE,
       },
       {
         userId: 'u2',
@@ -323,8 +324,8 @@ describe('TeamWhatsappService.dispatch — setor grava o envio', () => {
         ...FIRST,
         status: 'SKIPPED',
         skipReason: 'NO_PHONE',
-        ...FIN_SNAPSHOT,
-        ...NUMBER,
+        ...FIN_AREA,
+        phoneE164: null,
       },
       {
         userId: 'u3',
@@ -332,8 +333,8 @@ describe('TeamWhatsappService.dispatch — setor grava o envio', () => {
         ...FIRST,
         status: 'SKIPPED',
         skipReason: 'SUPPRESSED',
-        ...FIN_SNAPSHOT,
-        ...NUMBER,
+        ...FIN_AREA,
+        phoneE164: SUPPRESSED,
       },
     ]);
   });
@@ -369,6 +370,7 @@ describe('TeamWhatsappService.dispatch — setor audita contagens', () => {
         // GF12: finalidade e base com os valores da API.
         purpose: 'shift_notice',
         base: 'on_duty',
+        policy: 'immediate',
         channelIds: ['c1'],
         queued: 1,
         skipped: 2,

@@ -10,8 +10,19 @@ import {
   fromDbPolicy,
   fromDbPurpose,
   toDbBase,
+  toDbPolicy,
   toDbPurpose,
 } from './team-whatsapp.purpose-codes';
+
+describe('política do agendado gravada (Lote G, DG6)', () => {
+  it.each(teamSchedulePolicySchema.options)(
+    'política %s: banco em maiúsculas e volta igual',
+    (policy) => {
+      expect(toDbPolicy(policy)).toBe(policy.toUpperCase());
+      expect(fromDbPolicy(toDbPolicy(policy))).toBe(policy);
+    },
+  );
+});
 
 describe('conversão finalidade, base e política (CF8)', () => {
   it.each(teamPurposeSchema.options)(

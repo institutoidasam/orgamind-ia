@@ -1918,3 +1918,91 @@ model RolePermission {
 
   @@id([role, key])
 }
+
+// Lote de importação de pessoas (Lote E). Não é o ImportBatch dos contatos.
+// O arquivo em si não é guardado: ficam nome, tamanho, SHA-256 e as linhas
+// lidas (PeopleImportRow). `createdById`, `confirmedById` e `closedById` sem
+// FK, como UserAssignment.recordedById. `headers` é string[] na ordem do
+// arquivo, `mapping` é o ColumnMapping e `result` os totais finais.
+enum PeopleImportStatus {
+  PREVIEW
+  WRITING
+  COMPLETED
+  CLOSED
+}
+
+enum PeopleImportRowClass {
+  CREATE
+  UPDATE
+  UNCHANGED
+  INVALID
+  DUPLICATE
+  CONFLICT
+  IGNORED
+}
+
+enum PeopleImportWriteState {
+  PENDING
+  RESERVED
+  DONE
+}
+
+enum PeopleImportOutcome {
+  CREATED
+  UPDATED
+  UNCHANGED
+  FAILED
+  NOT_WRITTEN
+}
+
+model PeopleImportBatch {
+  id            String             @id @default(cuid())
+  fileName      String             @db.VarChar(255)
+  fileSize      Int
+  fileSha256    String             @db.Char(64)
+  format        String             @db.VarChar(4)
+  headers       Json
+  mapping       Json
+  previewCounts Json?
+  status        PeopleImportStatus @default(PREVIEW)
+  createdById   String
+  createdAt     DateTime           @default(now())
+  confirmedById String?
+  confirmedAt   DateTime?
+  lastBlockAt   DateTime?
+  finishedAt    DateTime?
+  closedById    String?
+  result        Json?
+  updatedAt     DateTime           @updatedAt
+  rows          PeopleImportRow[]
+
+  @@index([createdById, createdAt])
+  @@index([status, createdAt])
+}
+
+// Linha lida do arquivo. `cells` é { "<índice da coluna>": "texto" } em jsonb
+// (nulo depois da limpeza); `personId` sem FK, para apagar pessoa nunca travar
+// nem apagar o registro do lote. `writeState` nulo = a linha não vai ser gravada.
+model PeopleImportRow {
+  id               String                  @id @default(cuid())
+  batchId          String
+  batch            PeopleImportBatch       @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  rowNumber        Int
+  cells            Json?
+  classification   PeopleImportRowClass?
+  reasons          Json                    @default("[]")
+  warnings         Json                    @default("[]")
+  preview          Json?
+  plan             Json?
+  personId         String?
+  writeState       PeopleImportWriteState?
+  reservedUntil    DateTime?
+  reservationToken String?                 @db.VarChar(36)
+  outcome          PeopleImportOutcome?
+  outcomeReason    String?                 @db.VarChar(200)
+  writtenAt        DateTime?
+
+  @@unique([batchId, rowNumber])
+  @@index([batchId, classification, rowNumber])
+  @@index([batchId, writeState, rowNumber])
+}

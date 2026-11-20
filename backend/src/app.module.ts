@@ -51,6 +51,7 @@ import { LevelsModule } from './modules/levels/levels.module';
 import { SectorPeopleModule } from './modules/sector-people/sector-people.module';
 import { StaffScheduleModule } from './modules/staff-schedule/staff-schedule.module';
 import { PeopleExportModule } from './modules/people-export/people-export.module';
+import { PeopleImportModule } from './modules/people-import/people-import.module';
 import { InternalNumbersModule } from './modules/internal-numbers/internal-numbers.module';
 import { InternalCommunicationsModule } from './modules/internal-communications/internal-communications.module';
 import { QUEUE_NAMES } from './modules/queue/queue.constants';
@@ -116,6 +117,7 @@ export const LOG_REDACT_PATHS = [
     AuditTrailModule,
     StaffScheduleModule,
     PeopleExportModule,
+    PeopleImportModule,
     TeamWhatsappModule,
     InternalNumbersModule,
     InternalCommunicationsModule,

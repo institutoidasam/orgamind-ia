@@ -28,6 +28,16 @@ function setup(props: Partial<React.ComponentProps<typeof SectorShiftPicker>> = 
   return { user: userEvent.setup(), onSectorsChange, onLevelsChange, onShiftsChange };
 }
 
+describe('SectorShiftPicker: campo Data', () => {
+  it('aparece com a data da tela e some quando a referência é a data da atividade', () => {
+    setup();
+    expect(screen.getByLabelText('Data')).toHaveValue('2026-10-21');
+    cleanup();
+    setup({ showDate: false });
+    expect(screen.queryByLabelText('Data')).not.toBeInTheDocument();
+  });
+});
+
 describe('SectorShiftPicker', () => {
   it('Todos os setores marca todos, na ordem dos setores', async () => {
     const { user, onSectorsChange } = setup();

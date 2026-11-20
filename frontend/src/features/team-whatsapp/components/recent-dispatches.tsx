@@ -3,7 +3,9 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { Pagination } from '@/features/internal-communications/components/pagination';
+import { activityText } from '../activity-text';
 import { channelLabel, countParts } from '../error-messages';
+import { BASE_LABEL, LEGACY_BASE_LABEL, PURPOSE_LABEL } from '../labels';
 import type { DispatchList, Paging } from '../schemas';
 
 type Item = DispatchList['items'][number];
@@ -35,12 +37,29 @@ function ChannelsCell({ channels }: { channels: Channel[] }) {
   );
 }
 
+/**
+ * Finalidade, base e atividade; envio a setor anterior à finalidade: `—` e a regra anterior (C5). Envio a uma
+ * pessoa não tem finalidade nem base (não muda nesta etapa): a célula fica vazia, como o histórico sempre o mostrou.
+ */
+function PurposeCell({ item }: { item: Item }) {
+  if (item.target.type === 'user') return null;
+  const activity = activityText(item.activity);
+  return (
+    <>
+      <p className="font-medium">{item.purpose ? PURPOSE_LABEL[item.purpose] : '—'}</p>
+      <p className="text-muted-foreground">{item.base ? BASE_LABEL[item.base] : LEGACY_BASE_LABEL}</p>
+      {activity && <p>{activity}</p>}
+    </>
+  );
+}
+
 function DispatchRow({ item }: { item: Item }) {
   return (
     <TableRow>
       <TableCell>{new Date(item.createdAt).toLocaleString('pt-BR')}</TableCell>
       <TableCell>{item.author?.name ?? item.author?.email ?? '—'}</TableCell>
       <TableCell>{item.target.label}</TableCell>
+      <TableCell className="text-sm"><PurposeCell item={item} /></TableCell>
       <TableCell><ChannelsCell channels={item.channels} /></TableCell>
       <TableCell className="text-sm">
         <StateBadge state={item.state} />
@@ -65,7 +84,7 @@ export function RecentDispatches({ items, paging }: { items: Item[]; paging: Pag
           <TableHeader>
             <TableRow>
               <TableHead>Data</TableHead><TableHead>Autor</TableHead><TableHead>Destino</TableHead>
-              <TableHead>Número</TableHead><TableHead>Situação</TableHead>
+              <TableHead>Finalidade</TableHead><TableHead>Número</TableHead><TableHead>Situação</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>{items.map((i) => <DispatchRow key={i.id} item={i} />)}</TableBody>

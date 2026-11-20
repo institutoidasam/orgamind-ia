@@ -11,6 +11,8 @@ type Props = {
   levelIds: string[];
   withoutLevel: boolean;
   date: string;
+  /** Falso quando a data de referência não é a da tela (atividade obrigatória ou com data informada): o campo "Data" some. */
+  showDate?: boolean;
   /** Turnos marcados; vazio = "Todos os turnos" (se `shiftsPicked`). */
   shiftIds: string[];
   /** Falso até o primeiro clique: nada marcado, nem "Todos os turnos". */
@@ -118,7 +120,7 @@ function ShiftChoice({ shifts, shiftIds, shiftsPicked, onChange }: ShiftChoicePr
 }
 
 export function SectorShiftPicker(props: Props) {
-  const { sectors, date, onDateChange } = props;
+  const { sectors, date, onDateChange, showDate = true } = props;
   return (
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">{BOARD_FILTER_HINT}</p>
@@ -127,10 +129,12 @@ export function SectorShiftPicker(props: Props) {
         levels={props.levels} levelIds={props.levelIds} withoutLevel={props.withoutLevel}
         onLevelsChange={props.onLevelsChange}
       />
-      <div className="space-y-1">
-        <Label htmlFor="team-whatsapp-date">Data</Label>
-        <Input id="team-whatsapp-date" type="date" value={date} onChange={(e) => onDateChange(e.target.value)} />
-      </div>
+      {showDate && (
+        <div className="space-y-1">
+          <Label htmlFor="team-whatsapp-date">Data</Label>
+          <Input id="team-whatsapp-date" type="date" value={date} onChange={(e) => onDateChange(e.target.value)} />
+        </div>
+      )}
       <ShiftChoice
         shifts={props.shifts} shiftIds={props.shiftIds} shiftsPicked={props.shiftsPicked}
         onChange={props.onShiftsChange}

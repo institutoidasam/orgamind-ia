@@ -17,11 +17,23 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+describe('novidade: rastreio do envio do WhatsApp da equipe (Lote H)', () => {
+  it('abre a lista com a entrada 2026.11.20.2 e cobre Quando, conexão conferida, Tentativas e a fila perdida', () => {
+    const note = RELEASE_NOTES.find((n) => n.version === '2026.11.20.2');
+    const texts = (note?.items ?? []).map((item) => item.text);
+    expect(RELEASE_NOTES[0]).toBe(note);
+    expect(note?.items.every((item) => item.where === '/whatsapp-equipe')).toBe(true);
+    expect(texts.some((t) => t.includes('"Quando"'))).toBe(true);
+    expect(texts.some((t) => t.includes('"Tentativas"'))).toBe(true);
+    expect(texts.some((t) => t.includes('conexão foi conferida'))).toBe(true);
+    expect(texts.some((t) => t.includes('Saiu da fila sem envio') && t.includes('nunca reenvia sozinho'))).toBe(true);
+  });
+});
+
 describe('novidade: agendamento do WhatsApp da equipe (Lote G)', () => {
   it('abre a lista com a entrada 2026.11.20.1 e cobre agendamento, prévia de atividade e envio atrasado', () => {
     const note = RELEASE_NOTES.find((n) => n.version === '2026.11.20.1');
     const texts = (note?.items ?? []).map((item) => item.text);
-    expect(RELEASE_NOTES[0]).toBe(note);
     expect(note?.items.some((item) => item.where === '/whatsapp-equipe')).toBe(true);
     expect(texts.some((t) => t.includes('30 dias'))).toBe(true);
     expect(texts.some((t) => t.includes('Preencher com os dados da atividade'))).toBe(true);

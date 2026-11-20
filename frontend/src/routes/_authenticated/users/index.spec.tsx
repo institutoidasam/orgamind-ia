@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HTTPError } from 'ky';
-import type { ComponentType } from 'react';
+import type { ComponentType, ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { authState, deleteMutate, getState, invalidateQueries, resetMutate, statusMutate, toastError, toastSuccess, useShifts, useUsers } = vi.hoisted(() => ({
@@ -20,6 +20,7 @@ const { authState, deleteMutate, getState, invalidateQueries, resetMutate, statu
 vi.mock('@tanstack/react-router', () => ({
   createFileRoute: () => (opts: Record<string, unknown>) => ({ ...opts }),
   redirect: (opts: Record<string, unknown>) => ({ __redirect: opts }),
+  Link: ({ to, children, ...rest }: { to: string; children: ReactNode }) => <a href={to} {...rest}>{children}</a>,
 }));
 
 vi.mock('@tanstack/react-query', async (importOriginal) => ({
@@ -529,6 +530,29 @@ describe('UsersPage botão Exportar', () => {
     render(<UsersPage />);
     expect(screen.getByRole('button', { name: /Cadastrar usuário/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Exportar' })).not.toBeInTheDocument();
+  });
+});
+
+describe('UsersPage botão Importar planilha', () => {
+  const asUser = (permissions: string[]) => {
+    authState.user = { id: 'admin-1', role: 'ADMIN', permissions } as typeof authState.user;
+  };
+
+  beforeEach(() => listing([users[0]]));
+  afterEach(() => { authState.user = { id: 'admin-1', role: 'ADMIN' }; });
+
+  it('Importar planilha aparece para quem tem pessoas.importar', () => {
+    asUser(['pessoas.importar']);
+    const { unmount } = render(<UsersPage />);
+    const link = screen.getByRole('link', { name: 'Importar planilha' });
+    expect(link).toHaveAttribute('href', '/importar-pessoas');
+    expect(link.parentElement).toBe(screen.getByRole('button', { name: /Cadastrar usuário/ }).parentElement);
+    unmount();
+
+    asUser([]);
+    render(<UsersPage />);
+    expect(screen.getByRole('button', { name: /Cadastrar usuário/ })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Importar planilha' })).not.toBeInTheDocument();
   });
 });
 

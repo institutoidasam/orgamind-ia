@@ -21,6 +21,31 @@ const SUPERVISOR_DEFAULT = [
   'trilha.consultar',
 ];
 
+describe('pessoas.importar na matriz padrão', () => {
+  it('SUPERVISOR e OPERATOR não têm pessoas.importar por padrão; ADMIN tem; VIEWER não', () => {
+    // Linha ausente no banco vale o padrão: nenhum dos dois papéis editáveis importa.
+    expect(resolvePermissions('SUPERVISOR', [])).not.toContain(
+      'pessoas.importar',
+    );
+    expect(resolvePermissions('OPERATOR', [])).not.toContain(
+      'pessoas.importar',
+    );
+    expect(defaultPermissionsFor('SUPERVISOR')).not.toContain(
+      'pessoas.importar',
+    );
+    expect(defaultPermissionsFor('OPERATOR')).not.toContain('pessoas.importar');
+    expect(defaultPermissionsFor('ADMIN')).toContain('pessoas.importar');
+    expect(defaultPermissionsFor('VIEWER')).not.toContain('pessoas.importar');
+  });
+
+  it('a chave entra por último e a recusa tem o texto da spec', () => {
+    expect(PERMISSION_KEYS.at(-1)).toBe('pessoas.importar');
+    expect(PERMISSION_DENIED_TEXT['pessoas.importar']).toBe(
+      'Você não tem permissão para importar planilhas de pessoas.',
+    );
+  });
+});
+
 describe('defaultPermissionsFor', () => {
   it('defaultPermissionsFor: ADMIN todas, VIEWER nenhuma, SUPERVISOR a lista explícita das sete, OPERATOR as 5 de B2', () => {
     expect(defaultPermissionsFor('ADMIN')).toEqual([...PERMISSION_KEYS]);
@@ -68,10 +93,13 @@ describe('resolvePermissions', () => {
     const allFalse = PERMISSION_KEYS.map((key) => ({ key, granted: false }));
     const allTrue = PERMISSION_KEYS.map((key) => ({ key, granted: true }));
 
-    // trilha.consultar revogada pela linha; pessoas.exportar ausente cai no padrão (negada).
+    // trilha.consultar revogada pela linha; exportar e importar ausentes caem no padrão (negadas).
     expect(resolvePermissions('SUPERVISOR', supervisorRows)).toEqual(
       PERMISSION_KEYS.filter(
-        (key) => key !== 'trilha.consultar' && key !== 'pessoas.exportar',
+        (key) =>
+          key !== 'trilha.consultar' &&
+          key !== 'pessoas.exportar' &&
+          key !== 'pessoas.importar',
       ),
     );
     expect(resolvePermissions('OPERATOR', [])).toEqual(
@@ -105,7 +133,7 @@ describe('permissionDenied', () => {
     });
   });
 
-  it('PERMISSION_DENIED_TEXT tem texto para cada uma das 9 chaves', () => {
+  it('PERMISSION_DENIED_TEXT tem texto para cada uma das 10 chaves', () => {
     expect(Object.keys(PERMISSION_DENIED_TEXT).sort()).toEqual(
       [...PERMISSION_KEYS].sort(),
     );

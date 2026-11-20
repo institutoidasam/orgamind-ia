@@ -42,6 +42,20 @@ const FIELD_LABEL: Record<string, string> = {
   phoneVisibility: 'Telefone',
   periodFrom: 'De',
   periodTo: 'Até',
+  fileName: 'Arquivo',
+  toCreate: 'A criar',
+  toUpdate: 'A atualizar',
+  created: 'Criadas',
+  updated: 'Atualizadas',
+  unchanged: 'Sem alteração',
+  invalid: 'Inválidas',
+  duplicate: 'Duplicadas',
+  conflict: 'Conflitos',
+  failed: 'Falhas',
+  phoneTaken: 'Falhas por telefone já cadastrado',
+  notWritten: 'Não gravadas',
+  writing: 'Em gravação no encerramento',
+  ending: 'Fim',
 };
 
 const ACTION_LABEL: Record<string, string> = {
@@ -82,6 +96,8 @@ const ACTION_LABEL: Record<string, string> = {
   'permission.matrix_restored': 'Permissões restauradas ao padrão',
   'people.export': 'Exportou pessoas',
   'schedule.export': 'Exportou escala',
+  'people_import.confirmed': 'Confirmou importação de pessoas',
+  'people_import.completed': 'Terminou importação de pessoas',
 };
 
 const AUTHORIZATION_STATUS_LABEL: Record<string, string> = {
@@ -99,6 +115,12 @@ const PHONE_VISIBILITY_LABEL: Record<string, string> = {
   full: 'Completo',
   masked: 'Mascarado',
   partial: 'Completo em parte',
+};
+
+const IMPORT_ENDING_LABEL: Record<string, string> = {
+  COMPLETED: 'Concluída',
+  CLOSED: 'Encerrada pelo administrador',
+  AUTO_CLOSED: 'Encerrada automaticamente',
 };
 
 const AUTHORIZATION_SOURCE_VALUE_LABEL: Record<string, string> = {
@@ -165,6 +187,7 @@ const TEXT_FORMATTER: Record<string, (value: string) => string> = {
   periodTo: civilDateLabel,
   statusFilter: (value) => lookup(EXPORT_STATUS_LABEL, value),
   phoneVisibility: (value) => lookup(PHONE_VISIBILITY_LABEL, value),
+  ending: (value) => lookup(IMPORT_ENDING_LABEL, value),
 };
 
 function booleanLabel(field: string, value: boolean): string {

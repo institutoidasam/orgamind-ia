@@ -53,6 +53,44 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+describe('PermissionsMatrix: importar planilha de pessoas', () => {
+  it('mostra a linha com a explicação, desmarcada para Supervisor e Operador por padrão', async () => {
+    await renderMatrix(matrixWith(DEFAULTS.OPERATOR));
+
+    expect(box('Supervisor', 'Importar planilha de pessoas')).not.toBeChecked();
+    expect(box('Operador', 'Importar planilha de pessoas')).not.toBeChecked();
+    expect(box('Administrador', 'Importar planilha de pessoas')).toBeChecked();
+    expect(box('Leitura', 'Importar planilha de pessoas')).not.toBeChecked();
+    expect(
+      screen.getByText(
+        'Enviar planilhas CSV ou XLSX para criar e atualizar pessoas, com prévia antes de gravar. Quem não é administrador precisa também da permissão de editar pessoas e só altera pessoas sem acesso dos setores que gerencia.',
+      ),
+    ).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('pessoas.importar');
+  });
+
+  it('aceita a matriz que o back manda com as 10 chaves, sem cair no erro de leitura', async () => {
+    const keys = [
+      'pessoas.editar',
+      'pessoas.inativar',
+      'escala.alterar',
+      'estrutura.manter',
+      'telefone.ver_completo',
+      'equipe.enviar',
+      'equipe.disparo_amplo',
+      'trilha.consultar',
+      'pessoas.exportar',
+      'pessoas.importar',
+    ] as PermissionKey[];
+    const matrix = matrixWith(DEFAULTS.OPERATOR);
+    await renderMatrix({ ...matrix, keys, roles: { ...matrix.roles, ADMIN: keys } });
+
+    expect(keys).toHaveLength(10);
+    expect(box('Administrador', 'Importar planilha de pessoas')).toBeChecked();
+    expect(screen.queryByText(/não foi possível/i)).not.toBeInTheDocument();
+  });
+});
+
 describe('PermissionsMatrix: exportar pessoas e escala', () => {
   it('mostra a linha com a explicação, desmarcada para Supervisor e Operador por padrão', async () => {
     await renderMatrix(matrixWith(DEFAULTS.OPERATOR));

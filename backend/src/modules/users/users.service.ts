@@ -57,7 +57,7 @@ export type UserListResponse = Omit<UserListResult, 'data'> & {
   pageSize: number;
   authorizationCounts: { unverified: number; notAuthorized: number };
 };
-type UserPatch = {
+export type UserPatch = {
   name?: string;
   role?: Role;
   sectorId?: string | null;
@@ -84,13 +84,21 @@ export type PersonChangeMeta = {
   action?: string;
   category?: AuditCategory;
 };
+/**
+ * Meta da criação de pessoa sem acesso: o motivo vai para a trilha e `personId`
+ * (só a importação, EX17.4 a) vira o `id` da pessoa criada; sem ele o `id`
+ * continua do `@default(cuid())`.
+ */
+export type PersonCreateMeta = Pick<PersonChangeMeta, 'reason'> & {
+  personId?: string;
+};
 /** Ficha da criação (A1/A2): sem `contactAuthorization` a pessoa nasce NAO_AUTORIZADO. */
 type PersonRecordInput = {
   registration?: string | null;
   contactAuthorization?: ContactAuthorizationInput;
 };
 /** Pessoa sem acesso (D1/D12): POST /users com hasAccess false e a T6. */
-type PersonWithoutAccessInput = PersonRecordInput & {
+export type PersonWithoutAccessInput = PersonRecordInput & {
   name: string;
   phone: string;
   sectorId: string | null;
@@ -157,7 +165,9 @@ function invalidShift(): DomainError {
 }
 
 // Função aparada; vazio (ou só espaços) grava null.
-function normalizeJobTitle(value: string | null | undefined): string | null {
+export function normalizeJobTitle(
+  value: string | null | undefined,
+): string | null {
   return value?.trim() || null;
 }
 
@@ -201,8 +211,10 @@ function personWithoutAccessData(
   actorId: string,
   input: PersonWithoutAccessInput,
   linked: LinkedRecord,
+  personId?: string,
 ): Prisma.UserCreateInput {
   return {
+    ...(personId ? { id: personId } : {}),
     name: input.name.trim(),
     hasAccess: false,
     role: 'VIEWER',
@@ -379,14 +391,17 @@ export class UsersService {
    * `user.invited` (com acesso) ou `user.person_created`. A trilha leva o
    * retrato da pessoa com telefone e e-mail mascarados (GC2), sem senha e sem
    * metadata com e-mail. Setor, turno e nível vão só em `values`: o
-   * repositório abre a linha de vínculo com início = hoje (DV6/DV7).
+   * repositório abre a linha de vínculo com início = hoje (DV6/DV7). O motivo
+   * (EX21) vai para a trilha; o convite passa `null`.
    */
-  private createWithTrail(
-    data: Prisma.UserCreateInput,
-    action: 'user.invited' | 'user.person_created',
-    actorId: string,
-    values: AssignmentValues,
-  ): Promise<UserSummary> {
+  private createWithTrail(entry: {
+    data: Prisma.UserCreateInput;
+    action: 'user.invited' | 'user.person_created';
+    actorId: string;
+    values: AssignmentValues;
+    reason: string | null;
+  }): Promise<UserSummary> {
+    const { data, action, actorId, values, reason } = entry;
     const assignment = { patch: values, today: todayIn(new Date()), actorId };
     return this.repo
       .createWithAudit(
@@ -398,7 +413,7 @@ export class UsersService {
             entityId: userId,
             category: 'PERSON',
             subjectUserId: userId,
-            reason: null,
+            reason,
             changes: personAuditChanges(null, row),
             actorId,
           }),
@@ -431,8 +446,8 @@ export class UsersService {
     password: string,
     linked: LinkedRecord,
   ) {
-    return this.createWithTrail(
-      {
+    return this.createWithTrail({
+      data: {
         email: input.email,
         name: input.name ?? null,
         role: input.role,
@@ -444,20 +459,24 @@ export class UsersService {
         ...linked.record,
         createdBy: { connect: { id: createdById } },
       },
-      'user.invited',
-      createdById,
-      creationAssignment(input),
-    );
+      action: 'user.invited',
+      actorId: createdById,
+      values: creationAssignment(input),
+      reason: null,
+    });
   }
 
   /**
    * Pessoa sem acesso (D1): sem credencial e sem senha temporária. O telefone
    * passa pelo mesmo caminho do convite (`UserPhoneService`): número de outra
-   * pessoa é recusado e o de um Contato existente liga a pessoa a ele.
+   * pessoa é recusado e o de um Contato existente liga a pessoa a ele. `meta`
+   * (opcional, EX21): `reason` vai para a trilha da criação (sem ele, nulo) e
+   * `personId` (só a importação) é o id da pessoa criada.
    */
   async createPersonWithoutAccess(
     actorId: string,
     input: PersonWithoutAccessInput,
+    meta?: PersonCreateMeta,
   ): Promise<UserView> {
     const phoneE164 = this.phones.normalize(input.phone);
     await this.assertActiveSectorIfGiven(input.sectorId);
@@ -469,16 +488,18 @@ export class UsersService {
       phoneE164,
       input.name.trim(),
     );
-    const user = await this.createWithTrail(
-      personWithoutAccessData(actorId, input, {
-        phoneE164,
-        contactId,
-        record,
-      }),
-      'user.person_created',
+    const user = await this.createWithTrail({
+      data: personWithoutAccessData(
+        actorId,
+        input,
+        { phoneE164, contactId, record },
+        meta?.personId,
+      ),
+      action: 'user.person_created',
       actorId,
-      creationAssignment(input),
-    );
+      values: creationAssignment(input),
+      reason: meta?.reason ?? null,
+    });
     return toUserSummary(user);
   }
 

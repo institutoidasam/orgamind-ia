@@ -398,7 +398,7 @@ describe('SectorPeopleRepository — ator com permissões', () => {
     }
   });
 
-  it('ADMIN traz as 9 chaves sem consultar linha de permissão', async () => {
+  it('ADMIN traz as 10 chaves sem consultar linha de permissão', async () => {
     const admin = await prisma.user.findUniqueOrThrow({
       where: { email: 'adm@test.local' },
       select: { id: true },
@@ -408,7 +408,7 @@ describe('SectorPeopleRepository — ator com permissões', () => {
     const actor = await repo.findActor(admin.id);
 
     expect(actor).toEqual(actorWith('ADMIN', { id: admin.id }));
-    expect(actor?.permissions).toHaveLength(9);
+    expect(actor?.permissions).toHaveLength(10);
     expect(findMany).not.toHaveBeenCalled();
     findMany.mockRestore();
   });

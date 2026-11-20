@@ -16,6 +16,7 @@ import {
   CalendarDays,
   Layers,
   History,
+  Upload,
   type LucideIcon,
 } from 'lucide-react';
 import type { PermissionKey } from '@/features/permissions/keys';
@@ -92,6 +93,7 @@ export const NAV: NavItem[] = [
   { to: '/turnos', label: 'Turnos', icon: Clock, section: 'admin', roles: WRITE_INTERNAL_ROLES, permission: 'estrutura.manter' },
   { to: '/niveis', label: 'Níveis', icon: Layers, section: 'admin', roles: WRITE_INTERNAL_ROLES, permission: 'estrutura.manter' },
   { to: '/users', label: 'Usuários', icon: UserCog, section: 'admin', roles: ['ADMIN'] },
+  { to: '/importar-pessoas', label: 'Importar pessoas', icon: Upload, section: 'admin', roles: WRITE_INTERNAL_ROLES, permission: 'pessoas.importar' },
   { to: '/connect', label: 'Conexões', icon: Wifi, section: 'admin', roles: ['ADMIN'] },
   { to: '/trilha', label: 'Trilha de alterações', icon: History, section: 'admin', roles: ALL_INTERNAL_ROLES.filter(canQueryAuditTrailUi) },
 

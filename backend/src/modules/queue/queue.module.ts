@@ -177,6 +177,16 @@ import type { Env } from '../../shared/config/env.schema';
         removeOnFail: { age: 86400 },
       },
     }),
+    // Verificador de presos da equipe (Lote H, DH4): sem retentativa, o ciclo
+    // seguinte (5 min) refaz; nunca enfileira envio.
+    BullModule.registerQueue({
+      name: QUEUE_NAMES.TEAM_WHATSAPP_STUCK_RECONCILER,
+      defaultJobOptions: {
+        attempts: 1,
+        removeOnComplete: { age: 3600, count: 12 },
+        removeOnFail: { age: 86400 },
+      },
+    }),
     // ★ ZB — o DISPARO do broadcast do Zernio.
     //
     // `attempts: 2`, e o número é uma decisão sobre DINHEIRO E BAN, não sobre

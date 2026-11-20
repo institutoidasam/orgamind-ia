@@ -301,6 +301,8 @@ const recipientRow = (): DispatchRecipientRow => ({
   deliveredAt: null,
   readAt: null,
   repliedAt: null,
+  channelCheckedAt: null,
+  manualRetries: 0,
 });
 
 const as = (actor: TeamActor) => {

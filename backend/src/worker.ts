@@ -171,6 +171,34 @@ async function scheduleMinuteTick(
 }
 
 /**
+ * Verificador de presos do envio da equipe (Lote H, DH4): a cada 5 min, com
+ * jobId fixo (uma definição só entre reinícios) e a limpeza explícita de todo
+ * repetível. Falha logada sem parar o boot.
+ */
+async function scheduleTeamStuckReconciler(
+  app: INestApplicationContext,
+  logger: Logger,
+): Promise<void> {
+  const label = 'team WhatsApp stuck-reconciler';
+  try {
+    await app
+      .get<Queue>(getQueueToken(QUEUE_NAMES.TEAM_WHATSAPP_STUCK_RECONCILER))
+      .add(
+        'reconcile-stuck',
+        {},
+        {
+          repeat: { every: 300_000 },
+          jobId: 'team-whatsapp-stuck-reconciler',
+          ...REPEATABLE_JOB_CLEANUP_OPTS,
+        },
+      );
+    logger.log(`Scheduled ${label} tick (every 5min)`, 'Bootstrap');
+  } catch (err: unknown) {
+    logger.error({ err }, `Failed to schedule ${label}`);
+  }
+}
+
+/**
  * Boot-time cleanup of the repeatables the old worker scheduled for the
  * providers that are now off (Meta/Twilio/GoZap/Zernio). Not scheduling them
  * anymore is not enough: their keys live in Redis and re-arm themselves. A
@@ -224,7 +252,7 @@ async function bootstrap() {
     jobId: 'team-whatsapp-scheduler-tick',
     label: 'team WhatsApp scheduler',
   });
-
+  await scheduleTeamStuckReconciler(app, logger);
   // Schedule the daily cleanup of old connection events (7-day retention).
   try {
     const cleanupQueue = app.get<Queue>(

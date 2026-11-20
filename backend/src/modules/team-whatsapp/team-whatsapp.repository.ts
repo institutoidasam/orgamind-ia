@@ -230,6 +230,10 @@ export type DispatchRecipientRow = {
   deliveredAt: Date | null;
   readAt: Date | null;
   repliedAt: Date | null;
+  // H1: conferência de conexão que liberou a mensagem (null = sem conferência).
+  channelCheckedAt: Date | null;
+  // H4: repetições pedidas na tela.
+  manualRetries: number;
 };
 
 /** Quantos destinatários do envio saem por cada número (snapshot); null = número removido. */
@@ -436,6 +440,8 @@ const recipientRowSelect = {
   deliveredAt: true,
   readAt: true,
   repliedAt: true,
+  channelCheckedAt: true,
+  manualRetries: true,
   dispatch: {
     select: { channel: { select: { name: true, phoneE164: true } } },
   },
@@ -988,7 +994,7 @@ export class TeamWhatsappRepository {
       if (count === 0) return null;
       const rechecked = await recheckClaimed(tx, id, now, recheck);
       const failed = await failUnavailable(tx, id);
-      return { ...(await queueActive(tx, id)), failed, rechecked };
+      return { ...(await queueActive(tx, id, now)), failed, rechecked };
     }, CLAIM_TX);
   }
 
@@ -1022,12 +1028,19 @@ export class TeamWhatsappRepository {
   /**
    * D6: uma tentativa = uma chamada ao provedor. O processor chama imediatamente
    * antes de `sendTeamMessage`; o `where` em QUEUED impede contar em linha que
-   * um recibo ou outra execução já fechou.
+   * um recibo ou outra execução já fechou. H1 (DH2): no mesmo `updateMany`, a
+   * hora da conferência `open` que liberou esta tentativa.
    */
-  async countAttempt(recipientId: string): Promise<void> {
+  async countAttempt(
+    recipientId: string,
+    channelCheckedAt?: Date,
+  ): Promise<void> {
     await this.prisma.teamWhatsappRecipient.updateMany({
       where: { id: recipientId, status: 'QUEUED' },
-      data: { attempts: { increment: 1 } },
+      data: {
+        attempts: { increment: 1 },
+        ...(channelCheckedAt ? { channelCheckedAt } : {}),
+      },
     });
   }
 
@@ -1417,10 +1430,15 @@ async function applyRecheck(
   return { skipped, lateJoined: lateJoined.length };
 }
 
-/** Apagado = `userId` null (SetNull); inativo = `isActive` false. O resto vira QUEUED. */
+/**
+ * Apagado = `userId` null (SetNull); inativo = `isActive` false. O resto vira
+ * QUEUED com `updatedAt` = `now` do disparo (DH13): o verificador de presos mede
+ * a idade por `updatedAt` e não pode ver o agendado recém-disparado como antigo.
+ */
 async function queueActive(
   tx: Tx,
   dispatchId: string,
+  now: Date,
 ): Promise<Omit<ClaimResult, 'failed'>> {
   const { count: skipped } = await tx.teamWhatsappRecipient.updateMany({
     where: {
@@ -1437,7 +1455,7 @@ async function queueActive(
   const queuedIds = rows.map((r) => r.id);
   await tx.teamWhatsappRecipient.updateMany({
     where: { id: { in: queuedIds } },
-    data: { status: 'QUEUED' },
+    data: { status: 'QUEUED', updatedAt: now },
   });
   return { queuedIds, skipped };
 }

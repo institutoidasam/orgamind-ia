@@ -28,6 +28,9 @@ import { TeamWhatsappSendProcessor } from './modules/team-whatsapp/team-whatsapp
 import { TeamWhatsappSchedulerProcessor } from './modules/team-whatsapp/team-whatsapp-scheduler.processor';
 import { TeamWhatsappScheduleService } from './modules/team-whatsapp/team-whatsapp-schedule.service';
 import { TeamWhatsappRepository } from './modules/team-whatsapp/team-whatsapp.repository';
+import { TeamWhatsappStuckProcessor } from './modules/team-whatsapp/team-whatsapp-stuck.processor';
+import { TeamStuckReconcilerService } from './modules/team-whatsapp/team-stuck-reconciler.service';
+import { TeamStuckRecipientsRepository } from './modules/team-whatsapp/team-stuck-recipients.repository';
 import { StaffScheduleRepository } from './modules/staff-schedule/staff-schedule.repository';
 import { ConsentModule } from './modules/consent/consent.module';
 import { OrganizationModule } from './modules/organization/organization.module';
@@ -96,6 +99,12 @@ import { serializeErrorForLog } from './shared/logging/pino-error-serializer';
     TeamWhatsappScheduleService,
     TeamWhatsappRepository,
     StaffScheduleRepository,
+    // TEAM_WHATSAPP_STUCK_RECONCILER (Lote H) — verificador de presos, SÓ aqui.
+    // ChatService vem do ChatModule; a fila TEAM_WHATSAPP_SEND (só `getJob`) e
+    // o AuditService já estão em escopo.
+    TeamWhatsappStuckProcessor,
+    TeamStuckReconcilerService,
+    TeamStuckRecipientsRepository,
   ],
 })
 export class WorkerModule {}

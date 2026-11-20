@@ -29,7 +29,7 @@ if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => 
 const row = (over: Partial<DispatchRecipient>): DispatchRecipient => ({
   id: 'r0', userName: 'Pessoa', sectorName: 'Compras', levelName: null, shiftName: null, status: 'SENT', reason: null,
   attempts: 1, channel: { name: 'GoZap Principal', phoneE164: '+5592999990000' }, acceptedAt: null, deliveredAt: null,
-  readAt: null, repliedAt: null, repeatable: false, ...over,
+  readAt: null, repliedAt: null, manualRetries: 0, repeatable: false, ...over,
 });
 
 const ana = row({ id: 'r1', userName: 'Ana', status: 'READ' });
@@ -120,16 +120,16 @@ describe('RecipientTable: permissão (DB6, DB10)', () => {
 });
 
 describe('RecipientTable: colunas', () => {
-  it('mostra Nome, Telefone usado, Situação, Número, Tentativas e Motivo; sem tentativa vira —', () => {
+  it('mostra Nome, Telefone usado, Situação, Quando, Número, Tentativas e Motivo; sem tentativa vira —', () => {
     render(<RecipientTable dispatchId="d1" failedCount={2} />);
     const headers = screen.getAllByRole('columnheader').map((h) => h.textContent);
-    expect(headers).toEqual(['Nome', 'Telefone usado', 'Situação', 'Número', 'Tentativas', 'Motivo', 'Ações']);
+    expect(headers).toEqual(['Nome', 'Telefone usado', 'Situação', 'Quando', 'Número', 'Tentativas', 'Motivo', 'Ações']);
     const cells = (name: string) => within(rowOf(name)).getAllByRole('cell').map((c) => c.textContent);
-    expect(cells('Ana').slice(0, 5)).toEqual(['Ana', '—', 'Lido', '+5592999990000', '1']);
-    expect(cells('Bia').slice(0, 6)).toEqual([
-      'Bia', '—', 'Falhou: Número desconectado', '+5592999990000', '3', 'team_whatsapp.channel_disconnected',
+    expect(cells('Ana').slice(0, 6)).toEqual(['Ana', '—', 'Lido', '—', '+5592999990000', '1']);
+    expect(cells('Bia').slice(0, 7)).toEqual([
+      'Bia', '—', 'Falhou: Número desconectado', '—', '+5592999990000', '3', 'team_whatsapp.channel_disconnected',
     ]);
-    expect(cells('Caio').slice(0, 6)).toEqual(['Caio', '—', 'Pulado: sem telefone', '—', '—', '—']);
+    expect(cells('Caio').slice(0, 7)).toEqual(['Caio', '—', 'Pulado: sem telefone', '—', '—', '—', '—']);
   });
 
   it('número removido depois do envio mostra o nome do canal ou Número removido', () => {

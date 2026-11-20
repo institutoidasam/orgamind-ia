@@ -23,6 +23,7 @@ import { isTeamProvider } from './team-whatsapp.policy';
 import { sendPhoneOf } from './recipient-skip';
 import { TeamWhatsappRepository } from './team-whatsapp.repository';
 import { INDETERMINATE_CODE, failureStatus } from './team-whatsapp.outcome';
+import { finishSkipped, type SkipReasonOf } from './team-recipient-finish';
 
 const CHANNEL_DISCONNECTED = 'team_whatsapp.channel_disconnected';
 const CHANNEL_UNVERIFIED = 'team_whatsapp.channel_unverified';
@@ -65,20 +66,21 @@ type LoadedRecipient = Prisma.TeamWhatsappRecipientGetPayload<{
 type SendChannel = NonNullable<LoadedRecipient['channel']>;
 type Ready = { phone: string; channel: SendChannel };
 
-/** Transição terminal do destinatário (gravada só se ele ainda está QUEUED). */
+/**
+ * Transição terminal do destinatário (gravada só se ele ainda está QUEUED).
+ * `channelCheckedAt: null` (DH2) nos desfechos antes do provedor na tentativa
+ * atual: a conferência de uma tentativa anterior não fica no que não saiu.
+ */
 type FailedData = {
   status: 'FAILED' | 'UNCERTAIN';
   errorCode: string;
   messageId?: string;
+  channelCheckedAt?: null;
 };
 type FinishData =
   | { status: 'SENT'; messageId?: string; acceptedAt: Date }
   | FailedData
-  | {
-      status: 'SKIPPED';
-      skipReason:
-        'NO_PHONE' | 'PHONE_CHANGED' | 'SUPPRESSED' | 'NOT_AUTHORIZED';
-    };
+  | { status: 'SKIPPED'; skipReason: SkipReasonOf };
 
 /**
  * Telefone do envio (DG7): sem telefone atual → `NO_PHONE` (também quando foi
@@ -96,6 +98,13 @@ function resolveSendPhone(
   // Daqui o gravado (se houver) é igual ao atual: o envio sai para ele.
   return { phone: r.phoneE164 ?? current };
 }
+
+/** FAILED gravado antes da chamada ao provedor na tentativa atual (DH2). */
+const failedBefore = (errorCode: string): FailedData => ({
+  status: 'FAILED',
+  errorCode,
+  channelCheckedAt: null,
+});
 
 const INDETERMINATE: FinishData = {
   status: 'UNCERTAIN',
@@ -195,8 +204,14 @@ export class TeamWhatsappSendProcessor extends WorkerHost {
     const prior = r.messageId ? await this.priorOutcome(r.messageId) : null;
     if (prior) return this.finish(r.id, prior);
     const pre = await this.precheck(r);
-    if ('data' in pre) return this.finish(r.id, pre.data);
-    await this.sendPaced(job, token, r, pre);
+    if (!('data' in pre)) return this.sendPaced(job, token, r, pre);
+    if (pre.data.status !== 'SKIPPED') return this.finish(r.id, pre.data);
+    // H3 (DH3): o pulo cancela a Message QUEUED que uma tentativa anterior preparou.
+    await finishSkipped(this.prisma, {
+      recipientId: r.id,
+      messageId: r.messageId,
+      skipReason: pre.data.skipReason,
+    });
   }
 
   private async sendPaced(
@@ -211,11 +226,12 @@ export class TeamWhatsappSendProcessor extends WorkerHost {
     let sent = false;
     try {
       // Depois do pacing e antes de qualquer Message: só `open` segue (D7).
-      const blocked = await this.liveBlock(job, ready.channel);
-      if (blocked) return await this.finishFailed(r, blocked);
+      const live = await this.liveBlock(job, ready.channel);
+      if ('blocked' in live) return await this.finishFailed(r, live.blocked);
       const messageId = r.messageId ?? (await this.prepare(r, ready));
-      // D6: a tentativa é a chamada ao provedor, contada imediatamente antes dela.
-      await this.repo.countAttempt(r.id);
+      // D6: a tentativa é a chamada ao provedor, contada imediatamente antes dela,
+      // com a hora da conferência que a liberou (H1, DH2).
+      await this.repo.countAttempt(r.id, live.checkedAt);
       const res = await this.chat.sendTeamMessage({
         messageId,
         text: r.dispatch.text,
@@ -241,21 +257,22 @@ export class TeamWhatsappSendProcessor extends WorkerHost {
   }
 
   /**
-   * Conferência do número no provedor (D7). `open` → `null`; `close`/`connecting`
-   * → FAILED repetível; `unknown` → a fila reconfere e, na última tentativa,
-   * FAILED repetível. Em todos os casos nada saiu e nenhuma tentativa é contada.
+   * Conferência do número no provedor (D7). `open` → a hora da conferência
+   * (`checkedAt`, H1); `close`/`connecting` → FAILED repetível; `unknown` → a
+   * fila reconfere e, na última tentativa, FAILED repetível. Bloqueado: nada
+   * saiu, nenhuma tentativa é contada e a hora de uma tentativa anterior sai.
    */
   private async liveBlock(
     job: Job<TeamWhatsappSendJob>,
     channel: SendChannel,
-  ): Promise<FailedData | null> {
-    const { state } = await this.liveState.check(channel);
-    if (state === 'open') return null;
+  ): Promise<{ blocked: FailedData } | { checkedAt: Date }> {
+    const { state, checkedAt } = await this.liveState.check(channel);
+    if (state === 'open') return { checkedAt };
     if (state !== 'unknown')
-      return { status: 'FAILED', errorCode: CHANNEL_DISCONNECTED };
+      return { blocked: failedBefore(CHANNEL_DISCONNECTED) };
     if (!this.isLastAttempt(job))
       throw new TeamSendJobError(CHANNEL_UNVERIFIED);
-    return { status: 'FAILED', errorCode: CHANNEL_UNVERIFIED };
+    return { blocked: failedBefore(CHANNEL_UNVERIFIED) };
   }
 
   private async finishFailed(
@@ -299,15 +316,11 @@ export class TeamWhatsappSendProcessor extends WorkerHost {
     if (r.user?.contactAuthorization !== 'AUTORIZADO')
       return { data: { status: 'SKIPPED', skipReason: 'NOT_AUTHORIZED' } };
     const channel = r.channel ?? r.dispatch.channel;
-    if (!channel?.isActive) {
-      return {
-        data: { status: 'FAILED', errorCode: 'team_whatsapp.channel_invalid' },
-      };
-    }
+    if (!channel?.isActive)
+      return { data: failedBefore('team_whatsapp.channel_invalid') };
     // Canal ativo de provedor desligado (R9): FAILED sem retry, nunca UNCERTAIN.
-    if (!isTeamProvider(channel.provider)) {
-      return { data: { status: 'FAILED', errorCode: PROVIDER_DISABLED_CODE } };
-    }
+    if (!isTeamProvider(channel.provider))
+      return { data: failedBefore(PROVIDER_DISABLED_CODE) };
     return { phone, channel };
   }
 

@@ -127,6 +127,8 @@ const CHANNEL_REASON_LABEL = new Map([
   ['team_whatsapp.channel_unavailable', 'Número indisponível na hora do envio'],
   ['team_whatsapp.channel_invalid', 'Número removido ou inválido'],
   ['channel.provider_disabled', 'Número de integração desligada'],
+  ['team_whatsapp.queue_lost', 'Saiu da fila sem envio'],
+  ['team_whatsapp.message_missing', 'Mensagem preparada não encontrada — crie um envio novo para essa pessoa'],
 ]);
 
 /** Texto PT-BR, orientado à ação do operador, para o `errorCode` de uma falha de envio. */

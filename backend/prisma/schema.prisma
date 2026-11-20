@@ -1895,12 +1895,17 @@ model TeamWhatsappRecipient {
   deliveredAt      DateTime?
   readAt           DateTime?
   repliedAt        DateTime?
+  // Hora da conferência de conexão (estado `open`) que liberou a mensagem (H1); null = anterior a esta
+  // versão, pulado/falho antes da conferência ou sem `open`.
+  channelCheckedAt DateTime?
   createdAt  DateTime                    @default(now())
   updatedAt  DateTime                    @updatedAt
 
   @@index([dispatchId, status])
   @@index([messageId])
   @@index([channelId, contactId, acceptedAt])
+  // Verificador de presos (H2).
+  @@index([status, updatedAt])
 }
 
 enum StaffScheduleTemplate {

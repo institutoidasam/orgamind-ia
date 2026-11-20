@@ -69,6 +69,8 @@ const recipientPage = (extra: Record<string, unknown> = {}) => ({
       readAt: null,
       repliedAt: null,
       repeatable: false,
+      channelCheckedAt: null,
+      manualRetries: 0,
       ...extra,
     },
   ],

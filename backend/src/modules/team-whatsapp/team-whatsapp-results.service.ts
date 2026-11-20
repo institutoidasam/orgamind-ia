@@ -159,6 +159,8 @@ function toRecipientItem(
     readAt: iso(r.readAt),
     repliedAt: iso(r.repliedAt),
     repeatable: isRepeatable(r.status, r.errorCode),
+    channelCheckedAt: iso(r.channelCheckedAt),
+    manualRetries: r.manualRetries,
   };
 }
 

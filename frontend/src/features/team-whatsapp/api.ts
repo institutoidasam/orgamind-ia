@@ -16,13 +16,14 @@ import {
   type DispatchCounts,
   type DispatchDetail,
   type DispatchList,
+  type DispatchListFilters,
   type RecipientStatus,
   type RetryInput,
   type ScheduledList,
   type TeamAudienceRequest,
 } from './schemas';
 
-export type { SendTarget } from './schemas';
+export type { DispatchListFilters, SendTarget } from './schemas';
 
 /** Depois disso, um envio ainda `QUEUED` deixa de ser consultado (evita polling infinito). */
 export const POLL_WINDOW_MS = 60 * 60_000;
@@ -112,13 +113,21 @@ export function detailPollInterval(data: DispatchDetail | undefined, retriedAt?:
   return data && isInFlight(data, retriedAt) ? POLL_INTERVAL_MS : false;
 }
 
-/** Uma página do histórico (a invalidação por `['team-whatsapp', 'dispatches']` pega todas). */
-export function useTeamDispatches(page: number) {
+/** Só os filtros preenchidos: ausente ou vazio não vai na consulta (nem na chave). */
+function filledFilters(filters: DispatchListFilters | undefined): DispatchListFilters {
+  return Object.fromEntries(Object.entries(filters ?? {}).filter(([, value]) => value));
+}
+
+/** Uma página do histórico, com filtros opcionais (a invalidação por `['team-whatsapp', 'dispatches']` pega todas). */
+export function useTeamDispatches(page: number, filters?: DispatchListFilters) {
+  const filled = filledFilters(filters);
   return useQuery({
-    queryKey: ['team-whatsapp', 'dispatches', page],
+    queryKey: ['team-whatsapp', 'dispatches', page, filled],
     queryFn: async () =>
       dispatchListSchema.parse(
-        await api.get('internal/team-whatsapp/dispatches', { searchParams: { page, pageSize: PAGE_SIZE } }).json(),
+        await api
+          .get('internal/team-whatsapp/dispatches', { searchParams: { page, pageSize: PAGE_SIZE, ...filled } })
+          .json(),
       ),
     placeholderData: keepPreviousData,
     refetchInterval: (q) => dispatchPollInterval(q.state.data),
@@ -199,17 +208,30 @@ export function useTeamDispatch(id: string) {
   });
 }
 
-/** Uma página dos destinatários, com filtro de situação opcional; acompanha o poll do detalhe. */
-export function useDispatchRecipients(id: string, { status, page }: { status?: RecipientStatus; page: number }) {
+type RecipientsQuery = {
+  status?: RecipientStatus;
+  page: number;
+  /** Busca por nome; só vai com texto depois do trim. */
+  q?: string;
+};
+
+/** Uma página dos destinatários, com filtro de situação e busca por nome opcionais; acompanha o poll do detalhe. */
+export function useDispatchRecipients(id: string, { status, page, q }: RecipientsQuery) {
   const qc = useQueryClient();
+  const term = q?.trim();
   return useQuery({
-    queryKey: [...dispatchKey(id), 'recipients', status, page],
+    queryKey: [...dispatchKey(id), 'recipients', status, page, ...(term ? [term] : [])],
     retry: false,
     queryFn: async () =>
       dispatchRecipientPageSchema.parse(
         await api
           .get(`internal/team-whatsapp/dispatches/${id}/recipients`, {
-            searchParams: { page, pageSize: RECIPIENT_PAGE_SIZE, ...(status ? { status } : {}) },
+            searchParams: {
+              page,
+              pageSize: RECIPIENT_PAGE_SIZE,
+              ...(status ? { status } : {}),
+              ...(term ? { q: term } : {}),
+            },
           })
           .json(),
       ),

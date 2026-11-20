@@ -1,7 +1,13 @@
 import type { ReactNode } from "react";
 import { formatDatePtBr } from "@/lib/format-date-ptbr";
 import { activityText } from "../activity-text";
-import { BASE_LABEL, basePhrase, policyLabel, PURPOSE_LABEL } from "../labels";
+import {
+  BASE_LABEL,
+  basePhrase,
+  policyLabel,
+  PURPOSE_LABEL,
+  whenText,
+} from "../labels";
 import type { TeamAudienceRuleView } from "../schemas";
 
 type Named = { name: string }[];
@@ -14,13 +20,6 @@ function levelsText(rule: TeamAudienceRuleView): string {
     ...(rule.withoutLevel ? ["Sem nível"] : []),
   ];
   return parts.length > 0 ? parts.join(", ") : "Todos os níveis";
-}
-
-function whenText(rule: TeamAudienceRuleView): string {
-  if (rule.when === "now") return "Agora";
-  return rule.scheduledFor
-    ? `No início do turno (${new Date(rule.scheduledFor).toLocaleString("pt-BR")})`
-    : "No início do turno";
 }
 
 function Row({ label, children }: { label: string; children: ReactNode }) {

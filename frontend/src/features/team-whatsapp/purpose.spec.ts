@@ -2,21 +2,22 @@ import { describe, expect, it } from "vitest";
 import { PURPOSE_RULES, type PurposeRule } from "./purpose";
 
 describe("PURPOSE_RULES", () => {
-  it("PURPOSE_RULES igual ao CF5", () => {
-    // Matriz do C1 da spec, linha a linha: base(s), folga, atividade, motivo, seleção obrigatória, momentos.
+  it("PURPOSE_RULES: at em todas menos Urgência", () => {
+    // Matriz do C1 da spec, linha a linha: base(s), folga, atividade, motivo, seleção obrigatória, momentos
+    // (o G acrescenta 'at', data e hora livres, a todas menos à Urgência).
     const aviso: PurposeRule = {
       bases: ["on_duty"],
       offOption: "none",
       activity: "none",
       urgencyReason: false,
       selectionRequired: false,
-      when: ["now", "shift_start"],
+      when: ["now", "shift_start", "at"],
     };
     const comAtividade = {
       ...aviso,
       bases: ["assigned"],
       activity: "required",
-      when: ["now"],
+      when: ["now", "at"],
     } satisfies PurposeRule;
     expect(PURPOSE_RULES).toEqual({
       shift_notice: aviso,

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { PREVIEW_RESPONSE } from './audience-preview.test-fixtures';
 import {
   dispatchDetailSchema, dispatchListSchema, dispatchRecipientPageSchema, retryResultSchema, rosterMemberSchema,
-  teamAudiencePreviewSchema, teamPersonRouteSchema, teamRosterSchema,
+  scheduledListSchema, teamAudiencePreviewSchema, teamPersonRouteSchema, teamRosterSchema,
 } from './schemas';
 
 const base = {
@@ -37,6 +37,41 @@ const detail = {
   firedAt: null, author: null, sectors: [], channels: [], counts: ZERO,
   leftOut: { unselected: [], off: [] },
 };
+
+describe('lote G: EXPIRED, recheck, phone e agendado sem turno', () => {
+  const entrou = { userId: 'u9', name: 'Pessoa A', sectorId: 's1', sectorName: 'Produção', shiftName: 'Noite', levelName: null };
+  const recheck = { at: '2026-11-22T13:00:05.000Z', skipped: 1, lateJoined: [entrou] };
+  const recipient = {
+    id: 'r1', userName: 'Pessoa A', sectorName: 'TI', levelName: null, shiftName: null, status: 'SKIPPED',
+    reason: 'LEFT_SECTOR', attempts: 0, channel: null, acceptedAt: null, deliveredAt: null, readAt: null,
+    repliedAt: null, repeatable: false,
+  };
+
+  it('lista e detalhe aceitam EXPIRED, recheck e phone; antigo com nulos', () => {
+    const lista = dispatchListSchema.parse({ items: [{ ...item, ...antigo, state: 'EXPIRED' }], ...page });
+    expect(lista.items[0].state).toBe('EXPIRED');
+    const rule = { ...PREVIEW_RESPONSE.rule, when: 'at', scheduledFor: '2026-11-25T13:00:00.000Z', schedulePolicy: 'frozen_recheck' };
+    const novo = { ...detail, ...antigo, rule, state: 'EXPIRED', recheck };
+    expect(dispatchDetailSchema.parse(novo)).toMatchObject({ state: 'EXPIRED', recheck, rule: { when: 'at' } });
+    for (const recheckAntigo of [undefined, null]) {
+      expect(dispatchDetailSchema.parse({ ...novo, recheck: recheckAntigo }).recheck ?? null).toBeNull();
+    }
+    const pagina = (phone?: string | null) => ({ items: [{ ...recipient, phone }], ...page });
+    expect(dispatchRecipientPageSchema.parse(pagina('+5592991110001')).items[0].phone).toBe('+5592991110001');
+    expect(dispatchRecipientPageSchema.parse(pagina(null)).items[0].phone).toBeNull();
+    expect(dispatchRecipientPageSchema.parse(pagina()).items[0].phone ?? null).toBeNull();
+  });
+
+  it('esquema da lista de agendados aceita shift nulo', () => {
+    const agendado = {
+      id: 'd1', scheduledFor: '2026-11-25T13:00:00.000Z', rosterDate: '2026-11-25', label: 'Produção · 25/11',
+      recipientCount: 3, channel: null, author: null,
+    };
+    const lista = scheduledListSchema.parse({ items: [{ ...agendado, shift: null }, { ...agendado, shift }], ...page });
+    expect(lista.items.map((i) => i.shift?.startTime ?? null)).toEqual([null, '22:00']);
+    expect(scheduledListSchema.safeParse({ items: [agendado], ...page }).success).toBe(false);
+  });
+});
 
 describe('finalidade no histórico', () => {
   it('lista e detalhe aceitam envio antigo com campos nulos', () => {

@@ -22,7 +22,9 @@ const TEAM_ERROR_MESSAGES: Record<string, string> = {
     'A lista de pessoas mudou. Atualize a página e confira de novo.',
   'team_whatsapp.invalid_level': 'Nível inválido. Atualize a página e tente de novo.',
   'team_whatsapp.invalid_shift': 'Este turno não está mais disponível. Atualize a página.',
+  // O servidor diz qual (turno ou data e hora, CG4): este é o texto de reserva (ver SERVER_TEXT_CODES).
   'team_whatsapp.schedule_in_past': 'O início deste turno já passou. Escolha Enviar agora ou outra data.',
+  'team_whatsapp.schedule_too_far': 'O envio pode ser agendado para até 30 dias à frente.',
   'team_whatsapp.not_cancellable': 'Este envio já saiu ou foi cancelado.',
   'team_whatsapp.dispatch_not_found': 'Envio não encontrado. Atualize a página.',
   'team_whatsapp.too_many_people': 'Os setores escolhidos têm mais de 2000 pessoas. Escolha menos setores.',
@@ -47,15 +49,24 @@ const TEAM_ERROR_MESSAGES: Record<string, string> = {
 
 /**
  * O texto vem do servidor porque diz qual ação não é permitida (DB10) ou qual dado falta: o `missing_activity` do
- * Alinhamento pede só data e hora, e o texto fixo daqui diria que o local é obrigatório.
+ * Alinhamento pede só data e hora, e o texto fixo daqui diria que o local é obrigatório; o `schedule_in_past` fala do
+ * início do turno ou da data e hora conforme o momento escolhido (CG4).
  */
-const SERVER_TEXT_CODES = new Set(['auth.permission_denied', 'team_whatsapp.missing_activity']);
+const SERVER_TEXT_CODES = new Set([
+  'auth.permission_denied', 'team_whatsapp.missing_activity', 'team_whatsapp.schedule_in_past',
+]);
 
 export const SKIP_REASON_LABEL = {
   NO_PHONE: 'sem telefone',
   SUPPRESSED: 'pediu para não receber (SAIR)',
-  INACTIVE: 'Usuário inativo',
+  INACTIVE: 'Inativa',
   NOT_AUTHORIZED: 'Contato não autorizado',
+  // Reconferência do agendado (G3), telefone trocado (G4) e agendado vencido (G5).
+  VACATION: 'Férias',
+  DAY_OFF: 'Folga',
+  LEFT_SECTOR: 'Saiu do setor ou turno',
+  PHONE_CHANGED: 'Telefone mudou depois da criação do envio',
+  EXPIRED: 'Não enviado: passou da hora',
 } as const;
 
 /** Motivo de a pessoa estar fora da escala do dia (grupo "De folga"). */

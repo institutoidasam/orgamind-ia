@@ -14,8 +14,8 @@ export type PurposeRule = {
   urgencyReason: boolean;
   /** Hora extra: marcar pelo menos uma pessoa. */
   selectionRequired: boolean;
-  /** Momentos permitidos. O G acrescenta 'at'. */
-  when: readonly ("now" | "shift_start")[];
+  /** Momentos permitidos: 'at' = data e hora livres, todas as finalidades menos Urgência (G1). */
+  when: readonly ("now" | "shift_start" | "at")[];
 };
 
 export const PURPOSE_RULES: Record<TeamPurpose, PurposeRule> = {
@@ -25,7 +25,7 @@ export const PURPOSE_RULES: Record<TeamPurpose, PurposeRule> = {
     activity: "none",
     urgencyReason: false,
     selectionRequired: false,
-    when: ["now", "shift_start"],
+    when: ["now", "shift_start", "at"],
   },
   meeting: {
     bases: ["assigned"],
@@ -33,7 +33,7 @@ export const PURPOSE_RULES: Record<TeamPurpose, PurposeRule> = {
     activity: "required",
     urgencyReason: false,
     selectionRequired: false,
-    when: ["now"],
+    when: ["now", "at"],
   },
   alignment: {
     bases: ["assigned", "on_duty"],
@@ -41,7 +41,7 @@ export const PURPOSE_RULES: Record<TeamPurpose, PurposeRule> = {
     activity: "optional",
     urgencyReason: false,
     selectionRequired: false,
-    when: ["now"],
+    when: ["now", "at"],
   },
   lecture: {
     bases: ["assigned"],
@@ -49,7 +49,7 @@ export const PURPOSE_RULES: Record<TeamPurpose, PurposeRule> = {
     activity: "required",
     urgencyReason: false,
     selectionRequired: false,
-    when: ["now"],
+    when: ["now", "at"],
   },
   overtime: {
     bases: ["assigned"],
@@ -57,7 +57,7 @@ export const PURPOSE_RULES: Record<TeamPurpose, PurposeRule> = {
     activity: "required",
     urgencyReason: false,
     selectionRequired: true,
-    when: ["now"],
+    when: ["now", "at"],
   },
   urgency: {
     bases: ["on_duty"],

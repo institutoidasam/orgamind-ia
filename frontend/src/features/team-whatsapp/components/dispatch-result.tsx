@@ -1,11 +1,15 @@
+import { Input } from '@/components/ui/input';
+import { useDebouncedSearch } from '@/features/sector-people/components/search-state';
 import { channelLabel, countParts, OFF_REASON_LABEL } from '../error-messages';
-import { BASE_LABEL, LEGACY_BASE_LABEL, PURPOSE_LABEL } from '../labels';
+import {
+  BASE_LABEL, DISPATCH_STATE_LABEL, dispatchSituation, LEGACY_BASE_LABEL, PURPOSE_LABEL,
+} from '../labels';
+import { hasTerm, matchesName, narrowedCount, NO_NAME_MATCH_TEXT } from '../name-search';
 import type { DispatchDetail, LeftOutRosterPerson, TeamExclusionReason } from '../schemas';
 import { ExcludedGroups } from './excluded-groups';
+import { RecheckSummary } from './recheck-summary';
 import { RecipientTable } from './recipient-table';
 import { RulePanel } from './rule-panel';
-
-const STATE_LABEL = { SCHEDULED: 'Agendado', CANCELLED: 'Cancelado' } as const;
 
 function whenText(dispatch: DispatchDetail): string {
   const created = new Date(dispatch.createdAt).toLocaleString('pt-BR');
@@ -47,20 +51,30 @@ const offText = (person: LeftOutRosterPerson): string =>
  * Quem não recebeu por não estar na seleção ou por estar de folga (a foto gravada no envio). Homônimos
  * são comuns: a chave leva o índice e, com mais de um setor no envio, a linha traz o setor da pessoa.
  */
-function LeftOut({ leftOut, showSector }: { leftOut: DispatchDetail['leftOut']; showSector: boolean }) {
+type LeftOutProps = { leftOut: DispatchDetail['leftOut']; showSector: boolean; term: string };
+
+function LeftOut({ leftOut, showSector, term }: LeftOutProps) {
   const line = (p: LeftOutRosterPerson, reason: string) =>
     [p.name, showSector ? p.sectorName : null, reason].filter(Boolean).join(' · ');
+  const shown = (people: LeftOutRosterPerson[]) => people.filter((p) => matchesName(p.name, term));
   const lines = [
-    ...leftOut.unselected.map((p) => line(p, 'não selecionado')),
-    ...leftOut.off.map((p) => line(p, offText(p))),
+    ...shown(leftOut.unselected).map((p) => line(p, 'não selecionado')),
+    ...shown(leftOut.off).map((p) => line(p, offText(p))),
   ];
-  if (lines.length === 0) return null;
+  const total = leftOut.unselected.length + leftOut.off.length;
+  if (total === 0) return null;
   return (
     <section className="space-y-1">
-      <h2 id="left-out-title" className="text-sm font-semibold">Ficaram de fora ({lines.length})</h2>
-      <ul aria-labelledby="left-out-title" className="text-sm text-muted-foreground">
-        {lines.map((text, index) => <li key={`${index}:${text}`}>{text}</li>)}
-      </ul>
+      <h2 id="left-out-title" className="text-sm font-semibold">
+        Ficaram de fora ({narrowedCount(lines.length, total, term)})
+      </h2>
+      {lines.length === 0 ? (
+        <p className="text-sm text-muted-foreground">{NO_NAME_MATCH_TEXT}</p>
+      ) : (
+        <ul aria-labelledby="left-out-title" className="text-sm text-muted-foreground">
+          {lines.map((text, index) => <li key={`${index}:${text}`}>{text}</li>)}
+        </ul>
+      )}
     </section>
   );
 }
@@ -93,21 +107,40 @@ function audienceCount({ counts, excluded }: DispatchDetail): number {
   return recorded - excluded.filter((p) => PHONE_EXCLUSIONS.has(p.reason)).length;
 }
 
-/** Com regra gravada, o painel e os excluídos por motivo; sem ela (envio antigo), só `leftOut` vale. */
-function Audience({ dispatch }: { dispatch: DispatchDetail }) {
+/**
+ * Com regra gravada, o painel e os excluídos por motivo; sem ela (envio antigo), só `leftOut` vale. `term` é a busca
+ * por nome da tela: filtra a lista e o título dela diz "n de m", nunca as contagens do painel.
+ */
+function Audience({ dispatch, term }: { dispatch: DispatchDetail; term: string }) {
   if (!dispatch.rule) {
-    return <LeftOut leftOut={dispatch.leftOut} showSector={dispatch.sectors.length > 1} />;
+    return <LeftOut leftOut={dispatch.leftOut} showSector={dispatch.sectors.length > 1} term={term} />;
   }
   return (
     <>
       <RulePanel rule={dispatch.rule} includedCount={audienceCount(dispatch)} excludedCount={dispatch.excluded.length} />
-      <ExcludedGroups excluded={dispatch.excluded} />
+      <ExcludedGroups
+        excluded={dispatch.excluded.filter((p) => matchesName(p.name, term))}
+        total={hasTerm(term) ? dispatch.excluded.length : undefined}
+      />
     </>
   );
 }
 
+/** Aviso do envio que passou da hora (G5, DG16): nunca saiu, e a saída é criar outro. */
+const EXPIRED_NOTICE =
+  'Não enviado: passou da hora. O sistema não disparou este envio até 2 horas depois da hora marcada. '
+  + 'Se a mensagem ainda fizer sentido, crie um envio novo.';
+
+/** Situação ao lado da data: o enviado comum não a repete; vencido e "Ninguém recebeu" aparecem (DG9, DG16). */
+function situationText(dispatch: DispatchDetail): string | null {
+  const situation = dispatchSituation(dispatch, new Date());
+  return situation === DISPATCH_STATE_LABEL.DISPATCHED ? null : situation;
+}
+
 /** Tela de resultado: topo com o envio e as contagens, a regra e quem ficou de fora, e a lista por nome. */
 export function DispatchResult({ dispatch }: { dispatch: DispatchDetail }) {
+  const { text, setText, q } = useDebouncedSearch();
+  const situation = situationText(dispatch);
   return (
     <div className="space-y-6">
       <header className="space-y-2">
@@ -116,8 +149,13 @@ export function DispatchResult({ dispatch }: { dispatch: DispatchDetail }) {
         <p className="font-medium">{dispatch.targetLabel}</p>
         <p className="text-sm text-muted-foreground">
           {whenText(dispatch)}
-          {dispatch.state !== 'DISPATCHED' && ` · ${STATE_LABEL[dispatch.state]}`}
+          {situation && ` · ${situation}`}
         </p>
+        {situation === DISPATCH_STATE_LABEL.EXPIRED && (
+          <p role="status" className="rounded-md border p-3 text-sm" style={{ borderColor: 'var(--border)' }}>
+            {EXPIRED_NOTICE}
+          </p>
+        )}
         {!dispatch.rule && !isPersonTarget(dispatch) && <LegacyRule dispatch={dispatch} />}
         <p className="whitespace-pre-wrap rounded-md border p-3 text-sm" style={{ borderColor: 'var(--border)' }}>
           {dispatch.text}
@@ -125,8 +163,17 @@ export function DispatchResult({ dispatch }: { dispatch: DispatchDetail }) {
         <Channels channels={dispatch.channels} />
         <Counts counts={dispatch.counts} />
       </header>
-      <Audience dispatch={dispatch} />
-      <RecipientTable dispatchId={dispatch.id} failedCount={dispatch.counts.failed} />
+      <Input
+        type="search"
+        aria-label="Buscar pessoa pelo nome"
+        placeholder="Buscar pessoa pelo nome"
+        className="max-w-sm"
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+      />
+      <Audience dispatch={dispatch} term={q} />
+      <RecheckSummary recheck={dispatch.recheck} term={q} />
+      <RecipientTable dispatchId={dispatch.id} failedCount={dispatch.counts.failed} query={q} />
     </div>
   );
 }

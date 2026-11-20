@@ -13,7 +13,9 @@ import {
   useScheduledDispatches, useTeamDispatch, useTeamDispatches, useTeamPersonRoute, useTeamRoster,
 } from './api';
 import { PREVIEW_RESPONSE } from './audience-preview.test-fixtures';
-import type { DispatchDetail, DispatchList, ScheduledList, TeamAudienceRequest } from './schemas';
+import type {
+  CreateDispatchInput, DispatchDetail, DispatchList, DispatchListFilters, ScheduledList, TeamAudienceRequest,
+} from './schemas';
 
 const NOW = Date.parse('2026-10-16T12:00:00Z');
 
@@ -46,6 +48,60 @@ function list(queued: number, ageMs: number, firedAgoMs?: number): DispatchList 
     ...PAGE_META,
   };
 }
+
+describe('lote G: filtros do histórico e busca nos destinatários', () => {
+  const RECIPIENTS = { items: [], total: 0, page: 1, pageSize: RECIPIENT_PAGE_SIZE };
+  const LIST_URL = 'internal/team-whatsapp/dispatches';
+
+  async function loadList(filters: DispatchListFilters) {
+    get.mockReset();
+    get.mockReturnValue({ json: () => Promise.resolve(list(0, 1_000)) });
+    const qc = new QueryClient();
+    const { result } = renderHook(() => useTeamDispatches(1, filters), { wrapper: wrap(qc) });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    return qc;
+  }
+
+  it('useTeamDispatches manda from, to, purpose e state só quando preenchidos', async () => {
+    const cheios: DispatchListFilters = { from: '2026-11-01', to: '2026-11-30', purpose: 'meeting', state: 'EXPIRED' };
+    const qc = await loadList(cheios);
+    expect(get).toHaveBeenLastCalledWith(LIST_URL, { searchParams: { page: 1, pageSize: PAGE_SIZE, ...cheios } });
+    expect(qc.getQueryData(['team-whatsapp', 'dispatches', 1, cheios])).toBeDefined();
+    await loadList({ from: '', to: '2026-11-30', purpose: undefined });
+    expect(get).toHaveBeenLastCalledWith(LIST_URL, { searchParams: { page: 1, pageSize: PAGE_SIZE, to: '2026-11-30' } });
+  });
+
+  it('useDispatchRecipients manda q aparado, e q vazio não vai', async () => {
+    get.mockReset();
+    get.mockReturnValue({ json: () => Promise.resolve(RECIPIENTS) });
+    const url = 'internal/team-whatsapp/dispatches/d1/recipients';
+    for (const [q, searchParams] of [
+      ['  Pessoa A ', { q: 'Pessoa A' }],
+      ['   ', {}],
+    ] as const) {
+      get.mockClear();
+      const { result } = renderHook(() => useDispatchRecipients('d1', { page: 1, q }), { wrapper: wrap(new QueryClient()) });
+      await waitFor(() => expect(result.current.data).toEqual(RECIPIENTS));
+      expect(get).toHaveBeenCalledWith(url, { searchParams: { page: 1, pageSize: RECIPIENT_PAGE_SIZE, ...searchParams } });
+    }
+  });
+});
+
+describe('envio em data e hora', () => {
+  it('corpo aceita when at com at', async () => {
+    post.mockReset();
+    post.mockReturnValue({
+      json: () => Promise.resolve({ dispatchId: 'd1', queued: 0, scheduled: 2, scheduledFor: '2026-11-25T13:00:00.000Z', skipped: [] }),
+    });
+    const body = {
+      text: 'Reunião', purpose: 'meeting', when: 'at', at: { date: '2026-11-25', time: '09:00' }, audienceKey: 'k',
+      target: { type: 'sector', sectorIds: ['s1'], date: '2026-11-25' },
+    } satisfies CreateDispatchInput;
+    const { result } = renderHook(() => useCreateTeamDispatch(), { wrapper: wrap(new QueryClient()) });
+    await result.current.mutateAsync(body);
+    expect(post).toHaveBeenCalledWith('internal/team-whatsapp/dispatches', { json: body });
+  });
+});
 
 describe('useAudiencePreview', () => {
   const wrapperFor = (qc: QueryClient) => ({ children }: { children: React.ReactNode }) =>
@@ -240,7 +296,7 @@ describe('scheduledPollInterval', () => {
 });
 
 describe('useTeamDispatches', () => {
-  it('pede a página em /internal/team-whatsapp/dispatches com a key [team-whatsapp, dispatches, page]', async () => {
+  it('useTeamDispatches sem filtros continua igual: a página em /internal/team-whatsapp/dispatches, key [team-whatsapp, dispatches, page, {}]', async () => {
     const page2 = { ...list(0, 1_000), page: 2, total: 45 };
     get.mockReset();
     get.mockReturnValue({ json: () => Promise.resolve(page2) });
@@ -250,7 +306,7 @@ describe('useTeamDispatches', () => {
     expect(get).toHaveBeenCalledWith('internal/team-whatsapp/dispatches', {
       searchParams: { page: 2, pageSize: PAGE_SIZE },
     });
-    expect(qc.getQueryData(['team-whatsapp', 'dispatches', 2])).toEqual(page2);
+    expect(qc.getQueryData(['team-whatsapp', 'dispatches', 2, {}])).toEqual(page2);
   });
 });
 

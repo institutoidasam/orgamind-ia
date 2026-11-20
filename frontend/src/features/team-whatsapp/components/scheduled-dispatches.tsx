@@ -12,11 +12,17 @@ import { usePermission } from '@/features/permissions/use-permission';
 import { formatDayMonth } from '@/lib/civil-date';
 import { useCancelDispatch } from '../api';
 import { apiErrorText, cancelErrorMessage } from '../error-messages';
+import { DISPATCH_STATE_LABEL, isLapsed, manausDateTime } from '../labels';
 import type { Paging, ScheduledDispatch } from '../schemas';
 
-/** Data da escala + hora gravada no turno: não passa por conta de fuso (GC5). */
+/**
+ * Com turno: data da escala + hora gravada no turno, sem conta de fuso (GC5). Sem turno (data e hora livres
+ * com vários ou todos os turnos): dia/mês e hora de `scheduledFor` em Manaus.
+ */
 function whenText(item: ScheduledDispatch): string {
-  return `${formatDayMonth(item.rosterDate)} ${item.shift.startTime}`;
+  if (item.shift) return `${formatDayMonth(item.rosterDate)} ${item.shift.startTime}`;
+  const { dayMonth, time } = manausDateTime(item.scheduledFor);
+  return `${dayMonth} ${time}`;
 }
 
 function useCancelFlow() {
@@ -45,7 +51,11 @@ function ScheduledRow({ item, onCancel, disabled }: RowProps) {
   const canCancel = usePermission('equipe.enviar');
   return (
     <TableRow>
-      <TableCell>{whenText(item)}</TableCell>
+      <TableCell>
+        {whenText(item)}
+        {/* DG16: o worker parado deixa o item `SCHEDULED` vencido; aqui só há `scheduledFor`, então só rótulo. */}
+        {isLapsed(item.scheduledFor, new Date()) && <p className="font-medium">{DISPATCH_STATE_LABEL.EXPIRED}</p>}
+      </TableCell>
       <TableCell>{item.label}</TableCell>
       <TableCell>{`${item.recipientCount} pessoa(s)`}</TableCell>
       <TableCell>{item.channel?.name ?? '—'}</TableCell>

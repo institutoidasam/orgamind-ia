@@ -78,7 +78,7 @@ describe("RulePanel: turnos, níveis e momento", () => {
       `No início do turno (${new Date(scheduledFor).toLocaleString("pt-BR")})`,
     );
     expect(value("Política do agendamento")).toBe(
-      "No início do turno, para a lista conferida agora",
+      "Regra anterior: sai para a lista da criação, sem reconferência",
     );
     expect(value("Atividade")).toBeNull();
     expect(value("Pessoas marcadas")).toBeNull();
@@ -117,5 +117,20 @@ describe("RulePanel: urgência e atividade parcial", () => {
       />,
     );
     expect(value("Atividade")).toBeNull();
+  });
+});
+
+describe("RulePanel: Data e hora", () => {
+  it("painel mostra a data e hora escolhidas (Manaus) e a política Lista conferida agora…", () => {
+    renderPanel({
+      ...complete,
+      when: "at",
+      scheduledFor: "2026-11-25T13:00:00.000Z",
+      schedulePolicy: "frozen_recheck",
+    });
+    expect(value("Momento do disparo")).toBe("Em 25/11/2026 às 09:00");
+    expect(value("Política do agendamento")).toMatch(
+      /^Lista conferida agora; no disparo, quem deixar de se enquadrar é pulado/,
+    );
   });
 });

@@ -7,6 +7,38 @@ import {
   formatAuditValue,
 } from './labels';
 
+describe('rótulos da trilha: importação de planilhas', () => {
+  it('ações e campos da importação traduzidos', () => {
+    expect(actionLabel('people_import.confirmed')).toBe('Confirmou importação de pessoas');
+    expect(actionLabel('people_import.completed')).toBe('Terminou importação de pessoas');
+    const fields: Record<string, string> = {
+      fileName: 'Arquivo',
+      toCreate: 'A criar',
+      toUpdate: 'A atualizar',
+      created: 'Criadas',
+      updated: 'Atualizadas',
+      unchanged: 'Sem alteração',
+      invalid: 'Inválidas',
+      duplicate: 'Duplicadas',
+      conflict: 'Conflitos',
+      failed: 'Falhas',
+      phoneTaken: 'Falhas por telefone já cadastrado',
+      notWritten: 'Não gravadas',
+      writing: 'Em gravação no encerramento',
+      ending: 'Fim',
+    };
+    for (const [field, label] of Object.entries(fields)) expect(fieldLabel(field)).toBe(label);
+    expect(fieldLabel('rowCount')).toBe('Linhas');
+  });
+
+  it('fim da importação nunca aparece cru; contador vira número', () => {
+    expect(formatAuditValue('ending', 'COMPLETED')).toBe('Concluída');
+    expect(formatAuditValue('ending', 'CLOSED')).toBe('Encerrada pelo administrador');
+    expect(formatAuditValue('ending', 'AUTO_CLOSED')).toBe('Encerrada automaticamente');
+    expect(formatAuditValue('phoneTaken', 2)).toBe('2');
+  });
+});
+
 describe('rótulos da trilha: planilhas', () => {
   it('categoria Planilhas e ações Exportou pessoas e Exportou escala', () => {
     expect(categoryLabel('SPREADSHEET')).toBe('Planilhas');

@@ -2,6 +2,18 @@ import { describe, expect, it } from 'vitest';
 import { effectivePermissions, hasPermission } from './access';
 import { DEFAULT_PERMISSIONS, PERMISSION_KEYS, toPermissionKeys } from './keys';
 
+describe('matriz padrão: importar pessoas', () => {
+  it('SUPERVISOR e OPERATOR não têm pessoas.importar por padrão; ADMIN tem', () => {
+    expect(hasPermission({ role: 'SUPERVISOR' as const }, 'pessoas.importar')).toBe(false);
+    expect(hasPermission({ role: 'OPERATOR' as const }, 'pessoas.importar')).toBe(false);
+    expect(hasPermission({ role: 'VIEWER' as const }, 'pessoas.importar')).toBe(false);
+    expect(hasPermission({ role: 'ADMIN' as const }, 'pessoas.importar')).toBe(true);
+    expect(DEFAULT_PERMISSIONS.SUPERVISOR).not.toContain('pessoas.importar');
+    expect(DEFAULT_PERMISSIONS.OPERATOR).not.toContain('pessoas.importar');
+    expect(PERMISSION_KEYS[PERMISSION_KEYS.length - 1]).toBe('pessoas.importar');
+  });
+});
+
 describe('matriz padrão: exportar pessoas e escala', () => {
   it('SUPERVISOR e OPERATOR não têm pessoas.exportar por padrão; ADMIN tem', () => {
     const supervisor = { role: 'SUPERVISOR' as const };
@@ -19,7 +31,7 @@ describe('matriz padrão: exportar pessoas e escala', () => {
       'equipe.disparo_amplo',
       'trilha.consultar',
     ]);
-    expect(PERMISSION_KEYS[PERMISSION_KEYS.length - 1]).toBe('pessoas.exportar');
+    expect(PERMISSION_KEYS[PERMISSION_KEYS.length - 2]).toBe('pessoas.exportar');
   });
 });
 
@@ -32,7 +44,7 @@ describe('effectivePermissions', () => {
     expect(effectivePermissions({ role: 'ADMIN' })).toEqual(PERMISSION_KEYS);
     expect(effectivePermissions({ role: 'VIEWER' })).toEqual([]);
     expect(DEFAULT_PERMISSIONS.SUPERVISOR).not.toContain('estrutura.manter');
-    expect(DEFAULT_PERMISSIONS.SUPERVISOR).toHaveLength(PERMISSION_KEYS.length - 2);
+    expect(DEFAULT_PERMISSIONS.SUPERVISOR).toHaveLength(PERMISSION_KEYS.length - 3);
   });
 
   it('com permissions vale só a lista da API, não o padrão do papel', () => {

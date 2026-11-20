@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { createFileRoute, redirect } from '@tanstack/react-router';
+import { createFileRoute, Link, redirect } from '@tanstack/react-router';
 import { toast } from 'sonner';
-import { UserPlus } from 'lucide-react';
+import { Upload, UserPlus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { QueryErrorFallback } from '@/components/query-error-fallback';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useAuthStore } from '@/stores/auth.store';
+import { usePermission } from '@/features/permissions/use-permission';
 import { useUsers, useDeleteUser, useResetUserPassword } from '@/features/users/api';
 import { AuthorizationBadge } from '@/features/people-record/components/authorization-badge';
 import { PersonHistoryDialog } from '@/features/audit-trail/components/person-history-dialog';
@@ -104,6 +105,7 @@ function useUserDialogState() {
 type UserDialogState = ReturnType<typeof useUserDialogState>;
 
 function UsersHeader({ onInvite }: { onInvite: () => void }) {
+  const canImport = usePermission('pessoas.importar');
   return (
     <div className="flex items-center justify-between">
       <div>
@@ -112,6 +114,11 @@ function UsersHeader({ onInvite }: { onInvite: () => void }) {
         <p className="text-sm" style={{ color: 'var(--foreground-muted)' }}>Cada pessoa tem um setor principal e um papel de acesso.</p>
       </div>
       <div className="flex items-center gap-2">
+        {canImport && (
+          <Button asChild variant="outline">
+            <Link to="/importar-pessoas"><Upload className="size-4 mr-2" />Importar planilha</Link>
+          </Button>
+        )}
         <ExportPeopleButton />
         <Button onClick={onInvite}><UserPlus className="size-4 mr-2" />Cadastrar usuário</Button>
       </div>

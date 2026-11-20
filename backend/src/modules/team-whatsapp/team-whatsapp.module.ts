@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { LevelsModule } from '../levels/levels.module';
 import { StaffScheduleModule } from '../staff-schedule/staff-schedule.module';
 import { WhatsappProvidersModule } from '../whatsapp-providers/whatsapp-providers.module';
+import { TeamAudienceService } from './team-audience.service';
 import { TeamWhatsappController } from './team-whatsapp.controller';
 import { TeamWhatsappRepository } from './team-whatsapp.repository';
 import { TeamWhatsappResultsService } from './team-whatsapp-results.service';
@@ -19,13 +20,16 @@ import { TeamWhatsappService } from './team-whatsapp.service';
  * "Repetir" (troca atômica e fila), no TeamWhatsappRetryService (T12). O
  * LevelsModule exporta `listActive` para `targets.levels` (C4). O
  * WhatsappProvidersModule exporta a porta `ChannelLiveStateService`, que dá o
- * estado ao vivo do número na prévia (D7).
+ * estado ao vivo do número na prévia (D7). O público por finalidade (prévia
+ * e resolução do envio) fica no TeamAudienceService; o ConfigService (global)
+ * dá o JWT_SECRET de que sai a chave da impressão do público.
  */
 @Module({
   imports: [StaffScheduleModule, LevelsModule, WhatsappProvidersModule],
   controllers: [TeamWhatsappController],
   providers: [
     TeamWhatsappService,
+    TeamAudienceService,
     TeamWhatsappScheduleService,
     TeamWhatsappResultsService,
     TeamWhatsappRetryService,

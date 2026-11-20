@@ -22,6 +22,7 @@ import {
   sector,
   type Harness,
 } from './team-whatsapp.test-fixtures';
+import { withAudienceKey } from './team-whatsapp.sector-send.test-fixtures';
 
 // Produção (s1) em 21/10: João no ciclo da Noite, Maria de férias, Ana no turno
 // do cadastro, Beto sem escala nem turno, Caio (Logística) emprestado à Noite de
@@ -112,12 +113,31 @@ type SectorTarget = Extract<
 type SectorExtra = Partial<
   Pick<SectorTarget, 'shiftIds' | 'userIds' | 'includeOff'>
 >;
-const send = (extra: SectorExtra, actorId = ADMIN.id) =>
-  h.service.dispatch(actorId, {
-    channelId: 'c1',
-    text: 'Oi',
-    target: { type: 'sector', sectorIds: [PROD], date: DATE, ...extra },
-  });
+// Aviso de turno; com `includeOff` (só na base vinculada) é Alinhamento.
+// `expectError`: o teste espera 403/422 do público (a chave sai de zeros).
+const purposeOf = (extra: SectorExtra) =>
+  extra.includeOff
+    ? { purpose: 'alignment' as const, base: 'assigned' as const }
+    : { purpose: 'shift_notice' as const };
+const send = async (
+  extra: SectorExtra,
+  actorId = ADMIN.id,
+  expectError = false,
+) =>
+  h.service.dispatch(
+    actorId,
+    await withAudienceKey(
+      h,
+      actorId,
+      {
+        channelId: 'c1',
+        text: 'Oi',
+        ...purposeOf(extra),
+        target: { type: 'sector', sectorIds: [PROD], date: DATE, ...extra },
+      },
+      { expectError },
+    ),
+  );
 const created = () => h.repo.createDispatch.mock.calls[0][0];
 const recipients = () =>
   created().recipients.map((r) => [r.userName, r.shiftId, r.shiftName]);
@@ -342,10 +362,6 @@ describe('roster de vários setores — política (GC6)', () => {
 describe('seleção fora da escala da data → 422 sem efeito', () => {
   it.each<[string, SectorExtra]>([
     ['Noite + Ana (outro turno)', { shiftIds: [NOITE.id], userIds: ['ana'] }],
-    ['Noite + Maria (de férias)', { shiftIds: [NOITE.id], userIds: ['maria'] }],
-    ['todos sem includeOff + Maria', { userIds: ['maria'] }],
-    ['todos + Davi (outro setor no dia)', { userIds: ['davi'] }],
-    ['todos + Beto (sem escala)', { userIds: ['beto'] }],
     ['id inexistente', { userIds: ['joao', 'nao-existe'] }],
   ])('%s', async (_caso, extra) => {
     await expect(send(extra)).rejects.toMatchObject({
@@ -356,11 +372,33 @@ describe('seleção fora da escala da data → 422 sem efeito', () => {
   });
 });
 
+// Spec C3 (linha 109): marcado com relação com o setor e excluído com motivo
+// não é 422; fica de fora com o motivo próprio, nunca "Não selecionado".
+describe('marcado e excluído com motivo fica de fora, sem 422', () => {
+  it.each<[string, SectorExtra, string, string]>([
+    [
+      'Noite + Maria (de férias)',
+      { shiftIds: [NOITE.id] },
+      'maria',
+      'vacation',
+    ],
+    ['todos sem includeOff + Maria', {}, 'maria', 'vacation'],
+    ['todos + Davi (outro setor no dia)', {}, 'davi', 'other_sector'],
+    ['todos + Beto (sem escala)', {}, 'beto', 'other_shift'],
+  ])('%s', async (_caso, extra, marked, reason) => {
+    await send({ ...extra, userIds: ['joao', marked] });
+    expect(created().recipients.map((r) => r.userId)).toEqual(['joao']);
+    expect(created().audienceExcluded).toContainEqual(
+      expect.objectContaining({ userId: marked, reason }),
+    );
+  });
+});
+
 describe('política e turno antes da seleção', () => {
   it('gestor de Logística com sectorId Produção e userIds [caio] → 403 antes da seleção', async () => {
     h.repo.findActor.mockResolvedValue(LOG_MANAGER);
     await expect(
-      send({ userIds: ['caio'] }, LOG_MANAGER.id),
+      send({ userIds: ['caio'] }, LOG_MANAGER.id, true),
     ).rejects.toMatchObject(FORBIDDEN);
     expect(h.repo.listActiveShifts.mock.calls).toHaveLength(0);
     expect(h.repo.loadDayPeople.mock.calls).toHaveLength(0);
@@ -375,7 +413,7 @@ describe('política e turno antes da seleção', () => {
     'shiftId %s → 422 team_whatsapp.invalid_shift, sem createDispatch',
     async (_caso, shiftId) => {
       await expect(
-        send({ shiftIds: [shiftId], userIds: ['joao'] }),
+        send({ shiftIds: [shiftId], userIds: ['joao'] }, ADMIN.id, true),
       ).rejects.toMatchObject({
         code: 'team_whatsapp.invalid_shift',
         status: 422,
@@ -401,10 +439,17 @@ describe('todos os turnos e incluir folga', () => {
     });
   });
 
-  it('todos + includeOff acrescenta Maria, destinatária com shiftName null', async () => {
+  // Alinhamento na vinculada: entram os vinculados a Produção; férias fica fora.
+  it('todos + includeOff: Maria de férias fica fora; Beto e Davi entram', async () => {
     await send({ includeOff: true });
-    expect(recipients()).toHaveLength(4);
-    expect(recipients()).toContainEqual(['Maria', null, null]);
+    const names = recipients().map(([name]) => name);
+    expect(names).toHaveLength(4);
+    expect(names).toEqual(
+      expect.arrayContaining(['Ana', 'Beto', 'Davi', 'João']),
+    );
+    expect(created().audienceExcluded).toContainEqual(
+      expect.objectContaining({ userId: 'maria', reason: 'vacation' }),
+    );
     expect(created().includeOff).toBe(true);
   });
 });
@@ -421,36 +466,16 @@ describe('foto e rótulo', () => {
       shiftStartTime: '22:00',
       shiftEndTime: '06:00',
     });
-    // T8b (C6): a foto leva o setor em que a pessoa entrou e o nível na hora.
-    const person = (userId: string, name: string, jobTitle: string) => ({
-      userId,
-      name,
-      jobTitle,
-      sectorName: 'Produção',
-      levelName: null,
-    });
-    expect(created().roster).toEqual({
-      working: [
-        {
-          ...person('joao', 'João', 'Operador'),
-          shiftName: 'Noite',
-          reason: null,
-        },
-        {
-          ...person('caio', 'Caio', 'Mecânico'),
-          shiftName: 'Noite',
-          reason: null,
-        },
-      ],
-      off: [
-        {
-          ...person('maria', 'Maria', 'Técnica'),
-          shiftName: null,
-          reason: 'VACATION',
-        },
-      ],
-    });
-    const foto = JSON.stringify(created().roster);
+    // DF4: envio novo grava roster null; quem ficou de fora vai em
+    // audienceExcluded com o motivo, sem telefone.
+    expect(created().roster).toBeNull();
+    expect(
+      created().audienceExcluded?.map((p) => [p.userId, p.reason]),
+    ).toEqual([
+      ['maria', 'vacation'],
+      ['caio', 'not_selected'],
+    ]);
+    const foto = JSON.stringify(created().audienceExcluded);
     expect(foto).not.toMatch(/phone/i);
     expect(foto).not.toContain(PHONE);
   });

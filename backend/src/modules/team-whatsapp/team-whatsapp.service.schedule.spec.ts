@@ -27,6 +27,7 @@ import {
   sector,
   type Harness,
 } from './team-whatsapp.test-fixtures';
+import { withAudienceKey } from './team-whatsapp.sector-send.test-fixtures';
 
 // Noite de 21/10 começa às 22:00 de Manaus (UTC−4) = 2026-10-22T02:00Z.
 const NOITE = {
@@ -68,19 +69,24 @@ type SectorTarget = Extract<
   CreateTeamDispatchInput['target'],
   { type: 'sector' }
 >;
-const schedule = (extra: Partial<SectorTarget> = {}) =>
-  h.service.dispatch(ADMIN.id, {
-    channelId: 'c1',
-    text: 'Oi',
-    when: 'shift_start',
-    target: {
-      type: 'sector',
-      sectorIds: ['s1'],
-      date: DATE,
-      shiftIds: [NOITE.id],
-      ...extra,
-    },
-  });
+// Aviso de turno agendado; nenhuma recusa daqui sai do público (só do serviço).
+const schedule = async (extra: Partial<SectorTarget> = {}) =>
+  h.service.dispatch(
+    ADMIN.id,
+    await withAudienceKey(h, ADMIN.id, {
+      channelId: 'c1',
+      text: 'Oi',
+      purpose: 'shift_notice',
+      when: 'shift_start',
+      target: {
+        type: 'sector',
+        sectorIds: ['s1'],
+        date: DATE,
+        shiftIds: [NOITE.id],
+        ...extra,
+      },
+    }),
+  );
 const created = () => h.repo.createDispatch.mock.calls[0][0];
 const statuses = () =>
   created().recipients.map((r) => [r.userName, r.status, r.skipReason]);
@@ -113,7 +119,14 @@ describe('agendar no início do turno', () => {
         'team_whatsapp.schedule',
         'TeamWhatsappDispatch',
         'd1',
-        { actorId: ADMIN.id, dispatchId: 'd1', scheduled: 1, skipped: 1 },
+        {
+          actorId: ADMIN.id,
+          dispatchId: 'd1',
+          purpose: 'shift_notice',
+          base: 'on_duty',
+          scheduled: 1,
+          skipped: 1,
+        },
       ],
     ]);
   });

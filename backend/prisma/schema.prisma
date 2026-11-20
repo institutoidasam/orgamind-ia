@@ -1740,6 +1740,32 @@ enum TeamWhatsappSkipReason {
   NOT_AUTHORIZED
 }
 
+// Finalidade do envio à equipe (Lote F, CF8). Dispatch sem finalidade
+// (`purpose` nulo) é o envio de antes desta versão.
+enum TeamDispatchPurpose {
+  SHIFT_NOTICE
+  MEETING
+  ALIGNMENT
+  LECTURE
+  OVERTIME
+  URGENCY
+}
+
+// Base do público: quem está de plantão no dia (ON_DUTY) ou quem está
+// vinculado ao setor/turno (ASSIGNED). `audienceBase` nulo = envio antigo.
+enum TeamAudienceBase {
+  ON_DUTY
+  ASSIGNED
+}
+
+// Política do envio agendado (Lote G): IMMEDIATE grava a lista na criação e
+// FROZEN_RECHECK reconfere na hora do disparo. `schedulePolicy` nulo = agendado
+// pela regra antiga; o Lote F não escreve esta coluna.
+enum TeamSchedulePolicy {
+  IMMEDIATE
+  FROZEN_RECHECK
+}
+
 model TeamWhatsappDispatch {
   id          String                  @id @default(cuid())
   authorId    String?
@@ -1776,6 +1802,26 @@ model TeamWhatsappDispatch {
   firedAt       DateTime?
   cancelledAt   DateTime?
   cancelledById String?
+  // Finalidade e público do envio (Lote F, CF8). Todas nulas: null = envio
+  // criado antes da finalidade, sem nenhum valor assumido.
+  // Finalidade escolhida na tela; null = envio antigo.
+  purpose          TeamDispatchPurpose?
+  // Base do público (de plantão ou vinculados); null = envio antigo.
+  audienceBase     TeamAudienceBase?
+  // Dia civil da atividade (reunião, palestra, hora extra...); null = não informado.
+  activityDate     DateTime?                @db.Date
+  // Horário da atividade em HH:mm; null = não informado.
+  activityTime     String?
+  // Local da atividade; null = não informado.
+  activityPlace    String?
+  // Motivo da urgência (finalidade URGENCY); null = outra finalidade ou envio antigo.
+  urgencyReason    String?
+  // Regra do público ao enviar (setores, turnos, funções etc.); null = envio antigo.
+  audienceRule     Json?
+  // Pessoas tiradas do público pelo autor, só id e motivo, sem nome nem telefone; null = nenhuma ou envio antigo.
+  audienceExcluded Json?
+  // Política do agendado (Lote G); o F não escreve. null = agendado pela regra antiga.
+  schedulePolicy   TeamSchedulePolicy?
 
   @@index([createdAt])
   @@index([authorId, createdAt])

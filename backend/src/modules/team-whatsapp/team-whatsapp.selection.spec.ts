@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ShiftRef } from '../../schemas/contracts/shift.schema';
-import { overnightInProgress, selectMembers } from './team-whatsapp.selection';
+import { overnightInProgress } from './team-whatsapp.selection';
 
 const NOITE: ShiftRef = {
   id: 'shift_night',
@@ -28,17 +28,5 @@ describe('overnightInProgress (Manaus, UTC-4)', () => {
     expect(overnightInProgress([MANHA, NOITE], new Date(iso))).toEqual(
       expected,
     );
-  });
-});
-
-describe('selectMembers (GC9)', () => {
-  const eligible = [{ id: 'joao' }, { id: 'caio' }];
-  it.each<[string, string[] | undefined, string[] | null]>([
-    ['sem seleção = todos os elegíveis', undefined, ['joao', 'caio']],
-    ['ids repetidos contam uma vez', ['caio', 'caio'], ['caio']],
-    ['id fora da lista → null', ['joao', 'ana'], null],
-  ])('%s', (_caso, userIds, expected) => {
-    const picked = selectMembers(eligible, userIds);
-    expect(picked && picked.map((m) => m.id)).toEqual(expected);
   });
 });

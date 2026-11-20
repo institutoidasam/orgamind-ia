@@ -18,6 +18,7 @@ import {
   sector,
   type Harness,
 } from './team-whatsapp.test-fixtures';
+import { withAudienceKey } from './team-whatsapp.sector-send.test-fixtures';
 
 const TEXT = 'Reunião às 15h na sala 2';
 const toUser = (userId = 'u1'): CreateTeamDispatchInput => ({
@@ -26,6 +27,7 @@ const toUser = (userId = 'u1'): CreateTeamDispatchInput => ({
 });
 const toSector = (sectorId = 's1'): CreateTeamDispatchInput => ({
   text: TEXT,
+  purpose: 'shift_notice',
   target: { type: 'sector', sectorIds: [sectorId], date: '2026-10-21' },
 });
 // Membro no 1º turno do cadastro: "Todos os turnos" só alcança quem tem WORK no dia (D2).
@@ -41,12 +43,18 @@ beforeEach(() => {
   h.repo.findSector.mockResolvedValue(sector());
 });
 
+// Envio para setor no corpo novo: a chave vem do público real, com os fakes já montados.
+const sendSector = async (actorId: string, input = toSector()) =>
+  h.service.dispatch(actorId, await withAudienceKey(h, actorId, input));
+
 async function expectRejected(
   input: CreateTeamDispatchInput,
   code: string,
   status: number,
 ) {
-  await expect(h.service.dispatch('x', input)).rejects.toMatchObject({
+  // Todo chamador espera a recusa: o público pode já lançar o 403/422 (chave de zeros).
+  const keyed = await withAudienceKey(h, 'x', input, { expectError: true });
+  await expect(h.service.dispatch('x', keyed)).rejects.toMatchObject({
     code,
     status,
   });
@@ -74,7 +82,7 @@ describe('TeamWhatsappService.dispatch — autorização no envio, setor', () =>
         ...notAuthorized,
       }),
     ]);
-    await expect(h.service.dispatch('m', toSector())).resolves.toMatchObject({
+    await expect(sendSector('m')).resolves.toMatchObject({
       queued: 1,
       skipped: [
         { userId: 'u2', name: 'Bia', reason: 'NOT_AUTHORIZED' },
@@ -102,7 +110,7 @@ describe('TeamWhatsappService.dispatch — autorização no envio, pessoas e usu
     ]);
     const input = toSector();
     if (input.target.type === 'sector') input.target.userIds = ['u1', 'u2'];
-    await expect(h.service.dispatch('m', input)).resolves.toMatchObject({
+    await expect(sendSector('m', input)).resolves.toMatchObject({
       queued: 1,
       skipped: [{ userId: 'u2', name: 'Bia', reason: 'NOT_AUTHORIZED' }],
     });
@@ -184,7 +192,8 @@ describe('TeamWhatsappService.dispatch — alvo fora da política (403)', () => 
     await expectForbidden(toUser('nope'));
     h.repo.findTargetUser.mockResolvedValueOnce(member({ isActive: false }));
     await expectForbidden(toUser());
-    h.repo.findSector.mockResolvedValueOnce(null);
+    // Sem Once: o público do helper e o envio leem o setor, e os dois o veem ausente.
+    h.repo.findSector.mockResolvedValue(null);
     await expectForbidden(toSector('nope'));
   });
 });
@@ -239,7 +248,7 @@ describe('TeamWhatsappService.dispatch — setor enfileira e pula', () => {
   });
 
   it('enfileira quem tem telefone e pula NO_PHONE/SUPPRESSED', async () => {
-    await expect(h.service.dispatch('m', toSector())).resolves.toEqual({
+    await expect(sendSector('m')).resolves.toEqual({
       dispatchId: 'd1',
       queued: 1,
       scheduled: 0,
@@ -287,7 +296,7 @@ describe('TeamWhatsappService.dispatch — setor grava o envio', () => {
   });
 
   it('grava o envio com o alvo e um destinatário por pessoa, sem telefone', async () => {
-    await h.service.dispatch('m', toSector());
+    await sendSector('m');
     const data = h.repo.createDispatch.mock.calls[0][0];
     expect(data).toMatchObject({
       authorId: 'm',
@@ -347,7 +356,7 @@ describe('TeamWhatsappService.dispatch — setor audita contagens', () => {
   });
 
   it('audita contagens sem texto nem telefone', async () => {
-    await h.service.dispatch('m', toSector());
+    await sendSector('m');
     expect(h.audit.log.mock.calls).toContainEqual([
       'team_whatsapp.dispatch',
       'TeamWhatsappDispatch',
@@ -357,6 +366,9 @@ describe('TeamWhatsappService.dispatch — setor audita contagens', () => {
         targetType: 'SECTOR',
         targetId: 's1',
         sectorIds: ['s1'],
+        // GF12: finalidade e base com os valores da API.
+        purpose: 'shift_notice',
+        base: 'on_duty',
         channelIds: ['c1'],
         queued: 1,
         skipped: 2,

@@ -1,5 +1,7 @@
 import { mockDeep, type DeepMockProxy } from 'vitest-mock-extended';
 import type { Queue } from 'bullmq';
+import type { ConfigService } from '@nestjs/config';
+import { TeamAudienceService } from './team-audience.service';
 import { TeamWhatsappService } from './team-whatsapp.service';
 import type {
   TeamMember,
@@ -13,6 +15,7 @@ import { actorWith } from '../../shared/authz/actor.test-fixtures';
 import type { LevelsRepository } from '../levels/levels.repository';
 import type { ConsentService } from '../consent/consent.service';
 import type { AuditService } from '../../shared/audit/audit.service';
+import type { Env } from '../../shared/config/env.schema';
 import type { TeamWhatsappSendJob } from '../queue/queue.constants';
 import type {
   ChannelLiveStateService,
@@ -128,8 +131,14 @@ export type Harness = {
   queue: DeepMockProxy<Queue<TeamWhatsappSendJob>>;
   levels: DeepMockProxy<LevelsRepository>;
   live: DeepMockProxy<ChannelLiveStateService>;
+  /** Público real sobre os mesmos fakes; o serviço de envio usa este mesmo (T8b). */
+  audience: TeamAudienceService;
   service: TeamWhatsappService;
 };
+
+// JWT_SECRET falso (≥ 32 caracteres) para a impressão do público (DF5).
+const JWT_SECRET = 'segredo-de-teste-do-envio-0123456789-abcdef';
+const testConfig = { get: () => JWT_SECRET } as unknown as ConfigService<Env>;
 
 /** Áreas sem número, só SUPPRESSED em supressão, sem níveis ativos e `createDispatch` ecoando ids r1, r2… */
 export function createHarness(): Harness {
@@ -169,10 +178,11 @@ export function createHarness(): Harness {
       })),
     }),
   );
+  const audience = new TeamAudienceService(repo, consent, levels, testConfig);
   const service = new TeamWhatsappService(repo, consent, audit, queue);
-  // `levels` e `live` são injetados por propriedade no Nest; aqui, à mão.
-  Object.assign(service, { levels, live });
-  return { repo, consent, audit, queue, levels, live, service };
+  // `levels`, `live` e `audience` são injetados por propriedade no Nest; aqui, à mão.
+  Object.assign(service, { levels, live, audience });
+  return { repo, consent, audit, queue, levels, live, audience, service };
 }
 
 /** Alvo setor: o setor (`findSector`) e as pessoas do dia, sem escala (`loadDayPeople`). */

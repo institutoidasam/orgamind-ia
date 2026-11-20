@@ -1,19 +1,27 @@
-import type { ExecutionContext } from '@nestjs/common';
+import type { ExecutionContext, INestApplication } from '@nestjs/common';
 import { HTTP_CODE_METADATA } from '@nestjs/common/constants';
-import { Reflector } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, APP_PIPE, Reflector } from '@nestjs/core';
+import { Test } from '@nestjs/testing';
 import type { Role } from '@prisma/client';
-import { describe, expect, it, vi } from 'vitest';
+import { ZodValidationPipe } from 'nestjs-zod';
+import request from 'supertest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RolesGuard } from '../auth/roles.guard';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { PERMISSION_KEY } from '../auth/decorators/require-permission.decorator';
-import type { PermissionsService } from '../permissions/permissions.service';
-import { PERMISSION_DENIED_TEXT } from '../../shared/authz/permissions';
+import { PermissionsService } from '../permissions/permissions.service';
+import {
+  PERMISSION_DENIED_TEXT,
+  type PermissionKey,
+} from '../../shared/authz/permissions';
 import { permissionsWith } from '../../shared/authz/actor.test-fixtures';
+import { DomainExceptionFilter } from '../../shared/errors/domain-exception.filter';
+import { TeamAudienceService } from './team-audience.service';
 import { TeamWhatsappController } from './team-whatsapp.controller';
-import type { TeamWhatsappService } from './team-whatsapp.service';
-import type { TeamWhatsappResultsService } from './team-whatsapp-results.service';
-import type { TeamWhatsappRetryService } from './team-whatsapp-retry.service';
-import type { TeamWhatsappScheduleService } from './team-whatsapp-schedule.service';
+import { TeamWhatsappService } from './team-whatsapp.service';
+import { TeamWhatsappResultsService } from './team-whatsapp-results.service';
+import { TeamWhatsappRetryService } from './team-whatsapp-retry.service';
+import { TeamWhatsappScheduleService } from './team-whatsapp-schedule.service';
 import type { DispatchRecipientsQuery } from './dto/dispatch-recipients-query.dto';
 import type { CreateTeamDispatchDto } from './dto/create-team-dispatch.dto';
 import type { RetryRecipientsInput } from './dto/retry-recipients.dto';
@@ -97,6 +105,104 @@ async function passesGuards(method: Handler, role: Role, revoke = false) {
     (await new PermissionsGuard(reflector, permissions).canActivate(ctx))
   );
 }
+
+const PREVIEW_URL = '/internal/team-whatsapp/dispatches/preview';
+const PREVIEW_BODY = {
+  text: '',
+  purpose: 'shift_notice',
+  target: { type: 'sector', sectorIds: ['s1'], date: '2026-11-20' },
+};
+const PREVIEW = { audienceKey: 'k1', included: [], excluded: [], blocks: [] };
+const openApps: INestApplication[] = [];
+
+/** Serviços falsos do controller; só o da prévia responde. */
+function fakeServices(audience: object) {
+  return [
+    { provide: TeamWhatsappService, useValue: {} },
+    { provide: TeamWhatsappScheduleService, useValue: {} },
+    { provide: TeamWhatsappResultsService, useValue: {} },
+    { provide: TeamWhatsappRetryService, useValue: {} },
+    { provide: TeamAudienceService, useValue: audience },
+  ];
+}
+
+/**
+ * POST da prévia num app com os portões globais na ordem real: ator do JWT
+ * com `role`, `RolesGuard`, `PermissionsGuard` (matriz inicial menos
+ * `revoke`), pipe Zod e filtro de erros.
+ */
+async function postPreview(
+  role: Role,
+  body: object,
+  revoke: PermissionKey[] = [],
+) {
+  const audience = { preview: vi.fn().mockResolvedValue(PREVIEW) };
+  const effectiveFor = (r: Role) =>
+    Promise.resolve(permissionsWith(r, { revoke }));
+  const actor = (ctx: ExecutionContext) => {
+    ctx.switchToHttp().getRequest<{ user: unknown }>().user = {
+      sub: 'actor-1',
+      role,
+    };
+    return true;
+  };
+  const moduleRef = await Test.createTestingModule({
+    controllers: [TeamWhatsappController],
+    providers: [
+      ...fakeServices(audience),
+      { provide: PermissionsService, useValue: { effectiveFor } },
+      { provide: APP_PIPE, useClass: ZodValidationPipe },
+      { provide: APP_FILTER, useClass: DomainExceptionFilter },
+      { provide: APP_GUARD, useValue: { canActivate: actor } },
+      { provide: APP_GUARD, useClass: RolesGuard },
+      { provide: APP_GUARD, useClass: PermissionsGuard },
+    ],
+  }).compile();
+  const app = moduleRef.createNestApplication();
+  openApps.push(app);
+  await app.init();
+  const server = app.getHttpServer() as Parameters<typeof request>[0];
+  return { res: await request(server).post(PREVIEW_URL).send(body), audience };
+}
+
+describe('TeamWhatsappController — POST dispatches/preview (C4, CF1)', () => {
+  afterEach(async () => {
+    await Promise.all(openApps.splice(0).map((app) => app.close()));
+  });
+
+  it('POST dispatches/preview sem equipe.enviar 403 auth.permission_denied', async () => {
+    const { res, audience } = await postPreview('OPERATOR', PREVIEW_BODY, [
+      'equipe.enviar',
+    ]);
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'auth.permission_denied' });
+    expect(audience.preview).not.toHaveBeenCalled();
+  });
+
+  it('VIEWER 403 auth.permission_denied, como no envio', async () => {
+    const { res, audience } = await postPreview('VIEWER', PREVIEW_BODY);
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ code: 'auth.permission_denied' });
+    expect(audience.preview).not.toHaveBeenCalled();
+  });
+
+  it('com a chave chama preview com o ator e o corpo e responde 200', async () => {
+    const { res, audience } = await postPreview('OPERATOR', PREVIEW_BODY);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(PREVIEW);
+    expect(audience.preview).toHaveBeenCalledWith('actor-1', PREVIEW_BODY);
+  });
+
+  it('corpo inválido (alvo pessoa) 400 e a prévia não roda', async () => {
+    const target = { type: 'user', userId: 'u1' };
+    const { res, audience } = await postPreview('ADMIN', {
+      ...PREVIEW_BODY,
+      target,
+    });
+    expect(res.status).toBe(400);
+    expect(audience.preview).not.toHaveBeenCalled();
+  });
+});
 
 describe('TeamWhatsappController — escritas por permissão', () => {
   it.each(WRITE_HANDLERS)('%s exige equipe.enviar, sem @Roles', (name) => {

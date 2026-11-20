@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   HttpCode,
+  Inject,
   Param,
   Post,
   Query,
@@ -13,7 +14,10 @@ import { ZodValidationPipe } from 'nestjs-zod';
 import { RequirePermission } from '../auth/decorators/require-permission.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import type { JwtPayload } from '../auth/jwt.strategy';
-import { CreateTeamDispatchDto } from './dto/create-team-dispatch.dto';
+import {
+  CreateTeamDispatchDto,
+  PreviewTeamDispatchDto,
+} from './dto/create-team-dispatch.dto';
 import { DispatchRecipientsQueryDto } from './dto/dispatch-recipients-query.dto';
 import { PageQueryDto } from './dto/page-query.dto';
 import { PersonRouteQueryDto } from './dto/person-route-query.dto';
@@ -22,6 +26,7 @@ import {
   type RetryRecipientsInput,
 } from './dto/retry-recipients.dto';
 import { RosterQueryDto } from './dto/roster-query.dto';
+import { TeamAudienceService } from './team-audience.service';
 import { TeamWhatsappResultsService } from './team-whatsapp-results.service';
 import { TeamWhatsappRetryService } from './team-whatsapp-retry.service';
 import { TeamWhatsappScheduleService } from './team-whatsapp-schedule.service';
@@ -30,14 +35,21 @@ import { TeamWhatsappService } from './team-whatsapp.service';
 type AuthRequest = { user: JwtPayload };
 
 /**
- * WhatsApp da equipe. Leituras: VIEWER é barrado pelo RolesGuard. Enviar,
- * cancelar e repetir: o portão é a permissão `equipe.enviar` (PermissionsGuard).
+ * WhatsApp da equipe. Leituras: VIEWER é barrado pelo RolesGuard. Prévia,
+ * enviar, cancelar e repetir: o portão é `equipe.enviar` (PermissionsGuard).
  * Entre quem passa, quem decide é a política do serviço (ADMIN ou gestor de
  * setor, senão 403) e, no envio a todos os setores, `equipe.disparo_amplo`.
  */
 @ApiTags('team-whatsapp')
 @Controller('internal/team-whatsapp')
 export class TeamWhatsappController {
+  /**
+   * Prévia do público (C4). Injetado por propriedade para o construtor não
+   * passar de quatro parâmetros (limite do gate).
+   */
+  @Inject(TeamAudienceService)
+  private readonly audience!: TeamAudienceService;
+
   constructor(
     private readonly team: TeamWhatsappService,
     private readonly schedule: TeamWhatsappScheduleService,
@@ -83,6 +95,22 @@ export class TeamWhatsappController {
   })
   createDispatch(@Body() dto: CreateTeamDispatchDto, @Req() req: AuthRequest) {
     return this.team.dispatch(req.user.sub, dto);
+  }
+
+  /**
+   * Prévia (C4, CF1): mesma porta do POST dispatches (`equipe.enviar`, sem
+   * `@Roles`) e 200, pois não enfileira nada. Alcance nos setores e disparo
+   * amplo são conferidos no serviço, como no envio.
+   */
+  @Post('dispatches/preview')
+  @HttpCode(200)
+  @RequirePermission('equipe.enviar')
+  @ApiOperation({
+    summary:
+      'Prévia do envio a setores por finalidade: quem recebe, quem fica de fora e por quê, e as travas',
+  })
+  preview(@Body() dto: PreviewTeamDispatchDto, @Req() req: AuthRequest) {
+    return this.audience.preview(req.user.sub, dto);
   }
 
   @Get('dispatches')

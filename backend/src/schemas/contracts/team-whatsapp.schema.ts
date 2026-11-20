@@ -50,6 +50,108 @@ export const teamDispatchStateSchema = z.enum([
   'CANCELLED',
 ]);
 
+// CF3: finalidade e base do público, em minúsculas na API (o banco guarda em
+// maiúsculas; a conversão fica no repositório).
+export const teamPurposeSchema = z.enum([
+  'shift_notice',
+  'meeting',
+  'alignment',
+  'lecture',
+  'overtime',
+  'urgency',
+]);
+export const teamAudienceBaseSchema = z.enum(['on_duty', 'assigned']);
+// Motivo de quem fica fora do público (GF6). Os três últimos são pulos de
+// telefone, também gravados como destinatário SKIPPED.
+export const teamExclusionReasonSchema = z.enum([
+  'not_selected',
+  'day_off',
+  'vacation',
+  'other_sector',
+  'other_shift',
+  'no_phone',
+  'not_authorized',
+  'suppressed',
+]);
+// Política do agendado; null = regra antiga (envio sem política gravada).
+export const teamSchedulePolicySchema = z.enum(['immediate', 'frozen_recheck']);
+// Momento do disparo: agora ou no início do turno escolhido.
+export const teamWhenSchema = z.enum(['now', 'shift_start']);
+
+/** Dados da atividade gravados (Reunião, Palestra, Hora extra; opcional no Alinhamento). */
+export const teamActivitySchema = z.object({
+  date: civilDateSchema.nullable(),
+  time: z.string().nullable(),
+  place: z.string().nullable(),
+});
+
+const teamRefSchema = z.object({ id: z.string(), name: z.string() });
+
+/** Painel da regra (C4/F3): o que decidiu o público, na prévia e no detalhe. */
+export const teamAudienceRuleViewSchema = z.object({
+  purpose: teamPurposeSchema,
+  base: teamAudienceBaseSchema,
+  includeOff: z.boolean(),
+  rosterDate: civilDateSchema,
+  sectors: teamRefSchema.array(),
+  // null = todos os turnos.
+  shifts: teamRefSchema.array().nullable(),
+  levels: teamRefSchema.array(),
+  withoutLevel: z.boolean(),
+  // null = sem seleção nominal.
+  selectedCount: z.number().int().nonnegative().nullable(),
+  activity: teamActivitySchema.nullable(),
+  urgencyReason: z.string().nullable(),
+  when: teamWhenSchema,
+  scheduledFor: z.string().nullable(),
+  schedulePolicy: teamSchedulePolicySchema.nullable(),
+});
+
+/**
+ * Pessoa do público. `sectorId` = área por onde o servidor manda (a da entrada
+ * escolhida para a pessoa: remanejado A→B fica em B na base em serviço e em A
+ * na vinculada); a tela conta e agrupa por área com ele.
+ */
+export const teamAudiencePersonSchema = z.object({
+  userId: z.string(),
+  name: z.string(),
+  sectorId: z.string(),
+  sectorName: z.string(),
+  shiftName: z.string().nullable(),
+  levelName: z.string().nullable(),
+});
+export const teamAudienceExcludedPersonSchema = teamAudiencePersonSchema.extend(
+  { reason: teamExclusionReasonSchema },
+);
+
+/**
+ * C4: resposta do POST /internal/team-whatsapp/dispatches/preview. `audienceKey`
+ * = impressão do público que o envio devolve; `blocks` = travas na ordem fixa.
+ * Telefone só em `included`, já pela visão de quem pede.
+ */
+export const teamAudiencePreviewSchema = z.object({
+  audienceKey: z.string(),
+  rule: teamAudienceRuleViewSchema,
+  included: teamAudiencePersonSchema
+    .extend({ phone: z.string().nullable() })
+    .array(),
+  excluded: teamAudienceExcludedPersonSchema.array(),
+  blocks: z.object({ code: z.string(), message: z.string() }).array(),
+});
+
+/** Regra gravada no envio (Json): o que não tem coluna própria. Sem telefone. */
+export const audienceRuleSnapshotSchema = z.object({
+  // null = todos os turnos.
+  shifts: teamRefSchema.array().nullable(),
+  levels: teamRefSchema.array(),
+  withoutLevel: z.boolean(),
+  // null = sem seleção nominal.
+  selectedUserIds: z.string().array().nullable(),
+});
+/** Excluídos gravados no envio (Json). O parse descarta chaves fora do contrato (telefone). */
+export const audienceExcludedSnapshotSchema =
+  teamAudienceExcludedPersonSchema.array();
+
 /** Turno gravado no envio (cópia de nome e horários no momento do POST). */
 export const teamShiftSnapshotSchema = z.object({
   id: z.string(),
@@ -269,6 +371,17 @@ const pageMetaShape = {
   pageSize: z.number().int().positive(),
 };
 
+/**
+ * CF3: finalidade do envio na lista e no detalhe; null = envio sem finalidade
+ * (regra antiga). A chave vem sempre: o front faz `parse` com `.nullable()`.
+ */
+const dispatchPurposeShape = {
+  purpose: teamPurposeSchema.nullable(),
+  base: teamAudienceBaseSchema.nullable(),
+  activity: teamActivitySchema.nullable(),
+  urgencyReason: z.string().nullable(),
+};
+
 export const teamDispatchListResponseSchema = z.object({
   items: z
     .object({
@@ -295,6 +408,7 @@ export const teamDispatchListResponseSchema = z.object({
       scheduledFor: z.string().nullable(),
       // Hora real do disparo do agendado (ISO); null = imediato ou não disparado.
       firedAt: z.string().nullable(),
+      ...dispatchPurposeShape,
     })
     .array(),
   ...pageMetaShape,
@@ -322,6 +436,12 @@ export const teamDispatchDetailResponseSchema = z.object({
     unselected: listedRosterPersonSchema.array(),
     off: listedRosterPersonSchema.array(),
   }),
+  // CF3: painel e excluídos lidos do que foi gravado; chaves sempre presentes,
+  // envio antigo → rule null e excluded [] (`leftOut` fica para ele).
+  purpose: dispatchPurposeShape.purpose,
+  base: dispatchPurposeShape.base,
+  rule: teamAudienceRuleViewSchema.nullable(),
+  excluded: teamAudienceExcludedPersonSchema.array(),
 });
 
 /**
@@ -418,4 +538,20 @@ export type CancelTeamDispatchResponse = z.infer<
 >;
 export type RetryTeamDispatchResponse = z.infer<
   typeof retryTeamDispatchResponseSchema
+>;
+export type TeamPurpose = z.infer<typeof teamPurposeSchema>;
+export type TeamAudienceBase = z.infer<typeof teamAudienceBaseSchema>;
+export type TeamExclusionReason = z.infer<typeof teamExclusionReasonSchema>;
+export type TeamSchedulePolicy = z.infer<typeof teamSchedulePolicySchema>;
+export type TeamWhen = z.infer<typeof teamWhenSchema>;
+export type TeamActivity = z.infer<typeof teamActivitySchema>;
+export type TeamAudienceRuleView = z.infer<typeof teamAudienceRuleViewSchema>;
+export type TeamAudiencePerson = z.infer<typeof teamAudiencePersonSchema>;
+export type TeamAudienceExcludedPerson = z.infer<
+  typeof teamAudienceExcludedPersonSchema
+>;
+export type TeamAudiencePreview = z.infer<typeof teamAudiencePreviewSchema>;
+export type AudienceRuleSnapshot = z.infer<typeof audienceRuleSnapshotSchema>;
+export type AudienceExcludedSnapshot = z.infer<
+  typeof audienceExcludedSnapshotSchema
 >;

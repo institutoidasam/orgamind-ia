@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LiveState } from '../whatsapp-providers/channel-live-state.service';
 import type { ScheduleExceptionInput } from '../staff-schedule/schedule-resolver';
-import { createTeamDispatchSchema } from './dto/create-team-dispatch.dto';
+import {
+  createTeamDispatchSchema,
+  type CreateTeamDispatchInput,
+} from './dto/create-team-dispatch.dto';
 import { effectiveChannel, type SectorChannelRow } from './sector-channel';
 import {
   ADMIN,
@@ -16,6 +19,7 @@ import {
   sector,
   type Harness,
 } from './team-whatsapp.test-fixtures';
+import { withAudienceKey } from './team-whatsapp.sector-send.test-fixtures';
 
 // Número por área (D3/GC7): cada pessoa sai pelo número da área em que aparece
 // na data; área sem número ou número não aberto trava o envio inteiro.
@@ -70,6 +74,8 @@ const toSectors = (
 ) =>
   createTeamDispatchSchema.parse({
     text: 'Oi',
+    purpose: 'shift_notice',
+    audienceKey: '0'.repeat(64),
     ...body,
     target: {
       type: 'sector',
@@ -85,6 +91,9 @@ const toUser = () =>
   });
 
 let h: Harness;
+// Envio para setor no corpo novo: a chave vem do público real, com os fakes já montados.
+const sendSectors = async (input: CreateTeamDispatchInput) =>
+  h.service.dispatch(ADMIN.id, await withAudienceKey(h, ADMIN.id, input));
 const created = () => h.repo.createDispatch.mock.calls[0][0];
 const channelsOf = () =>
   created().recipients.map((r) => [r.userId, r.channelId]);
@@ -121,7 +130,7 @@ afterEach(() => {
 
 describe('número de cada pessoa (D3)', () => {
   it('Logística (1111) + Expedição (2222): cada destinatário sai pelo número do seu setor e o envio fica sem canal único', async () => {
-    await h.service.dispatch(ADMIN.id, toSectors());
+    await sendSectors(toSectors());
     expect(created().channelId).toBeNull();
     expect(created().recipients).toMatchObject([
       { userId: 'rafael', ...snapshotOf(N2222) },
@@ -137,7 +146,7 @@ describe('número de cada pessoa (D3)', () => {
 
   it('remanejado de Logística para Expedição recebe pelo 2222', async () => {
     h.repo.loadDayPeople.mockResolvedValue([ANA, BRUNO]);
-    await h.service.dispatch(ADMIN.id, toSectors());
+    await sendSectors(toSectors());
     expect(channelsOf()).toEqual([
       ['bruno', 'c2'],
       ['ana', 'c1'],
@@ -146,7 +155,7 @@ describe('número de cada pessoa (D3)', () => {
 
   it('dois setores com o mesmo número: dispatch.channelId é esse número, consultado uma vez', async () => {
     givenNumbers(h, { log: N1111, exp: N1111 });
-    await h.service.dispatch(ADMIN.id, toSectors());
+    await sendSectors(toSectors());
     expect(created().channelId).toBe('c1');
     expect(h.live.checkMany.mock.calls).toHaveLength(1);
     expect(h.live.checkMany.mock.calls[0][0].map((c) => c.id)).toEqual(['c1']);
@@ -159,7 +168,7 @@ describe('destinatário e corpo do pedido', () => {
       ANA,
       { ...RAFAEL, phoneE164: null },
     ]);
-    await h.service.dispatch(ADMIN.id, toSectors());
+    await sendSectors(toSectors());
     expect(created().recipients).toMatchObject([
       { userId: 'rafael', status: 'SKIPPED', ...snapshotOf(N2222) },
       { userId: 'ana', status: 'QUEUED', ...snapshotOf(N1111) },
@@ -167,7 +176,7 @@ describe('destinatário e corpo do pedido', () => {
   });
 
   it('channelId no corpo apontando para outro canal é ignorado', async () => {
-    await h.service.dispatch(ADMIN.id, toSectors({}, { channelId: 'c9' }));
+    await sendSectors(toSectors({}, { channelId: 'c9' }));
     expect(channelsOf()).toEqual([
       ['rafael', 'c2'],
       ['ana', 'c1'],
@@ -187,7 +196,7 @@ describe('área sem número trava o envio inteiro (422, GC7)', () => {
     async (_label, numbers) => {
       givenNumbers(h, numbers);
       await refused(
-        h.service.dispatch(ADMIN.id, toSectors()),
+        sendSectors(toSectors()),
         'team_whatsapp.sector_without_number',
       );
       expect(h.live.checkMany.mock.calls).toHaveLength(0);
@@ -197,21 +206,19 @@ describe('área sem número trava o envio inteiro (422, GC7)', () => {
   it('a seleção vem antes: userIds fora da lista + área sem número → invalid_selection', async () => {
     givenNumbers(h, { log: N1111, exp: null });
     await refused(
-      h.service.dispatch(ADMIN.id, toSectors({ userIds: ['ana', 'intruso'] })),
+      sendSectors(toSectors({ userIds: ['ana', 'intruso'] })),
       'team_whatsapp.invalid_selection',
     );
   });
 
-  it('área sem número vence o agendamento: início no passado → sector_without_number', async () => {
+  // CF4: as travas saem na ordem fixa; o início no passado vem antes da área sem número.
+  it('início no passado vence a área sem número → schedule_in_past', async () => {
     givenNumbers(h, { log: N1111, exp: null });
     const input = toSectors(
       { shiftIds: [SHIFT_FIRST.id] },
       { when: 'shift_start' },
     );
-    await refused(
-      h.service.dispatch(ADMIN.id, input),
-      'team_whatsapp.sector_without_number',
-    );
+    await refused(sendSectors(input), 'team_whatsapp.schedule_in_past');
   });
 });
 
@@ -266,7 +273,7 @@ describe('canal de provedor desligado = área sem número (R10)', () => {
       exp: rawChannel('EVOLUTION'),
     });
     await refused(
-      h.service.dispatch(ADMIN.id, toSectors()),
+      sendSectors(toSectors()),
       'team_whatsapp.sector_without_number',
     );
     expect(h.live.checkMany.mock.calls).toHaveLength(0);
@@ -280,13 +287,13 @@ describe('número que a porta não disse open (envio imediato, 409)', () => {
     ['unknown', 'team_whatsapp.channel_unverified'],
   ])('número %s → 409 %s e nada criado', async (state, code) => {
     givenLive(h, { c2: state });
-    await refused(h.service.dispatch(ADMIN.id, toSectors()), code, 409);
+    await refused(sendSectors(toSectors()), code, 409);
   });
 
   it('desconectado vence o não verificado', async () => {
     givenLive(h, { c1: 'unknown', c2: 'close' });
     await refused(
-      h.service.dispatch(ADMIN.id, toSectors()),
+      sendSectors(toSectors()),
       'team_whatsapp.channel_disconnected',
       409,
     );
@@ -295,7 +302,7 @@ describe('número que a porta não disse open (envio imediato, 409)', () => {
   it('a porta não responder por um canal vale unknown: nunca libera', async () => {
     h.live.checkMany.mockResolvedValue(new Map());
     await refused(
-      h.service.dispatch(ADMIN.id, toSectors()),
+      sendSectors(toSectors()),
       'team_whatsapp.channel_unverified',
       409,
     );
@@ -311,7 +318,7 @@ describe('agendado congela o número (D7/GC6)', () => {
 
   it('número close no agendamento: cria SCHEDULED sem consultar o provedor, com o número de cada pessoa', async () => {
     givenLive(h, { c1: 'close', c2: 'close' });
-    const out = await h.service.dispatch(ADMIN.id, schedule());
+    const out = await sendSectors(schedule());
     expect(out).toMatchObject({ queued: 0, scheduled: 2 });
     expect(h.live.checkMany.mock.calls).toHaveLength(0);
     expect(created()).toMatchObject({ state: 'SCHEDULED', channelId: null });

@@ -11,6 +11,7 @@ import {
   sector,
   type Harness,
 } from './team-whatsapp.test-fixtures';
+import { withAudienceKey } from './team-whatsapp.sector-send.test-fixtures';
 
 // Noite de 21/10 começa às 22:00 de Manaus, depois do "agora" fixado abaixo.
 const NOITE = {
@@ -39,6 +40,7 @@ const toSectors = (
   when?: 'now' | 'shift_start',
 ): CreateTeamDispatchInput => ({
   text: 'Oi',
+  purpose: 'shift_notice',
   ...(when ? { when } : {}),
   target: {
     type: 'sector',
@@ -47,6 +49,16 @@ const toSectors = (
     shiftIds: [NOITE.id],
   },
 });
+// `expectError`: o teste espera o 403 do público (a chave sai de zeros).
+const sendTo = async (
+  sectorIds: string[],
+  when?: 'now' | 'shift_start',
+  expectError = false,
+) =>
+  h.service.dispatch(
+    'm',
+    await withAudienceKey(h, 'm', toSectors(sectorIds, when), { expectError }),
+  );
 const person = (sectorId: string) =>
   dayPerson({
     id: `u-${sectorId}`,
@@ -83,9 +95,7 @@ const expectNothingCreated = () => {
 describe('disparo amplo', () => {
   it('matriz inicial: OPERATOR gestor de todos os setores ativos envia a todos', async () => {
     h.repo.findActor.mockResolvedValue(operator(ACTIVE));
-    await expect(
-      h.service.dispatch('m', toSectors(ACTIVE)),
-    ).resolves.toMatchObject({
+    await expect(sendTo(ACTIVE)).resolves.toMatchObject({
       dispatchId: 'd1',
       queued: 3,
     });
@@ -96,9 +106,7 @@ describe('disparo amplo', () => {
     'sem equipe.disparo_amplo, alvo com todos os ativos → 403 broad_send_denied e createDispatch não é chamado (when %s)',
     async (when) => {
       h.repo.findActor.mockResolvedValue(operator(ACTIVE, true));
-      await expect(
-        h.service.dispatch('m', toSectors(ACTIVE, when)),
-      ).rejects.toMatchObject({
+      await expect(sendTo(ACTIVE, when, true)).rejects.toMatchObject({
         status: 403,
         code: 'team_whatsapp.broad_send_denied',
         message: DENIED_TEXT,
@@ -113,16 +121,17 @@ describe('disparo amplo', () => {
 describe('disparo amplo — o que não é amplo ou não chega a ser conferido', () => {
   it('sem a chave, subconjunto passa; id repetido não cobre o setor que falta', async () => {
     h.repo.findActor.mockResolvedValue(operator(ACTIVE, true));
-    await h.service.dispatch('m', toSectors(['ti', 'op']));
-    await h.service.dispatch('m', toSectors(['ti', 'ti', 'op']));
+    await sendTo(['ti', 'op']);
+    await sendTo(['ti', 'ti', 'op']);
     expect(h.repo.createDispatch.mock.calls).toHaveLength(2);
   });
 
   it('o alcance vem antes: setor fora dos que o ator gerencia é team_whatsapp.forbidden', async () => {
     h.repo.findActor.mockResolvedValue(operator(['ti'], true));
-    await expect(
-      h.service.dispatch('m', toSectors(ACTIVE)),
-    ).rejects.toMatchObject({ status: 403, code: 'team_whatsapp.forbidden' });
+    await expect(sendTo(ACTIVE, undefined, true)).rejects.toMatchObject({
+      status: 403,
+      code: 'team_whatsapp.forbidden',
+    });
     expectNothingCreated();
   });
 
@@ -142,9 +151,9 @@ describe('disparo amplo — limite de um setor ativo só', () => {
   it('sem a chave, cobrir o único setor ativo não é disparo amplo', async () => {
     h.repo.listActiveSectorIds.mockResolvedValue(['ti']);
     h.repo.findActor.mockResolvedValue(operator(['ti'], true));
-    await expect(
-      h.service.dispatch('m', toSectors(['ti'])),
-    ).resolves.toMatchObject({ dispatchId: 'd1' });
+    await expect(sendTo(['ti'])).resolves.toMatchObject({
+      dispatchId: 'd1',
+    });
     expect(h.repo.createDispatch.mock.calls).toHaveLength(1);
   });
 });

@@ -7,7 +7,8 @@ vi.mock('./recipient-table', () => ({
   ),
 }));
 
-import type { DispatchDetail, LeftOutRosterPerson } from '../schemas';
+import { RULE_VIEW } from '../audience-preview.test-fixtures';
+import type { DispatchDetail, LeftOutRosterPerson, TeamExcludedPerson } from '../schemas';
 import { DispatchResult } from './dispatch-result';
 
 const counts = {
@@ -21,6 +22,7 @@ const base: DispatchDetail = {
   channels: [{ name: 'GoZap Principal', phoneE164: '+5592999990000', count: 4 }],
   counts: { ...counts, queued: 1, sent: 3, read: 2, failed: 2, uncertain: 1 },
   leftOut: { unselected: [], off: [] },
+  purpose: null, base: null, rule: null, excluded: [],
 };
 
 const person = (name: string, extra: Partial<LeftOutRosterPerson> = {}): LeftOutRosterPerson => ({
@@ -28,6 +30,76 @@ const person = (name: string, extra: Partial<LeftOutRosterPerson> = {}): LeftOut
 });
 const lines = (title: string) =>
   within(screen.getByRole('list', { name: title })).getAllByRole('listitem').map((li) => li.textContent);
+const excludedPerson = (name: string, reason: TeamExcludedPerson['reason']): TeamExcludedPerson => ({
+  userId: `u-${name}`, name, sectorId: 's1', sectorName: 'Logística', shiftName: 'Manhã', levelName: null, reason,
+});
+const withRule = (excluded: TeamExcludedPerson[]): DispatchDetail => ({
+  ...base,
+  purpose: 'meeting',
+  base: 'assigned',
+  rule: { ...RULE_VIEW, purpose: 'meeting', base: 'assigned', includeOff: true },
+  excluded,
+  leftOut: { unselected: [person('Zé')], off: [] },
+});
+
+describe('DispatchResult: envio a uma pessoa', () => {
+  it('I1: alvo pessoa (sem setores) não mostra finalidade, base nem regra anterior; setor antigo mostra', () => {
+    const { rerender } = render(<DispatchResult dispatch={{ ...base, targetLabel: 'Ana Souza', sectors: [] }} />);
+    expect(screen.getByText('Ana Souza')).toBeInTheDocument();
+    expect(screen.queryByText(/Finalidade/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/regra anterior/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Regra do público' })).not.toBeInTheDocument();
+    rerender(<DispatchResult dispatch={base} />);
+    expect(screen.getByText('Finalidade: — · Base: equipe em serviço (regra anterior)')).toBeInTheDocument();
+  });
+});
+
+describe('DispatchResult: ninguém conta duas vezes', () => {
+  it('m1: o pulado por telefone aparece só em "De fora" e "No público" é quem foi para a fila', () => {
+    const dispatch: DispatchDetail = {
+      ...withRule([excludedPerson('Caio', 'no_phone')]),
+      counts: { ...counts, queued: 2, skipped: 1 },
+    };
+    render(<DispatchResult dispatch={dispatch} />);
+    const panel = within(screen.getByRole('region', { name: 'Regra do público' }));
+    expect(panel.getByText('No público (2) · De fora (1)')).toBeInTheDocument();
+    expect(lines('Sem telefone (1)')).toEqual(['Caio · Logística · Manhã']);
+    expect(screen.getAllByText(/Caio/)).toHaveLength(1);
+  });
+
+  it.each(['suppressed', 'not_authorized'] as const)('m1: %s também sai do "No público"', (reason) => {
+    render(<DispatchResult dispatch={{
+      ...withRule([excludedPerson('Caio', reason), excludedPerson('Duda', 'day_off')]),
+      counts: { ...counts, sent: 3, skipped: 1 },
+    }} />);
+    expect(screen.getByText('No público (3) · De fora (2)')).toBeInTheDocument();
+  });
+});
+
+describe('DispatchResult: finalidade e regra', () => {
+  it('aceite 13: detalhe antigo mostra base equipe em serviço (regra anterior)', () => {
+    render(<DispatchResult dispatch={base} />);
+    expect(screen.getByText('Finalidade: — · Base: equipe em serviço (regra anterior)')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Regra do público' })).not.toBeInTheDocument();
+  });
+
+  it('aceite 12: detalhe mostra o painel e os excluídos agrupados por motivo', () => {
+    render(<DispatchResult dispatch={withRule([excludedPerson('Ana', 'not_selected'), excludedPerson('Bia', 'other_sector')])} />);
+    const panel = within(screen.getByRole('region', { name: 'Regra do público' }));
+    expect(panel.getByText('Reunião')).toBeInTheDocument();
+    expect(panel.getByText('No público (9) · De fora (2)')).toBeInTheDocument();
+    expect(lines('Não selecionado (1)')).toEqual(['Ana · Logística · Manhã']);
+    expect(lines('Em outro setor nesta data (1)')).toEqual(['Bia · Logística · Manhã']);
+    expect(screen.queryByText(/Finalidade: —/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Zé/)).not.toBeInTheDocument();
+  });
+
+  it('Férias e Folga separados no detalhe', () => {
+    render(<DispatchResult dispatch={withRule([excludedPerson('Caio', 'vacation'), excludedPerson('Duda', 'day_off')])} />);
+    expect(lines('Folga (1)')).toEqual(['Duda · Logística · Manhã']);
+    expect(lines('Férias (1)')).toEqual(['Caio · Logística · Manhã']);
+  });
+});
 
 describe('DispatchResult', () => {
   it('mostra o título, o destino, o texto e as contagens com os rótulos da GC11, só as não zero', () => {

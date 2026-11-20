@@ -1,117 +1,135 @@
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-
-vi.mock('@tanstack/react-router', () => ({
-  Link: ({ children, to, params }: { children: React.ReactNode; to: string; params: { sectorId: string } }) => (
-    <a href={to.replace('$sectorId', params.sectorId)}>{children}</a>
-  ),
-}));
-
-import type { RosterMember } from '../schemas';
+import { PREVIEW_RESPONSE, RULE_VIEW } from '../audience-preview.test-fixtures';
+import type { TeamAudiencePreview } from '../schemas';
 import { MemberSelection } from './member-selection';
 
-const ana: RosterMember = {
-  id: 'ana', name: 'Ana', email: null, phoneE164: '+5592991234567', hasPhone: true, phoneMasked: '•••• 4567',
-  isActive: true, jobTitle: null,
-  fromOtherSector: false, situation: { kind: 'WORK', sectorId: 'ti', shiftId: 'noite', source: 'CYCLE' },
-  level: { id: 'l1', name: 'Coordenador' },
-};
-const bia: RosterMember = { ...ana, id: 'bia', name: 'Bia', level: null };
-const group = (sectorId: string, name: string, visible: RosterMember[], empty = false) => ({
-  sectorId, name, empty, visible, off: [], noSchedule: 0,
+type Included = TeamAudiencePreview['included'][number];
+type Excluded = TeamAudiencePreview['excluded'][number];
+
+const base = { sectorId: 's1', sectorName: 'Logística', shiftName: 'Manhã', levelName: null };
+const ana: Included = { ...base, userId: 'ana', name: 'Ana', levelName: 'Coordenador', phone: '•••• 0001' };
+const bia: Included = { ...base, userId: 'bia', name: 'Bia', phone: '+5592991110002' };
+const out = (userId: string, name: string, reason: Excluded['reason']): Excluded => ({ ...base, userId, name, reason });
+const preview = (included: Included[], excluded: Excluded[], sectors = RULE_VIEW.sectors): TeamAudiencePreview => ({
+  ...PREVIEW_RESPONSE, rule: { ...RULE_VIEW, sectors }, included, excluded,
 });
 
-function setup(groups: ReturnType<typeof group>[], shiftIds: string[] = ['noite'], selected: string[] = []) {
+function setup(data: TeamAudiencePreview, extra: { selected?: string[]; isFresh?: boolean } = {}) {
+  const handlers = { onToggle: vi.fn(), onToggleAll: vi.fn(), onSendAll: vi.fn(), onSendSelected: vi.fn() };
   render(
-    <MemberSelection
-      shiftIds={shiftIds} groups={groups} includeOff={false} shiftNames={new Map()} selected={new Set(selected)}
-      onToggle={vi.fn()} onToggleOff={vi.fn()} onToggleAll={vi.fn()} onSendAll={vi.fn()} onSendSelected={vi.fn()}
-    />,
+    <MemberSelection preview={data} isFresh={extra.isFresh ?? true} selected={new Set(extra.selected ?? [])} {...handlers} />,
   );
+  return { user: userEvent.setup(), ...handlers };
 }
 
-describe('MemberSelection: telefone (DB8)', () => {
-  const dora: RosterMember = { ...ana, id: 'dora', name: 'Dora', level: null, phoneE164: null, phoneMasked: '•••• 7777' };
+describe('MemberSelection: Vão receber e Ficam de fora', () => {
+  const data = preview([ana, bia], [out('maria', 'Maria', 'vacation'), out('rafa', 'Rafa', 'day_off'), out('pedro', 'Pedro', 'no_phone')]);
 
-  it('membro sem phoneE164 mas com hasPhone não cai em Sem telefone e mostra •••• 7777', () => {
-    setup([group('ti', 'TI', [dora])]);
-    expect(screen.queryByRole('list', { name: 'Sem telefone' })).not.toBeInTheDocument();
-    expect(within(screen.getByRole('list', { name: 'Escalados' })).getByText('•••• 7777')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Enviar para todos (1)' })).toBeEnabled();
+  it('mostra Vão receber e Ficam de fora vindos do servidor, agrupados por motivo', () => {
+    setup(data);
+    expect(screen.getByRole('heading', { name: 'Vão receber (2)' })).toBeInTheDocument();
+    expect(screen.getByRole('listitem', { name: 'Ana' })).toHaveTextContent('Ana');
+    expect(screen.getByRole('listitem', { name: 'Ana' })).toHaveTextContent('Logística · Manhã · Coordenador');
+    expect(screen.getByRole('heading', { name: 'Ficam de fora (3)' })).toBeInTheDocument();
+    expect(screen.getByRole('list', { name: 'Sem telefone (1)' })).toHaveTextContent('Pedro');
   });
 
-  it('membro sem telefone cai em Sem telefone', () => {
-    const eva: RosterMember = { ...dora, id: 'eva', name: 'Eva', hasPhone: false, phoneMasked: null };
-    setup([group('ti', 'TI', [eva])]);
-    expect(within(screen.getByRole('list', { name: 'Sem telefone' })).getByText('Eva')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Enviar para todos (0)' })).toBeDisabled();
+  it('Férias e Folga em grupos separados', () => {
+    setup(data);
+    expect(within(screen.getByRole('list', { name: 'Férias (1)' })).getByText(/Maria/)).toBeInTheDocument();
+    expect(within(screen.getByRole('list', { name: 'Folga (1)' })).getByText(/Rafa/)).toBeInTheDocument();
+    expect(within(screen.getByRole('list', { name: 'Folga (1)' })).queryByText(/Maria/)).not.toBeInTheDocument();
   });
 
-  it('com a chave mostra o telefone formatado', () => {
-    setup([group('ti', 'TI', [ana])]);
-    expect(screen.getByText('(92) 99123-4567')).toBeInTheDocument();
+  it('só quem está em Vão receber tem caixa de marcar', () => {
+    setup(data);
+    expect(screen.getAllByRole('checkbox').map((c) => c.getAttribute('aria-label'))).toEqual(['Ana', 'Bia']);
+    expect(within(screen.getByRole('list', { name: 'Folga (1)' })).queryByRole('checkbox')).not.toBeInTheDocument();
   });
-});
 
-const bloqueado: RosterMember = { ...ana, id: 'caio', name: 'Caio', level: null, contactAuthorization: 'NAO_AUTORIZADO' };
-const antigo = (id: string, name: string): RosterMember => ({
-  ...ana, id, name, level: null, contactAuthorization: 'AUTORIZADO', authorizationUnverified: true,
-});
-
-describe('MemberSelection: contato não autorizado', () => {
-  it('quem tem telefone e está NAO_AUTORIZADO aparece pelo nome em "Contato não autorizado", sem caixa de seleção e fora de "Escalados"', () => {
-    setup([group('ti', 'TI', [ana, bloqueado])]);
-    const bloqueados = within(screen.getByRole('list', { name: 'Contato não autorizado' }));
-    expect(bloqueados.getByText('Caio')).toBeInTheDocument();
-    expect(bloqueados.queryByRole('checkbox')).not.toBeInTheDocument();
-    expect(within(screen.getByRole('list', { name: 'Escalados' })).queryByText('Caio')).not.toBeInTheDocument();
-    expect(screen.queryByRole('list', { name: 'Sem telefone' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Enviar para todos (1)' })).toBeEnabled();
+  it('telefone como veio do servidor (mascarado ou não)', () => {
+    setup(data);
+    expect(screen.getByRole('listitem', { name: 'Ana' })).toHaveTextContent('•••• 0001');
+    expect(screen.getByRole('listitem', { name: 'Bia' })).toHaveTextContent('+5592991110002');
   });
 });
 
-describe('MemberSelection: origem não verificada', () => {
-  const line = (n: string) => `${n} com origem de autorização não verificada (cadastro anterior)`;
+describe('MemberSelection: áreas', () => {
+  const areas = [{ id: 's1', name: 'Logística' }, { id: 's2', name: 'Atendimento' }];
+  const rui: Included = { ...base, userId: 'rui', name: 'Rui', sectorId: 's2', sectorName: 'Atendimento', phone: null };
 
-  it('com marcados, conta só os marcados; a linha não bloqueia o envio', () => {
-    setup([group('ti', 'TI', [antigo('d1', 'Dani'), antigo('e1', 'Edu'), antigo('f1', 'Fabi'), ana])], ['noite'], ['d1', 'e1']);
-    expect(screen.getByText(line('2 destinatários'))).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Enviar para selecionados (2)' })).toBeEnabled();
+  it('agrupa por área pelo sectorId da prévia; remanejado aparece uma vez', () => {
+    setup(preview([ana, rui], [], areas));
+    expect(screen.getByRole('heading', { name: 'Atendimento' })).toBeInTheDocument();
+    expect(within(screen.getByRole('list', { name: 'Vão receber · Logística' })).getAllByRole('listitem')).toHaveLength(1);
+    expect(within(screen.getByRole('list', { name: 'Vão receber · Atendimento' })).getByText('Rui')).toBeInTheDocument();
+    expect(screen.getAllByText('Rui')).toHaveLength(1);
   });
 
-  it('sem ninguém de cadastro anterior, a linha não aparece', () => {
-    setup([group('ti', 'TI', [ana, bia])], ['noite'], ['ana', 'bia']);
-    expect(screen.queryByText(/origem de autorização não verificada/)).not.toBeInTheDocument();
+  it('área sem ninguém avisa, sem lista', () => {
+    setup(preview([ana], [], areas));
+    expect(screen.getByText('Ninguém neste setor, data e turno.')).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Vão receber · Atendimento' })).not.toBeInTheDocument();
   });
 });
 
-describe('MemberSelection', () => {
-  it('agrupa por setor com o nível ao lado do nome ("Ana · Coordenador"); sem nível mostra só o nome', () => {
-    setup([group('ti', 'TI', [ana]), group('op', 'Operação', [bia])]);
-    const ti = within(screen.getByRole('list', { name: 'Escalados · TI' }));
-    expect(ti.getByText('Ana · Coordenador')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Operação' })).toBeInTheDocument();
-    expect(within(screen.getByRole('list', { name: 'Escalados · Operação' })).getByText('Bia')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Enviar para todos (2)' })).toBeEnabled();
+describe('MemberSelection: seleção e botões', () => {
+  const data = preview([ana], [out('bia', 'Bia', 'not_selected'), out('maria', 'Maria', 'vacation')]);
+
+  it('Não selecionado continua marcável e fica fora de Ficam de fora', async () => {
+    const { user, onToggle } = setup(data, { selected: ['ana'] });
+    expect(screen.getByRole('heading', { name: 'Não selecionado (1)' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Ficam de fora (1)' })).toBeInTheDocument();
+    await user.click(within(screen.getByRole('list', { name: 'Não selecionado' })).getByRole('checkbox', { name: 'Bia' }));
+    expect(onToggle).toHaveBeenCalledWith('bia');
   });
 
-  it('setor vazio mostra "Ninguém neste setor ainda." com link para /setores/<id>', () => {
-    setup([group('ti', 'TI', [ana]), group('op', 'Operação', [], true)]);
-    expect(screen.getByText('Ninguém neste setor ainda.')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Adicionar pessoas' })).toHaveAttribute('href', '/setores/op');
+  it('com marcados só Enviar para selecionados vale; sem marcados, só Enviar para todos', async () => {
+    const { user, onSendSelected } = setup(data, { selected: ['ana'] });
+    expect(screen.getByRole('button', { name: 'Enviar para todos' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Enviar para selecionados (1)' }));
+    expect(onSendSelected).toHaveBeenCalledTimes(1);
   });
 
-  it('um setor só: sem título de setor e com a lista "Escalados" de sempre', () => {
-    setup([group('ti', 'TI', [ana])]);
-    expect(screen.queryByRole('heading', { name: 'TI' })).not.toBeInTheDocument();
-    expect(screen.getByRole('list', { name: 'Escalados' })).toBeInTheDocument();
+  it('sem marcados, Enviar para todos leva a contagem da prévia e Marcar todos chama a tela', async () => {
+    const { user, onSendAll, onToggleAll } = setup(preview([ana, bia], []));
+    expect(screen.getByRole('button', { name: 'Enviar para selecionados (0)' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'Marcar todos' }));
+    await user.click(screen.getByRole('button', { name: 'Enviar para todos (2)' }));
+    expect([onToggleAll, onSendAll].map((fn) => fn.mock.calls.length)).toEqual([1, 1]);
   });
 
-  it('incluir quem está de folga só aparece em Todos os turnos (sem turnos marcados)', () => {
-    setup([group('ti', 'TI', [ana])], []);
-    expect(screen.getByRole('checkbox', { name: 'incluir quem está de folga' })).toBeInTheDocument();
-    cleanup();
-    setup([group('ti', 'TI', [ana])], ['dia', 'noite']);
-    expect(screen.queryByRole('checkbox', { name: 'incluir quem está de folga' })).not.toBeInTheDocument();
+  it('prévia que não é a do corpo atual avisa e trava os dois botões de enviar', () => {
+    setup(data, { selected: ['ana'], isFresh: false });
+    expect(screen.getByText('Atualizando a lista…')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Enviar para selecionados (1)' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Enviar para todos' })).toBeDisabled();
+  });
+});
+
+describe('MemberSelection: vazio e marcados que ficaram de fora', () => {
+  it('sem ninguém em Vão receber mas com Não selecionado, não diz que não há ninguém', () => {
+    setup(preview([], [out('bia', 'Bia', 'not_selected')]), { selected: ['ana'] });
+    expect(screen.getByRole('heading', { name: 'Não selecionado (1)' })).toBeInTheDocument();
+    expect(screen.queryByText('Ninguém neste setor, data e turno.')).not.toBeInTheDocument();
+  });
+
+  it('pessoa marcada que ficou de fora (Férias) tem caixa só para desmarcar; as não marcadas, não', async () => {
+    const data = preview([ana], [out('maria', 'Maria', 'vacation'), out('rafa', 'Rafa', 'day_off')]);
+    const { user, onToggle } = setup(data, { selected: ['ana', 'maria'] });
+    const marked = screen.getByRole('list', { name: 'Marcados que ficam de fora' });
+    expect(within(marked).getAllByRole('checkbox')).toHaveLength(1);
+    expect(within(marked).getByRole('checkbox', { name: 'Maria' })).toBeChecked();
+    expect(within(marked).getByRole('listitem', { name: 'Maria' })).toHaveTextContent('Férias');
+    expect(within(screen.getByRole('list', { name: 'Folga (1)' })).queryByRole('checkbox')).not.toBeInTheDocument();
+    await user.click(within(marked).getByRole('checkbox', { name: 'Maria' }));
+    expect(onToggle).toHaveBeenCalledWith('maria');
+  });
+
+  it('sem ninguém marcado entre os de fora, não desenha a lista de marcados', () => {
+    setup(preview([ana], [out('maria', 'Maria', 'vacation')]), { selected: ['ana'] });
+    expect(screen.queryByRole('list', { name: 'Marcados que ficam de fora' })).not.toBeInTheDocument();
   });
 });

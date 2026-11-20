@@ -1,10 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Queue } from 'bullmq';
-import type {
-  TeamWhatsappRecipientStatus,
-  TeamWhatsappTargetType,
-} from '@prisma/client';
+import type { TeamWhatsappTargetType } from '@prisma/client';
 import { ConsentService } from '../consent/consent.service';
 import { LevelsRepository } from '../levels/levels.repository';
 import { AuditService } from '../../shared/audit/audit.service';
@@ -27,42 +24,53 @@ import {
 } from '../../schemas/contracts/team-whatsapp.schema';
 import { hasPermission } from '../../shared/authz/permissions';
 import { nameView } from '../../shared/authz/phone-visibility';
-import type { ShiftRef } from '../../schemas/contracts/shift.schema';
 import {
   fromDbDate,
   todayIn,
-  zonedStart,
   type CivilDate,
 } from '../staff-schedule/civil-date';
 import { resolveDay } from '../staff-schedule/schedule-resolver';
 import { ChannelLiveStateService } from '../whatsapp-providers/channel-live-state.service';
+import { purposeView } from './dispatch-purpose-view';
 import type { CreateTeamDispatchInput } from './dto/create-team-dispatch.dto';
 import type { PageQuery } from './dto/page-query.dto';
+import { phoneSkipReason, type PhoneSkipReason } from './recipient-skip';
 import {
-  canBroadSend,
+  TeamAudienceService,
+  type AudienceRequest,
+} from './team-audience.service';
+import {
   canSendToSector,
   canSendToUser,
-  isBroadSend,
   isTeamProvider,
   isTeamSender,
   type TeamActor,
 } from './team-whatsapp.policy';
 import {
-  broadSendDenied,
-  invalidLevel,
+  audienceChanged,
   invalidSelection,
   invalidShift,
   noRecipients,
   noSector,
-  scheduleInPast,
   teamForbidden,
 } from './team-whatsapp.errors';
+import { blocksFor } from './team-whatsapp.purpose';
+import {
+  requireNoBlock,
+  sectorDispatchFields,
+  sectorRecipients,
+  sectorRequestOf,
+  sectorScheduledFor,
+  sectorTrail,
+  shiftColumns,
+  type SectorTrail,
+} from './team-whatsapp.sector-dispatch';
 import {
   authorView,
   seesFullPhone,
   sortByViewedName,
 } from './team-whatsapp.name-view';
-import { overnightInProgress, selectMembers } from './team-whatsapp.selection';
+import { overnightInProgress } from './team-whatsapp.selection';
 import {
   distinctLiveChannels,
   previewChannels,
@@ -74,22 +82,14 @@ import {
 } from './team-whatsapp.channels';
 import {
   dayMembers,
-  dayShift,
-  eligibleAcross,
-  pickLevels,
-  rosterSnapshot,
-  sectorTargetLabel,
-  shiftsLabel,
   shiftStarts,
   toRosterMembers,
-  type LevelFilter,
-  type RosterSnapshot,
   type SectorDay,
-  type SectorMember,
 } from './team-whatsapp.roster';
 import {
   TeamWhatsappRepository,
   type DispatchSector,
+  type NewTeamDispatch,
   type NewTeamDispatchRecipient,
   type NewTeamRecipient,
   type RecipientSnapshot,
@@ -108,8 +108,8 @@ import {
 const QUEUE_UNAVAILABLE = 'team_whatsapp.queue_unavailable';
 
 /**
- * Destinatário resolvido: o membro, o turno gravado nele (dia ou cadastro) e o
- * snapshot de setor/nível (C6; tudo null no alvo pessoa).
+ * Destinatário do alvo pessoa: o membro, o turno do cadastro e o snapshot de
+ * setor/nível (C6; tudo null no alvo pessoa).
  */
 type TargetMember = {
   member: TeamMember;
@@ -121,9 +121,6 @@ type TargetMember = {
   routeSectorId: string;
 };
 
-/** Motivos que a montagem grava (C8); `INACTIVE` só nasce no disparo agendado. */
-type ClassifySkip = 'NO_PHONE' | 'SUPPRESSED' | 'NOT_AUTHORIZED';
-
 /** Alvo pessoa: sem setor do envio nem nível no destinatário. */
 const NO_SECTOR_SNAPSHOT: RecipientSnapshot = {
   sectorId: null,
@@ -131,47 +128,35 @@ const NO_SECTOR_SNAPSHOT: RecipientSnapshot = {
   levelName: null,
 };
 
-/** Foto da escala do alvo setor (C10); o alvo pessoa não tem. */
-type DayRoster = {
-  rosterDate: string;
-  includeOff: boolean;
-  roster: RosterSnapshot;
-};
-
-type ResolvedTarget = {
-  targetType: TeamWhatsappTargetType;
+/** Alvo pessoa resolvido (GF1, caminho de hoje): a área do dia e o destinatário. */
+type ResolvedUser = {
   targetId: string;
   targetLabel: string;
-  // Setores do envio (C6): o do alvo setor; [] no alvo pessoa.
-  sectors: DispatchSector[];
-  // Áreas cujo número o envio usa e confere (GC7): os setores selecionados; no
-  // alvo pessoa, a área do dia.
+  // Área cujo número o envio usa e confere (GC7): a do dia da pessoa.
   numberSectors: DispatchSector[];
-  // Turno do filtro do alvo setor, só com exatamente um turno (D9); null =
-  // todos os turnos, vários turnos ou alvo pessoa.
-  shift: TeamShiftSnapshot | null;
   members: TargetMember[];
-  day: DayRoster | null;
 };
-
-type SectorTargetInput = Extract<
-  CreateTeamDispatchInput['target'],
-  { type: 'sector' }
->;
 
 type SkippedRecipient = CreateTeamDispatchResponse['skipped'][number];
 
-/** Status de quem vai receber: QUEUED (agora) ou SCHEDULED (início do turno). */
-type PendingStatus = Extract<
-  TeamWhatsappRecipientStatus,
-  'QUEUED' | 'SCHEDULED'
->;
+/** Trilha do alvo (GF12): no setor, também setores, finalidade e base. */
+type DispatchTrail = {
+  targetType: TeamWhatsappTargetType;
+  targetId: string;
+} & Partial<SectorTrail>;
+
+/** Envio montado e conferido, pronto para gravar: o registro, os números e a trilha. */
+type DispatchDraft = {
+  record: NewTeamDispatch;
+  channelIds: string[];
+  trail: DispatchTrail;
+};
 
 /** Envio já gravado, a enfileirar (agora) ou só auditar (agendado). */
 type CreatedDispatch = {
   actorId: string;
   channelIds: string[];
-  target: ResolvedTarget;
+  trail: DispatchTrail;
   created: TeamCreatedDispatch;
   skipped: SkippedRecipient[];
 };
@@ -184,20 +169,21 @@ const byName = (a: { name: string }, b: { name: string }) =>
   a.name.localeCompare(b.name, 'pt-BR');
 
 /**
- * Recado de ADMIN/gestor para a equipe. Ordem do POST (C3): remetente → alvo +
- * política de cada setor (403) → turnos ativos (422 `invalid_shift`) → níveis
- * ativos (422 `invalid_level`) → escala da data refeita no servidor e seleção
- * contra ela (422 `invalid_selection`) → número de cada área (422
- * `sector_without_number`; alvo pessoa sem área, 422 `no_sector`) → no
- * agendado, início do turno no futuro (422 `schedule_in_past`) → no imediato,
- * estado ao vivo de cada número (409 `channel_disconnected`/`channel_unverified`,
- * D7; o agendado não consulta o provedor) → destinatários (422 `no_recipients`)
- * → grava, cada destinatário com o número da sua área (D3) → enfileira
- * (agendado: não; o disparo é do worker) → auditoria. A política vem antes da
- * seleção (`userIds` não abre outro setor) e antes do número (não revela
- * canais a quem não pode). Recusa = nada gravado, enfileirado ou auditado
- * (GC6). `channelId` do corpo é aceito e ignorado (C3). Texto e telefones
- * nunca vão para log, auditoria nem foto.
+ * Recado de ADMIN/gestor para a equipe. Remetente (403) e então:
+ * - alvo setor (GF9): público de `TeamAudienceService.resolve`, o mesmo da
+ *   prévia (erros de regra 422 → alcance de cada setor 403 → turnos e níveis
+ *   422 → disparo amplo 403, antes de ler pessoas → pessoas da data) →
+ *   impressão (409 `audience_changed`) → seleção (422 `invalid_selection`) →
+ *   primeira trava do botão (422, CF4) → no imediato, estado ao vivo de cada
+ *   número (409 `channel_disconnected`/`channel_unverified`, D7; o agendado não
+ *   consulta o provedor) → grava finalidade, regra e excluídos (F2);
+ * - alvo pessoa (GF1, como hoje): política (403) → área do dia e número (422
+ *   `no_sector`/`sector_without_number`) → estado ao vivo (409) →
+ *   destinatário (422 `no_recipients`) → grava.
+ * Cada destinatário sai pelo número da sua área (D3); depois enfileira
+ * (agendado: não; o disparo é do worker) e audita. Recusa = nada gravado,
+ * enfileirado ou auditado (GC6). `channelId` do corpo é aceito e ignorado
+ * (C3). Texto e telefones nunca vão para log, auditoria nem foto.
  */
 @Injectable()
 export class TeamWhatsappService {
@@ -212,6 +198,10 @@ export class TeamWhatsappService {
   @Inject(ChannelLiveStateService)
   private readonly live!: ChannelLiveStateService;
 
+  /** Público por finalidade (C3/GF9), o mesmo da prévia; por propriedade, pelo mesmo motivo. */
+  @Inject(TeamAudienceService)
+  private readonly audience!: TeamAudienceService;
+
   constructor(
     private readonly repo: TeamWhatsappRepository,
     private readonly consent: ConsentService,
@@ -225,45 +215,108 @@ export class TeamWhatsappService {
     input: CreateTeamDispatchInput,
   ): Promise<CreateTeamDispatchResponse> {
     const actor = await this.requireSender(actorId);
-    const target = await this.resolveTarget(actor, input.target);
-    await this.requireBroadSendAllowed(actor, target);
-    const numbers = await this.requireNumbers(target);
-    const scheduledFor =
-      input.when === 'shift_start' ? shiftStartOf(target, new Date()) : null;
-    if (!scheduledFor) await this.requireOpen(numbers);
-    const pending: PendingStatus = scheduledFor ? 'SCHEDULED' : 'QUEUED';
-    const recipients = await this.classify(target.members, pending, numbers);
-    if (!recipients.some((r) => r.status === pending)) throw noRecipients();
-    const channelIds = recipientChannelIds(recipients);
-
-    const created = await this.repo.createDispatch({
-      authorId: actor.id,
-      targetType: target.targetType,
-      targetId: target.targetId,
-      targetLabel: target.targetLabel,
-      ...shiftColumns(target.shift),
-      ...target.day,
-      sectors: target.sectors,
-      channelId: singleChannelId(channelIds),
-      text: input.text,
-      recipients,
-      ...(scheduledFor ? { state: 'SCHEDULED' as const, scheduledFor } : {}),
-    });
+    const draft =
+      input.target.type === 'user'
+        ? await this.userDraft(actor, input, input.target.userId)
+        : await this.sectorDraft(actor, sectorRequestOf(input, input.target));
+    const { record } = draft;
+    const created = await this.repo.createDispatch(record);
     const done: CreatedDispatch = {
       actorId: actor.id,
-      channelIds,
-      target,
+      channelIds: draft.channelIds,
+      trail: draft.trail,
       created,
-      skipped: skippedOf(recipients, seesFullPhone(actor)),
+      skipped: skippedOf(record.recipients, seesFullPhone(actor)),
     };
-    return scheduledFor
-      ? this.scheduled(done, scheduledFor)
+    return record.scheduledFor
+      ? this.scheduled(done, record.scheduledFor)
       : this.dispatchNow(done);
+  }
+
+  /** Alvo pessoa (GF1): o caminho de hoje, sem finalidade nem foto. */
+  private async userDraft(
+    actor: TeamActor,
+    input: CreateTeamDispatchInput,
+    userId: string,
+  ): Promise<DispatchDraft> {
+    const target = await this.resolveUser(actor, userId);
+    const numbers = await this.requireNumbers(target);
+    // O DTO só agenda alvo setor (D9); chegando direto, 422 como hoje.
+    if (input.when === 'shift_start') throw invalidShift();
+    await this.requireOpen(numbers);
+    const recipients = await this.classify(target.members, numbers);
+    if (!recipients.some((r) => r.status === 'QUEUED')) throw noRecipients();
+    const channelIds = recipientChannelIds(recipients);
+    const { targetId, targetLabel } = target;
+    return {
+      record: {
+        authorId: actor.id,
+        targetType: 'USER',
+        targetId,
+        targetLabel,
+        ...shiftColumns(null),
+        sectors: [],
+        channelId: singleChannelId(channelIds),
+        text: input.text,
+        recipients,
+      },
+      channelIds,
+      trail: { targetType: 'USER', targetId },
+    };
+  }
+
+  /**
+   * Alvo setor (GF9): a impressão é conferida antes da seleção (marcado que
+   * perdeu a relação dá 409, não 422) e as travas, antes do provedor. Nada é
+   * gravado antes do fim.
+   */
+  private async sectorDraft(
+    actor: TeamActor,
+    input: AudienceRequest,
+  ): Promise<DispatchDraft> {
+    const resolved = await this.audience.resolve(actor, input);
+    if (resolved.audienceKey !== input.audienceKey) throw audienceChanged();
+    if (resolved.unknownSelected.length > 0) throw invalidSelection();
+    const scheduledFor = sectorScheduledFor(input, resolved);
+    const found = await this.repo.findSectorChannels(
+      resolved.sectors.map((s) => s.id),
+    );
+    requireNoBlock(
+      blocksFor({
+        request: input,
+        receivingCount: resolved.receiving.length,
+        selectedCount: resolved.ruleSnapshot.selectedUserIds?.length ?? null,
+        scheduledFor,
+        numbersMissing: resolved.sectors.some((s) => !found.get(s.id)),
+        now: new Date(),
+      }),
+    );
+    const numbers = requireSectorNumbers(resolved.sectors, found);
+    if (!scheduledFor) await this.requireOpen(numbers);
+    const pending = scheduledFor ? 'SCHEDULED' : 'QUEUED';
+    const recipients = sectorRecipients(resolved, pending, numbers);
+    const channelIds = recipientChannelIds(recipients);
+    return {
+      record: {
+        authorId: actor.id,
+        ...sectorDispatchFields(resolved, input),
+        channelId: singleChannelId(channelIds),
+        text: input.text,
+        recipients,
+        ...(scheduledFor ? { state: 'SCHEDULED' as const, scheduledFor } : {}),
+      },
+      channelIds,
+      trail: {
+        targetType: 'SECTOR',
+        targetId: resolved.sectors[0].id,
+        ...sectorTrail(resolved),
+      },
+    };
   }
 
   /** Agendado (T8): nada vai para a fila agora; o disparo é do worker (T9). */
   private async scheduled(
-    { actorId, created, skipped }: CreatedDispatch,
+    { actorId, trail, created, skipped }: CreatedDispatch,
     scheduledFor: Date,
   ): Promise<CreateTeamDispatchResponse> {
     const scheduled = created.recipients.filter(
@@ -273,7 +326,15 @@ export class TeamWhatsappService {
       'team_whatsapp.schedule',
       'TeamWhatsappDispatch',
       created.id,
-      { actorId, dispatchId: created.id, scheduled, skipped: skipped.length },
+      {
+        actorId,
+        dispatchId: created.id,
+        // GF12: finalidade e base (valores da API), sem nome, telefone nem texto.
+        purpose: trail.purpose,
+        base: trail.base,
+        scheduled,
+        skipped: skipped.length,
+      },
     );
     return {
       dispatchId: created.id,
@@ -287,7 +348,7 @@ export class TeamWhatsappService {
   private async dispatchNow({
     actorId,
     channelIds,
-    target,
+    trail,
     created,
     skipped,
   }: CreatedDispatch): Promise<CreateTeamDispatchResponse> {
@@ -301,11 +362,8 @@ export class TeamWhatsappService {
       created.id,
       {
         actorId,
-        targetType: target.targetType,
-        targetId: target.targetId,
-        ...(target.targetType === 'SECTOR'
-          ? { sectorIds: target.sectors.map((s) => s.sectorId) }
-          : {}),
+        // Setor: + setores, finalidade e base (GF12); pessoa: como hoje.
+        ...trail,
         channelIds,
         queued: queuedIds.length,
         skipped: skipped.length,
@@ -438,48 +496,19 @@ export class TeamWhatsappService {
     return actor;
   }
 
-  /**
-   * Disparo amplo (B4/DB9): conferido sobre os setores que o alvo realmente
-   * alcança (já resolvidos e dentro do alcance do ator), antes de qualquer
-   * gravação; vale igual para o envio imediato e o agendado. Quem tem
-   * `equipe.disparo_amplo` não precisa nem da lista de setores ativos.
-   */
-  private async requireBroadSendAllowed(
-    actor: TeamActor,
-    target: ResolvedTarget,
-  ): Promise<void> {
-    if (target.targetType !== 'SECTOR' || canBroadSend(actor)) return;
-    const reached = target.sectors.map((s) => s.sectorId);
-    if (isBroadSend(reached, await this.repo.listActiveSectorIds())) {
-      throw broadSendDenied();
-    }
-  }
-
-  private resolveTarget(
-    actor: TeamActor,
-    target: CreateTeamDispatchInput['target'],
-  ): Promise<ResolvedTarget> {
-    return target.type === 'user'
-      ? this.resolveUser(actor, target.userId)
-      : this.resolveSector(actor, target);
-  }
-
   private async resolveUser(
     actor: TeamActor,
     userId: string,
-  ): Promise<ResolvedTarget> {
+  ): Promise<ResolvedUser> {
     const user = await this.repo.findTargetUser(userId);
     if (!user || !canSendToUser(actor, user)) throw teamForbidden();
     // D8: sem área na data não há número; recusar é mais claro que gravar um pulado.
     const area = await this.daySector(user, todayIn(new Date()));
     if (!area) throw noSector();
     return {
-      targetType: 'USER',
       targetId: user.id,
       targetLabel: displayName(user),
-      sectors: [],
       numberSectors: [{ sectorId: area.id, sectorName: area.name }],
-      shift: null,
       // Alvo pessoa: o turno gravado é o do cadastro.
       members: [
         {
@@ -490,7 +519,6 @@ export class TeamWhatsappService {
           routeSectorId: area.id,
         },
       ],
-      day: null,
     };
   }
 
@@ -513,70 +541,6 @@ export class TeamWhatsappService {
       sectors.push(await this.requireSector(actor, id));
     }
     return sectors;
-  }
-
-  /**
-   * C5: política de cada setor (403) → turnos (422 `invalid_shift`) → níveis
-   * (422 `invalid_level`) → lista refeita → seleção (422 `invalid_selection`):
-   * `userIds` não abre outro setor. A seleção é validada contra a escala da data
-   * refeita agora, com os mesmos setores, níveis, turnos e folga (GC7), não
-   * contra a lista da tela. Setores por nome: o primeiro é o `targetId` (C6).
-   * Vários turnos (D9): as colunas de turno do envio ficam null e o rótulo
-   * leva os nomes.
-   */
-  private async resolveSector(
-    actor: TeamActor,
-    target: SectorTargetInput,
-  ): Promise<ResolvedTarget> {
-    const ids = [...new Set(target.sectorIds)];
-    const sectors = (await this.requireSectors(actor, ids)).sort(byName);
-    const shifts = await this.repo.listActiveShifts();
-    const picked = requireShifts(shifts, target.shiftIds);
-    const levels = await this.requireLevels(target);
-    const { date } = target;
-    const days = await this.sectorDays(sectors, date);
-    const shiftIds = picked.length ? new Set(picked.map((s) => s.id)) : null;
-    const includeOff = shiftIds === null && target.includeOff === true;
-    const filter = { shiftIds, includeOff, level: levels.filter };
-    const members = selectMembers(eligibleAcross(days, filter), target.userIds);
-    if (members === null) throw invalidSelection();
-    const names = new Map(shifts.map((s) => [s.id, s.name]));
-    const dispatchSectors = sectors.map((s) => ({
-      sectorId: s.id,
-      sectorName: s.name,
-    }));
-    return {
-      targetType: 'SECTOR',
-      targetId: sectors[0].id,
-      targetLabel: sectorTargetLabel({
-        sectorNames: sectors.map((s) => s.name),
-        levelNames: levels.names,
-        shiftName: shiftsLabel(picked.map((s) => s.name)),
-        date,
-        selected: target.userIds ? members.length : null,
-      }),
-      sectors: dispatchSectors,
-      numberSectors: dispatchSectors,
-      shift: picked.length === 1 ? picked[0] : null,
-      members: members.map((m) => toTargetMember(m, names)),
-      day: {
-        rosterDate: date,
-        includeOff,
-        roster: rosterSnapshot(days, { shiftIds, level: levels.filter }, names),
-      },
-    };
-  }
-
-  /** C5: só lê os níveis ativos com `levelIds`; inexistente ou inativo → 422. */
-  private async requireLevels(
-    target: SectorTargetInput,
-  ): Promise<{ filter: LevelFilter; names: string[] }> {
-    const active = target.levelIds?.length
-      ? await this.levels.listActive()
-      : [];
-    const levels = pickLevels(active, target);
-    if (!levels) throw invalidLevel();
-    return levels;
   }
 
   /**
@@ -625,7 +589,7 @@ export class TeamWhatsappService {
   /** Escala de cada setor na data, numa rodada de consultas (regra de hoje: uma pessoa em um setor só). */
   private async sectorDays(
     sectors: readonly TeamSector[],
-    date: SectorTargetInput['date'],
+    date: CivilDate,
   ): Promise<SectorDay[]> {
     const people = await this.repo.loadDayPeopleMany(
       sectors.map((s) => s.id),
@@ -647,7 +611,7 @@ export class TeamWhatsappService {
    * inteiro (422, GC7). Só banco; o provedor só entra em `requireOpen`.
    */
   private async requireNumbers(
-    target: ResolvedTarget,
+    target: ResolvedUser,
   ): Promise<Map<string, TeamSectorChannelRow>> {
     const sectors = target.numberSectors.map((s) => ({
       id: s.sectorId,
@@ -670,13 +634,12 @@ export class TeamWhatsappService {
   }
 
   /**
-   * O contato carrega a grafia que o merge elegeu como a que entrega. Sem
-   * telefone, suprimido ou sem autorização de contato → SKIPPED já aqui, também
-   * no agendamento (D9); o resto fica `pending` (QUEUED agora, SCHEDULED no agendado).
+   * Alvo pessoa: o contato carrega a grafia que o merge elegeu como a que
+   * entrega. Sem telefone, suprimido ou sem autorização de contato → SKIPPED;
+   * o resto fica QUEUED.
    */
   private async classify(
     targets: readonly TargetMember[],
-    pending: PendingStatus,
     numbers: ReadonlyMap<string, TeamSectorChannelRow>,
   ): Promise<NewTeamDispatchRecipient[]> {
     const recipients: NewTeamDispatchRecipient[] = [];
@@ -694,21 +657,15 @@ export class TeamWhatsappService {
       recipients.push(
         skipReason
           ? { ...base, status: 'SKIPPED', skipReason }
-          : { ...base, status: pending, skipReason: null },
+          : { ...base, status: 'QUEUED', skipReason: null },
       );
     }
     return recipients;
   }
 
-  /**
-   * Ordem C8: sem telefone → supressão → sem autorização de contato. A supressão
-   * (pedido de saída) vale por cima; `CADASTRO_ANTERIOR` autorizado não bloqueia.
-   */
-  private async skipReasonOf(m: TeamMember): Promise<ClassifySkip | null> {
-    const phone = m.contact?.phoneE164 ?? m.phoneE164;
-    if (!phone) return 'NO_PHONE';
-    if (await this.consent.isSuppressed(phone)) return 'SUPPRESSED';
-    return m.contactAuthorization === 'AUTORIZADO' ? null : 'NOT_AUTHORIZED';
+  /** Ordem C8 (`phoneSkipReason`, a mesma do público por finalidade, DF3). */
+  private skipReasonOf(m: TeamMember): Promise<PhoneSkipReason | null> {
+    return phoneSkipReason(m, this.consent);
   }
 }
 
@@ -776,48 +733,6 @@ export async function enqueueTeamRetry(
   }
 }
 
-/**
- * Início do turno do filtro na data da escala, em Manaus (GC5). O DTO garante
- * alvo setor com turno em `shift_start`; agora ou no passado → 422.
- */
-function shiftStartOf(target: ResolvedTarget, now: Date): Date {
-  if (!target.shift || !target.day) throw invalidShift();
-  const start = zonedStart(target.day.rosterDate, target.shift.startTime);
-  if (start.getTime() <= now.getTime()) throw scheduleInPast();
-  return start;
-}
-
-/** Destinatário do alvo setor: turno do dia, setor em que entrou e nível na hora (C6). */
-function toTargetMember(
-  m: SectorMember,
-  shiftNames: ReadonlyMap<string, string>,
-): TargetMember {
-  return {
-    member: m,
-    ...dayShift(m, shiftNames),
-    snapshot: {
-      ...m.inSector,
-      levelName: m.level?.name ?? null,
-    },
-    routeSectorId: m.inSector.sectorId,
-  };
-}
-
-/**
- * Sem `shiftIds` = todos os turnos ([]); com, todos precisam estar entre os
- * ativos (422 `invalid_shift`). Devolve na ordem de `listActiveShifts` (D9).
- */
-function requireShifts(
-  active: readonly ShiftRef[],
-  shiftIds: readonly string[] | undefined,
-): TeamShiftSnapshot[] {
-  if (shiftIds === undefined) return [];
-  const wanted = new Set(shiftIds);
-  const picked = active.filter((s) => wanted.has(s.id));
-  if (picked.length !== wanted.size) throw invalidShift();
-  return picked;
-}
-
 type ChannelRow = Awaited<
   ReturnType<TeamWhatsappRepository['listEligibleChannels']>
 >[number];
@@ -837,16 +752,6 @@ function eligibleChannels(
         ]
       : [],
   );
-}
-
-/** Colunas de snapshot do envio; null = todos os turnos ou alvo pessoa. */
-function shiftColumns(shift: TeamShiftSnapshot | null) {
-  return {
-    shiftId: shift?.id ?? null,
-    shiftName: shift?.name ?? null,
-    shiftStartTime: shift?.startTime ?? null,
-    shiftEndTime: shift?.endTime ?? null,
-  };
 }
 
 function isSkipped<R extends NewTeamRecipient>(
@@ -933,5 +838,7 @@ function toListItem(
     state: row.state,
     scheduledFor: row.scheduledFor?.toISOString() ?? null,
     firedAt: row.firedAt?.toISOString() ?? null,
+    // CF3: finalidade, base e atividade; envio antigo → as quatro nulas.
+    ...purposeView(row),
   };
 }

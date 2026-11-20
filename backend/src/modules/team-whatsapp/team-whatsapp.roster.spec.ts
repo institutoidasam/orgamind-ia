@@ -1,15 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   dayMembers,
-  eligibleAcross,
-  eligibleFor,
   passesLevel,
   sectorTargetLabel,
   shiftsLabel,
   toRosterMember,
   toRosterMembers,
   type DayMember,
-  type DispatchFilter,
   type LevelFilter,
 } from './team-whatsapp.roster';
 import { withAssignmentOn } from './team-member-assignment';
@@ -223,45 +220,6 @@ describe('passesLevel (C5)', () => {
   });
 });
 
-describe('eligibleFor com vários turnos (D9)', () => {
-  const work = (shiftId: string): DayMember['situation'] => ({
-    kind: 'WORK',
-    sectorId: 's1',
-    shiftId,
-    source: 'PROFILE',
-  });
-  const off: DayMember['situation'] = {
-    kind: 'OFF',
-    reason: 'DAY_OFF',
-    source: 'CYCLE',
-  };
-  const DN = new Set(['dia', 'noite']);
-  const only = (includeOff: boolean) => ({ shiftIds: DN, includeOff });
-  const all = { shiftIds: null, includeOff: true };
-
-  it.each<[string, DayMember['situation'], DispatchFilter, boolean]>([
-    ['WORK no Dia passa', work('dia'), only(false), true],
-    ['WORK na Noite passa', work('noite'), only(false), true],
-    [
-      'WORK fora dos turnos pedidos não passa',
-      work('manha'),
-      only(false),
-      false,
-    ],
-    ['OFF não passa', off, only(false), false],
-    [
-      'OFF não passa nem com includeOff (só em todos os turnos)',
-      off,
-      only(true),
-      false,
-    ],
-    ['todos os turnos (null) + includeOff: OFF passa', off, all, true],
-  ])('%s', (_caso, situation, filter, expected) => {
-    const member = { ...dayPerson(), fromOtherSector: false, situation };
-    expect(eligibleFor([member], filter)).toHaveLength(expected ? 1 : 0);
-  });
-});
-
 describe('shiftsLabel (D9)', () => {
   it.each<[string[], string | null]>([
     [[], null],
@@ -270,32 +228,5 @@ describe('shiftsLabel (D9)', () => {
     [['Dia', 'Noite', 'Madrugada'], 'Dia, Noite +1'],
   ])('%j → %s', (names, expected) => {
     expect(shiftsLabel(names)).toBe(expected);
-  });
-});
-
-describe('eligibleAcross com vários turnos e setores (D9)', () => {
-  const ana: DayMember = {
-    ...dayPerson({ id: 'ana', name: 'Ana' }),
-    fromOtherSector: false,
-    situation: {
-      kind: 'WORK',
-      sectorId: 'ti',
-      shiftId: 'noite',
-      source: 'PROFILE',
-    },
-  };
-
-  it('pessoa que aparece nos dois setores conta uma vez, no primeiro', () => {
-    const days = [
-      { sectorId: 'op', sectorName: 'Operação', members: [ana] },
-      { sectorId: 'ti', sectorName: 'TI', members: [ana] },
-    ];
-    const result = eligibleAcross(days, {
-      shiftIds: new Set(['dia', 'noite']),
-      includeOff: false,
-    });
-    expect(result.map((m) => [m.id, m.inSector.sectorId])).toEqual([
-      ['ana', 'op'],
-    ]);
   });
 });

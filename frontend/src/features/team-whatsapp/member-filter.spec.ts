@@ -1,200 +1,87 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildSectorTarget, canReceive, eligibleMembers, filterByLevel, isNotAuthorized, leftOutPeople, noScheduleCount,
-  offMembers, unverifiedCount,
+  buildSectorTarget, leftOutByReason, markableIds, markedReceiving, receivingByArea, toggleAllMarkable, unselectedPeople,
 } from './member-filter';
-import type { RosterMember } from './schemas';
+import type { TeamAudiencePreview } from './schemas';
+import { PREVIEW_RESPONSE, RULE_VIEW } from './audience-preview.test-fixtures';
 
-type Situation = RosterMember['situation'];
+const person = (userId: string, name: string, extra: Partial<TeamAudiencePreview['included'][number]> = {}) => ({
+  userId, name, sectorId: 's1', sectorName: 'Logística', shiftName: 'Manhã', levelName: null, phone: '•••• 0001', ...extra,
+});
+const out = (userId: string, name: string, reason: TeamAudiencePreview['excluded'][number]['reason']) => ({
+  userId, name, sectorId: 's1', sectorName: 'Logística', shiftName: 'Manhã', levelName: null, reason,
+});
 
-const work = (shiftId: string): Situation => ({ kind: 'WORK', sectorId: 's1', shiftId, source: 'CYCLE' });
-const OFF: Situation = { kind: 'OFF', reason: 'VACATION', source: 'EXCEPTION' };
-const NONE: Situation = { kind: 'NONE' };
+const rule = {
+  ...RULE_VIEW,
+  sectors: [{ id: 's1', name: 'Logística' }, { id: 's2', name: 'Atendimento' }],
+};
+const preview: TeamAudiencePreview = {
+  ...PREVIEW_RESPONSE,
+  rule,
+  included: [person('ana', 'Ana'), person('rui', 'Rui', { sectorId: 's2', sectorName: 'Atendimento' })],
+  excluded: [out('maria', 'Maria', 'vacation'), out('lia', 'Lia', 'not_selected'), out('pedro', 'Pedro', 'no_phone')],
+};
 
-function member(id: string, situation: Situation, extra: Partial<RosterMember> = {}): RosterMember {
-  return {
-    id, name: id, email: `${id}@x.test`, phoneE164: `+55929${id.length}`, hasPhone: true, phoneMasked: '•••• 0000',
-    isActive: true, jobTitle: null, fromOtherSector: false, situation, level: null, ...extra,
-  };
-}
-
-const members = [
-  member('ana', work('manha')),
-  member('joao', work('noite')),
-  member('visita', work('noite'), { fromOtherSector: true }),
-  member('maria', OFF),
-  member('ze', NONE),
-  member('lia', work('noite'), { isActive: false }),
-];
-const ids = (list: RosterMember[]) => list.map((m) => m.id);
-const SEM_TELEFONE = { phoneE164: null, hasPhone: false, phoneMasked: null };
-
-describe('telefone pelo hasPhone (DB8)', () => {
-  const semChave = { phoneE164: null, phoneMasked: '•••• 7777' };
-
-  it('sem a chave: não autorizado continua no grupo próprio e a prévia não marca no_phone', () => {
-    const ana = member('ana', work('noite'), semChave);
-    const caio = member('caio', work('noite'), { ...semChave, contactAuthorization: 'NAO_AUTORIZADO' });
-    expect(canReceive(ana)).toBe(true);
-    expect(canReceive(caio)).toBe(false);
-    expect(isNotAuthorized(caio)).toBe(true);
-    expect(leftOutPeople([ana, caio], null)).toEqual([{ name: 'caio', reason: 'not_authorized' }]);
-  });
-
-  it('hasPhone false é sem telefone: não recebe, não é "não autorizado" e a prévia marca no_phone', () => {
-    const bia = member('bia', work('noite'), { ...SEM_TELEFONE, contactAuthorization: 'NAO_AUTORIZADO' });
-    expect(canReceive(bia)).toBe(false);
-    expect(isNotAuthorized(bia)).toBe(false);
-    expect(leftOutPeople([bia], null)).toEqual([{ name: 'bia', reason: 'no_phone' }]);
+describe('member-filter: rótulo da seleção', () => {
+  it('m2: "seleção de N" conta as pessoas marcadas, mesmo as que a prévia deixou de fora', () => {
+    const result = buildSectorTarget({ preview, sectorIds: ['s1', 's2'], selectedIds: ['ana', 'rui', 'maria'] });
+    expect(result.label).toBe('Atendimento, Logística · Manhã · 20/11 · seleção de 3');
+    expect(result).toMatchObject({ userIds: ['ana', 'rui', 'maria'], recipients: [{ id: 'ana' }, { id: 'rui' }] });
   });
 });
 
-describe('autorização do contato', () => {
-  const bloqueado = member('caio', work('noite'), { contactAuthorization: 'NAO_AUTORIZADO' });
-  const antigo = (id: string) => member(id, work('noite'), { authorizationUnverified: true });
-  const lista = [member('ana', work('noite')), bloqueado, antigo('dani'), antigo('edu')];
-
-  it('NAO_AUTORIZADO com telefone fica de fora como "not_authorized" e nunca vira destinatário, nem marcado', () => {
-    expect(leftOutPeople(lista, null)).toEqual([{ name: 'caio', reason: 'not_authorized' }]);
-    const target = buildSectorTarget({
-      sectors: [{ id: 's1', name: 'TI', members: lista }], levels: [], levelFilter: { levelIds: [], withoutLevel: false },
-      shifts: [{ id: 'noite', name: 'Noite' }], shiftIds: ['noite'], date: '2026-11-10', includeOff: false,
-      selectedIds: ['ana', 'caio'],
-    });
-    expect(target.type === 'sector' && target.recipients.map((r) => r.id)).toEqual(['ana']);
-  });
-
-  it('unverifiedCount: null conta quem recebe; com ids, só os marcados; NAO_AUTORIZADO não entra', () => {
-    expect(unverifiedCount([...lista, { ...bloqueado, authorizationUnverified: true }], null)).toBe(2);
-    expect(unverifiedCount(lista, ['ana', 'dani'])).toBe(1);
-  });
-});
-
-describe('eligibleMembers', () => {
-  it.each([
-    ['turno lista só o WORK daquele turno', ['noite'], false, ['joao', 'visita']],
-    ['dois turnos listam o WORK de qualquer um deles', ['manha', 'noite'], false, ['ana', 'joao', 'visita']],
-    ['sem turnos (todos) lista todo WORK e deixa o NONE de fora', [], false, ['ana', 'joao', 'visita']],
-    ['sem turnos com includeOff acrescenta quem está de folga', [], true, ['ana', 'joao', 'visita', 'maria']],
-    ['turno específico ignora includeOff', ['noite'], true, ['joao', 'visita']],
-  ])('%s', (_name, shiftIds, includeOff, expected) => {
-    expect(ids(eligibleMembers(members, shiftIds, includeOff))).toEqual(expected);
-  });
-});
-
-describe('grupos informativos', () => {
-  it('offMembers exclui visitantes', () => {
-    const visitorOff = member('rui', OFF, { fromOtherSector: true });
-    expect(ids(offMembers([...members, visitorOff]))).toEqual(['maria']);
-  });
-
-  it('noScheduleCount conta NONE', () => {
-    expect(noScheduleCount(members)).toBe(1);
-  });
-});
-
-describe('filterByLevel', () => {
-  const coord = { id: 'level_coordinator', name: 'Coordenador' };
-  const staff = [
-    member('ana', work('manha'), { level: coord }),
-    member('joao', work('manha'), { level: { id: 'level_employee', name: 'Funcionário' } }),
-    member('maria', OFF, { level: coord }),
-    member('ze', work('manha')),
-  ];
-  it.each([
-    ['sem filtro, todos', [], false, ['ana', 'joao', 'maria', 'ze']],
-    ['Coordenador, só coordenadores (inclusive de folga)', ['level_coordinator'], false, ['ana', 'maria']],
-    ['Sem nível, só sem nível', [], true, ['ze']],
-    ['Coordenador e Sem nível juntos', ['level_coordinator'], true, ['ana', 'maria', 'ze']],
-  ])('%s', (_name, levelIds, withoutLevel, expected) => {
-    expect(ids(filterByLevel(staff, { levelIds, withoutLevel }))).toEqual(expected);
-  });
-});
-
-const none = { levelIds: [], withoutLevel: false };
-const levels = [{ id: 'l1', name: 'Coordenador' }, { id: 'l2', name: 'Funcionário' }];
-
-const shifts = [
-  { id: 'manha', name: 'Manhã' },
-  { id: 'tarde', name: 'Tarde' },
-  { id: 'noite', name: 'Noite' },
-];
-
-describe('buildSectorTarget', () => {
-  const base = {
-    sectors: [{ id: 's1', name: 'Produção', members }], levels, levelFilter: none, shifts, date: '2026-10-21',
-  };
-
-  it('seleção: label com data e seleção, userIds, só o escolhido como destinatário e o resto como não selecionado', () => {
-    const target = buildSectorTarget({ ...base, shiftIds: ['noite'], includeOff: false, selectedIds: ['joao'] });
-    expect(target).toEqual({
-      type: 'sector', sectorIds: ['s1'], levelIds: [], withoutLevel: false, date: '2026-10-21', shiftIds: ['noite'],
-      includeOff: false, label: 'Produção · Noite · 21/10 · seleção de 1', userIds: ['joao'],
-      recipients: [{ id: 'joao', name: 'joao' }], leftOut: [{ name: 'visita', reason: 'unselected' }],
-    });
-  });
-
-  it('todos os turnos com folga: sem shiftIds, sem userIds, e sem telefone fica de fora', () => {
-    const semFone = member('pedro', work('noite'), SEM_TELEFONE);
-    const target = buildSectorTarget({
-      ...base, sectors: [{ id: 's1', name: 'Produção', members: [...members, semFone] }],
-      shiftIds: [], includeOff: true, selectedIds: null,
-    });
-    expect(target).toMatchObject({
-      shiftIds: [], includeOff: true, userIds: null, label: 'Produção · todos os turnos · 21/10',
-      leftOut: [{ name: 'pedro', reason: 'no_phone' }],
-    });
-    expect(target.type === 'sector' && target.recipients.map((r) => r.id)).toEqual(['ana', 'joao', 'visita', 'maria']);
-  });
-
-  it('includeOff só vale sem turnos escolhidos', () => {
-    const target = buildSectorTarget({ ...base, shiftIds: ['noite'], includeOff: true, selectedIds: null });
-    expect(target).toMatchObject({ shiftIds: ['noite'], includeOff: false });
-  });
-
-  it('vários turnos: rótulo na ordem dos turnos, até dois nomes e +N, e quem trabalha em qualquer um recebe', () => {
-    const two = buildSectorTarget({ ...base, shiftIds: ['noite', 'manha'], includeOff: false, selectedIds: null });
-    expect(two).toMatchObject({ shiftIds: ['noite', 'manha'], label: 'Produção · Manhã, Noite · 21/10' });
-    expect(two.type === 'sector' && two.recipients.map((r) => r.id)).toEqual(['ana', 'joao', 'visita']);
-    const three = buildSectorTarget({ ...base, shiftIds: ['manha', 'tarde', 'noite'], includeOff: false, selectedIds: null });
-    expect(three).toMatchObject({ label: 'Produção · Manhã, Tarde +1 · 21/10' });
-  });
-
-});
-
-describe('buildSectorTarget: setores e níveis', () => {
-  it('vários setores e níveis: rótulo com dois nomes + N, Sem nível por último, e só o nível escolhido recebe', () => {
-    const coord = { id: 'l1', name: 'Coordenador' };
-    const sector = (id: string, name: string, level: typeof coord | null) =>
-      ({ id, name, members: [member(`${id}-c`, work('noite'), { level }), member(`${id}-x`, work('noite'))] });
-    const target = buildSectorTarget({
-      sectors: [sector('rh', 'RH', coord), sector('ti', 'TI', coord), sector('op', 'Operação', coord)],
-      levels, levelFilter: { levelIds: ['l1'], withoutLevel: true }, shifts,
-      date: '2026-10-21', shiftIds: ['noite'], includeOff: false, selectedIds: null,
-    });
-    expect(target).toMatchObject({
-      sectorIds: ['rh', 'ti', 'op'], levelIds: ['l1'], withoutLevel: true,
-      label: 'Operação, RH +1 · Coordenador, Sem nível · Noite · 21/10',
-    });
-    expect(target.type === 'sector' && target.recipients).toHaveLength(6);
-  });
-});
-
-describe('leftOutPeople', () => {
-  const list = [
-    member('ana', work('noite')),
-    member('bruno', work('noite'), SEM_TELEFONE),
-    member('caio', work('noite')),
-  ];
-
-  it('com seleção: quem tem telefone e não foi marcado é "unselected"; sem telefone é "no_phone"; na ordem da lista', () => {
-    expect(leftOutPeople(list, ['caio'])).toEqual([
-      { name: 'ana', reason: 'unselected' },
-      { name: 'bruno', reason: 'no_phone' },
+describe('member-filter: lista da prévia', () => {
+  it('agrupa por área pelo sectorId da prévia, na ordem da regra, e cada pessoa uma vez', () => {
+    const groups = receivingByArea(preview);
+    expect(groups.map((g) => [g.sectorId, g.name, g.people.map((p) => p.userId)])).toEqual([
+      ['s1', 'Logística', ['ana']],
+      ['s2', 'Atendimento', ['rui']],
     ]);
   });
 
-  it('enviar para todos: só quem não tem telefone fica de fora', () => {
-    expect(leftOutPeople(list, null)).toEqual([{ name: 'bruno', reason: 'no_phone' }]);
+  it('área que a regra não lista entra no fim, com o nome da pessoa', () => {
+    const extra = { ...preview, included: [person('zeca', 'Zeca', { sectorId: 's9', sectorName: 'Apoio' })] };
+    expect(receivingByArea(extra).map((g) => g.name)).toEqual(['Logística', 'Atendimento', 'Apoio']);
+  });
+
+  it('só Vão receber e Não selecionado são marcáveis; os de fora por motivo próprio, não', () => {
+    expect(unselectedPeople(preview).map((p) => p.userId)).toEqual(['lia']);
+    expect(leftOutByReason(preview).map((p) => p.userId)).toEqual(['maria', 'pedro']);
+    expect(markableIds(preview)).toEqual(['ana', 'rui', 'lia']);
+  });
+
+  it('Marcar todos marca os marcáveis; com todos marcados limpa a seleção', () => {
+    const all = markableIds(preview);
+    expect([...toggleAllMarkable(all, new Set(['ana']))]).toEqual(['ana', 'rui', 'lia']);
+    expect(toggleAllMarkable(all, new Set([...all, 'maria'])).size).toBe(0);
+    expect(toggleAllMarkable([], new Set()).size).toBe(0);
+  });
+
+  it('marcado que está de fora não conta como quem recebe', () => {
+    expect(markedReceiving(preview.included, new Set(['rui', 'maria'])).map((p) => p.userId)).toEqual(['rui']);
+  });
+});
+
+describe('member-filter: alvo do diálogo', () => {
+  const target = (selectedIds: string[]) => buildSectorTarget({ preview, sectorIds: ['s1', 's2'], selectedIds });
+
+  it('leva a regra e as pessoas da prévia, com o rótulo do back', () => {
+    expect(target([])).toEqual({
+      type: 'sector', sectorIds: ['s1', 's2'], levelIds: [], withoutLevel: false, date: '2026-11-20',
+      shiftIds: ['sh1'], includeOff: false, userIds: null,
+      label: 'Atendimento, Logística · Manhã · 20/11',
+      recipients: [{ id: 'ana', name: 'Ana' }, { id: 'rui', name: 'Rui' }],
+      leftOut: [{ name: 'Lia', reason: 'unselected' }, { name: 'Pedro', reason: 'no_phone' }],
+    });
+  });
+
+  it('com marcados leva os ids marcados e "seleção de N"; sem turnos escolhidos, "todos os turnos"', () => {
+    const all = { ...preview, rule: { ...rule, shifts: null, levels: [{ id: 'l1', name: 'Coordenador' }], withoutLevel: true } };
+    const result = buildSectorTarget({ preview: all, sectorIds: ['s1', 's2'], selectedIds: ['ana', 'rui'] });
+    expect(result).toMatchObject({
+      shiftIds: [], levelIds: ['l1'], withoutLevel: true, userIds: ['ana', 'rui'],
+      label: 'Atendimento, Logística · Coordenador, Sem nível · todos os turnos · 20/11 · seleção de 2',
+    });
   });
 });

@@ -116,9 +116,10 @@ const PARITY: ParityRow[] = [
   },
 ];
 
-/** Rotas novas do Lote C (não são "função que já existia"): ainda sem linha na tabela de paridade. */
+/** Rotas novas dos Lotes C e F (não são "função que já existia"): ainda sem linha na tabela de paridade. */
 const NEW_ROUTES: readonly string[] = [
   'AuditTrailController GET /people/:userId/assignments',
+  'TeamWhatsappController POST /dispatches/preview', // Lote F (C4): portão do envio
 ];
 
 function withoutNew(found: string[], added: readonly string[]): string[] {

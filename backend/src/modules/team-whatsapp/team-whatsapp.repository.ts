@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import {
   Prisma,
+  type TeamAudienceBase,
+  type TeamDispatchPurpose,
   type TeamWhatsappDispatchState,
   type TeamWhatsappRecipientStatus,
   type TeamWhatsappSkipReason,
@@ -8,7 +10,13 @@ import {
 } from '@prisma/client';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import type { ShiftRef } from '../../schemas/contracts/shift.schema';
-import { rosterSnapshotSchema } from '../../schemas/contracts/team-whatsapp.schema';
+import {
+  audienceExcludedSnapshotSchema,
+  audienceRuleSnapshotSchema,
+  rosterSnapshotSchema,
+  type AudienceExcludedSnapshot,
+  type AudienceRuleSnapshot,
+} from '../../schemas/contracts/team-whatsapp.schema';
 import {
   toDbDate,
   todayIn,
@@ -116,6 +124,13 @@ const dispatchListSelect = {
   state: true,
   scheduledFor: true,
   firedAt: true,
+  // Finalidade e atividade (Lote F); a regra e os excluídos (Json) só no detalhe.
+  purpose: true,
+  audienceBase: true,
+  activityDate: true,
+  activityTime: true,
+  activityPlace: true,
+  urgencyReason: true,
   author: { select: { id: true, name: true, email: true } },
   sectors: { select: { sectorId: true, sectorName: true } },
 } satisfies Prisma.TeamWhatsappDispatchSelect;
@@ -133,6 +148,19 @@ const dispatchDetailSelect = {
   scheduledFor: true,
   firedAt: true,
   roster: true,
+  // Finalidade, atividade, regra e excluídos gravados (Lote F): o histórico lê, nunca recalcula (DF2).
+  // `rosterDate` e `includeOff` entram no painel da regra (CF3).
+  rosterDate: true,
+  includeOff: true,
+  purpose: true,
+  audienceBase: true,
+  activityDate: true,
+  activityTime: true,
+  activityPlace: true,
+  urgencyReason: true,
+  audienceRule: true,
+  audienceExcluded: true,
+  schedulePolicy: true,
   author: { select: { id: true, name: true } },
   sectors: { select: { sectorId: true, sectorName: true } },
 } satisfies Prisma.TeamWhatsappDispatchSelect;
@@ -218,6 +246,13 @@ export type RecipientSnapshot = {
 };
 export type NewTeamDispatchRecipient = NewTeamRecipient & RecipientSnapshot;
 
+/** Atividade do envio (reunião, palestra, hora extra...): dia civil, horário e local. */
+export type DispatchActivity = {
+  date: CivilDate | null;
+  time: string | null;
+  place: string | null;
+};
+
 export type NewTeamDispatch = {
   authorId: string;
   targetType: TeamWhatsappTargetType;
@@ -238,7 +273,16 @@ export type NewTeamDispatch = {
   // Foto da escala (C10; gravada no POST pela T7b). Ausente = null / false / null.
   rosterDate?: CivilDate | null;
   includeOff?: boolean;
+  // Envio novo com finalidade grava `roster: null` (DF4).
   roster?: RosterSnapshot | null;
+  // Finalidade e público (Lote F, CF8); ausente = null (envio sem finalidade).
+  // `schedulePolicy` não entra: o F nunca a escreve (GF13).
+  purpose?: TeamDispatchPurpose | null;
+  audienceBase?: TeamAudienceBase | null;
+  activity?: DispatchActivity | null;
+  urgencyReason?: string | null;
+  audienceRule?: AudienceRuleSnapshot | null;
+  audienceExcluded?: AudienceExcludedSnapshot | null;
   // Agendado (T8): state SCHEDULED + início do turno; destinatários SCHEDULED ou
   // SKIPPED. Ausente = envio imediato (DISPATCHED, sem scheduledFor).
   state?: TeamWhatsappDispatchState;
@@ -356,6 +400,45 @@ function mergeChannelCounts(
     (a, b) =>
       b.count - a.count || (a.name ?? '').localeCompare(b.name ?? '', 'pt-BR'),
   );
+}
+
+function activityColumns(activity: DispatchActivity | null | undefined) {
+  return {
+    activityDate: activity?.date ? toDbDate(activity.date) : null,
+    activityTime: activity?.time ?? null,
+    activityPlace: activity?.place ?? null,
+  };
+}
+
+type PurposeFields = Pick<
+  NewTeamDispatch,
+  | 'purpose'
+  | 'audienceBase'
+  | 'activity'
+  | 'urgencyReason'
+  | 'audienceRule'
+  | 'audienceExcluded'
+>;
+
+/**
+ * Colunas da finalidade (CF8): ausente grava null (envio sem finalidade, GF13).
+ * Regra e excluídos passam pelo parse do contrato, que descarta chaves fora dele
+ * (telefone, nome extra) antes de gravar, como o `roster` (GC10, DF2).
+ */
+function purposeColumns(fields: PurposeFields) {
+  const { audienceRule, audienceExcluded } = fields;
+  return {
+    purpose: fields.purpose ?? null,
+    audienceBase: fields.audienceBase ?? null,
+    urgencyReason: fields.urgencyReason ?? null,
+    ...activityColumns(fields.activity),
+    audienceRule: audienceRule
+      ? audienceRuleSnapshotSchema.parse(audienceRule)
+      : Prisma.DbNull,
+    audienceExcluded: audienceExcluded
+      ? audienceExcludedSnapshotSchema.parse(audienceExcluded)
+      : Prisma.DbNull,
+  };
 }
 
 function pageWindow({ page, pageSize }: PageQuery) {
@@ -630,8 +713,20 @@ export class TeamWhatsappRepository {
   }
 
   async createDispatch(data: NewTeamDispatch) {
-    const { recipients, sectors, rosterDate, includeOff, roster, ...dispatch } =
-      data;
+    const {
+      recipients,
+      sectors,
+      rosterDate,
+      includeOff,
+      roster,
+      purpose,
+      audienceBase,
+      activity,
+      urgencyReason,
+      audienceRule,
+      audienceExcluded,
+      ...dispatch
+    } = data;
     return this.prisma.teamWhatsappDispatch.create({
       data: {
         ...dispatch,
@@ -640,6 +735,14 @@ export class TeamWhatsappRepository {
         includeOff: includeOff ?? false,
         // parse descarta chaves fora do contrato (ex.: telefone) antes de gravar (GC10).
         roster: roster ? rosterSnapshotSchema.parse(roster) : Prisma.DbNull,
+        ...purposeColumns({
+          purpose,
+          audienceBase,
+          activity,
+          urgencyReason,
+          audienceRule,
+          audienceExcluded,
+        }),
         recipients: { create: recipients },
       },
       select: { id: true, recipients: { select: { id: true, status: true } } },

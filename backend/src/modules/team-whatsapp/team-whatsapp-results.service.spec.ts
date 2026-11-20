@@ -40,6 +40,17 @@ const detailRow = (
   scheduledFor: null,
   firedAt: null,
   roster: null,
+  rosterDate: null,
+  includeOff: false,
+  purpose: null,
+  audienceBase: null,
+  activityDate: null,
+  activityTime: null,
+  activityPlace: null,
+  urgencyReason: null,
+  audienceRule: null,
+  audienceExcluded: null,
+  schedulePolicy: null,
   author: { id: 'm', name: 'Gestor' },
   sectors: [
     { sectorId: 's2', sectorName: 'Vendas' },
@@ -187,6 +198,10 @@ const TOP_DETAIL = {
   },
   channels: [{ name: 'GBR', phoneE164: '+559230001111', count: 7 }],
   leftOut: { unselected: [], off: [] },
+  purpose: null,
+  base: null,
+  rule: null,
+  excluded: [],
 };
 
 function primeTopOfScreen(): void {

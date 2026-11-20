@@ -27,11 +27,11 @@ function blockOf(groups: ChannelGroupView[], hasMissing: boolean): SendBlock | n
 
 /**
  * Divide as áreas do envio por número (um grupo por número, na ordem das áreas). Área sem número
- * vai para `missing`; `receivingBySector` dá quantas pessoas de cada área recebem.
+ * vai para `missing`; `countBySector` dá quantas pessoas de cada área recebem (por `sectorId`).
  */
 export function buildChannelGroups(
   sectors: readonly RosterSectorView[],
-  receivingBySector: ReadonlyMap<string, number>,
+  countBySector: ReadonlyMap<string, number>,
 ): ChannelGroupsResult {
   const byChannel = new Map<string, ChannelGroupView>();
   const missing: ChannelGroupsResult['missing'] = [];
@@ -41,23 +41,11 @@ export function buildChannelGroups(
       continue;
     }
     const group = byChannel.get(channel.id) ?? { channel, sectors: [] };
-    group.sectors.push({ name, count: receivingBySector.get(sectorId) ?? 0 });
+    group.sectors.push({ name, count: countBySector.get(sectorId) ?? 0 });
     byChannel.set(channel.id, group);
   }
   const groups = [...byChannel.values()];
   return { groups, missing, block: blockOf(groups, missing.length > 0) };
-}
-
-/**
- * Quantas pessoas de cada área recebem: a escala traz cada pessoa em um só setor, então basta
- * cruzar os membros de cada setor com a lista de quem recebe.
- */
-export function receivingBySector(
-  sectors: readonly { sectorId: string; members: readonly { id: string }[] }[],
-  recipients: readonly { id: string }[],
-): Map<string, number> {
-  const ids = new Set(recipients.map((r) => r.id));
-  return new Map(sectors.map((s) => [s.sectorId, s.members.filter((m) => ids.has(m.id)).length]));
 }
 
 /** Número como a lista de conexões mostra (`phoneE164` cru); sem telefone, o nome do canal. */

@@ -99,119 +99,12 @@ export function dayMembers(input: {
     );
 }
 
-/** Filtro do alvo setor (C5/D9): turnos (null = todos), folga e nível. */
-export type DispatchFilter = {
-  shiftIds: ReadonlySet<string> | null;
-  includeOff: boolean;
-  level?: LevelFilter;
-};
-
-/**
- * Quem o filtro alcança (D2): com turnos, só WORK em um deles; "Todos os turnos"
- * (`shiftIds` null), todo WORK (sem NONE); `includeOff` (só em todos os turnos)
- * acrescenta os OFF do setor; por fim o nível (C5, `passesLevel`; sem filtro =
- * todos).
- */
-export function eligibleFor(
-  members: readonly DayMember[],
-  filter: DispatchFilter,
-): DayMember[] {
-  const { shiftIds, includeOff, level = null } = filter;
-  return members.filter((m) => {
-    if (!passesLevel(m, level)) return false;
-    const { situation, fromOtherSector } = m;
-    if (situation.kind === 'WORK')
-      return shiftIds === null || shiftIds.has(situation.shiftId);
-    const offHere = situation.kind === 'OFF' && !fromOtherSector;
-    return offHere && includeOff && shiftIds === null;
-  });
-}
-
 /** Escala de um setor do envio na data (`dayMembers`), com o nome do setor. */
 export type SectorDay = {
   sectorId: string;
   sectorName: string;
   members: readonly DayMember[];
 };
-
-/** Pessoa da lista conferida com o setor do envio em que entrou (C6). */
-export type SectorMember = DayMember & {
-  inSector: { sectorId: string; sectorName: string };
-};
-
-/**
- * Lista conferida de vários setores (GC7/D7): os elegíveis de cada setor, na
- * ordem recebida (o chamador ordena por nome), uma vez por pessoa, no primeiro
- * setor em que aparece.
- */
-export function eligibleAcross(
-  days: readonly SectorDay[],
-  filter: DispatchFilter,
-): SectorMember[] {
-  const seen = new Set<string>();
-  return days.flatMap(({ sectorId, sectorName, members }) =>
-    eligibleFor(members, filter).flatMap((m) => {
-      if (seen.has(m.id)) return [];
-      seen.add(m.id);
-      return [{ ...m, inSector: { sectorId, sectorName } }];
-    }),
-  );
-}
-
-/** Turno da pessoa no dia, para o destinatário gravado; fora de WORK → null. */
-export function dayShift(
-  member: DayMember,
-  shiftNames: ReadonlyMap<string, string>,
-): { shiftId: string | null; shiftName: string | null } {
-  const { situation } = member;
-  if (situation.kind !== 'WORK') return { shiftId: null, shiftName: null };
-  return {
-    shiftId: situation.shiftId,
-    shiftName: shiftNames.get(situation.shiftId) ?? null,
-  };
-}
-
-/**
- * Foto gravada no envio (C10), sem telefone (GC10), de todos os setores do
- * envio: `working` = a lista conferida sem os de folga (marcados ou não);
- * `off` = de folga/férias do setor principal; os dois no filtro de nível. Cada
- * pessoa leva o setor em que entrou e o nome do nível na hora (C6).
- */
-export function rosterSnapshot(
-  days: readonly SectorDay[],
-  filter: Omit<DispatchFilter, 'includeOff'>,
-  shiftNames: ReadonlyMap<string, string>,
-): RosterSnapshot {
-  const person = (m: DayMember, sectorName: string) => ({
-    userId: m.id,
-    name: nameOf(m),
-    jobTitle: m.jobTitle,
-    sectorName,
-    levelName: m.level?.name ?? null,
-  });
-  const working = eligibleAcross(days, { ...filter, includeOff: false }).map(
-    (m) => ({
-      ...person(m, m.inSector.sectorName),
-      shiftName: dayShift(m, shiftNames).shiftName,
-      reason: null,
-    }),
-  );
-  const level = filter.level ?? null;
-  const off = days.flatMap(({ sectorName, members }) =>
-    members.flatMap((m) =>
-      m.situation.kind === 'OFF' && !m.fromOtherSector && passesLevel(m, level)
-        ? [
-            {
-              ...person(m, sectorName),
-              shiftName: null,
-              reason: m.situation.reason,
-            },
-          ]
-        : [],
-    ),
-  );
-  return { working, off };
-}
 
 /**
  * Membro do GET roster: telefone que o envio usaria (contato ligado, senão o do

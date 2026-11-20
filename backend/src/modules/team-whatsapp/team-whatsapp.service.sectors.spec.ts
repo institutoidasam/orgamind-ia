@@ -16,6 +16,7 @@ import {
   sector,
   type Harness,
 } from './team-whatsapp.test-fixtures';
+import { withAudienceKey } from './team-whatsapp.sector-send.test-fixtures';
 
 // T8b (C5/C6): alvo setor com vários setores e filtro de nível. Noite de 21/10
 // começa às 22:00 de Manaus = 2026-10-22T02:00Z.
@@ -71,6 +72,7 @@ type SectorExtra = Partial<Omit<SectorTarget, 'type' | 'date'>>;
 const body = (extra: SectorExtra, when: 'now' | 'shift_start' = 'now') => ({
   channelId: 'c1',
   text: 'Oi',
+  purpose: 'shift_notice' as const,
   when,
   target: {
     type: 'sector' as const,
@@ -80,8 +82,18 @@ const body = (extra: SectorExtra, when: 'now' | 'shift_start' = 'now') => ({
     ...extra,
   },
 });
-const send = (extra: SectorExtra, actorId = ADMIN.id) =>
-  h.service.dispatch(actorId, body(extra));
+// `expectError`: o teste espera 403/422 do público (a chave sai de zeros).
+const sendBody = async (
+  input: CreateTeamDispatchInput,
+  actorId = ADMIN.id,
+  expectError = false,
+) =>
+  h.service.dispatch(
+    actorId,
+    await withAudienceKey(h, actorId, input, { expectError }),
+  );
+const send = (extra: SectorExtra, actorId = ADMIN.id, expectError = false) =>
+  sendBody(body(extra), actorId, expectError);
 const created = () => h.repo.createDispatch.mock.calls[0][0];
 const recipientsOf = () =>
   created().recipients.map((r) => [
@@ -119,6 +131,33 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe('withAudienceKey', () => {
+  it('withAudienceKey dá a mesma impressão da prévia para o mesmo corpo', async () => {
+    const input = body({ levelIds: [COORD.id] });
+    const keyed = await withAudienceKey(h, ADMIN.id, input);
+    const { text, purpose, when, target } = input;
+    const preview = await h.audience.preview(ADMIN.id, {
+      text,
+      purpose,
+      when,
+      target,
+    });
+    expect(keyed.audienceKey).toMatch(/^[0-9a-f]{64}$/);
+    expect(keyed.audienceKey).toBe(preview.audienceKey);
+  });
+
+  it('erro do público: relança sem expectError e devolve a chave de zeros com ele', async () => {
+    h.repo.findActor.mockResolvedValue(OP_MANAGER);
+    const input = body({ sectorIds: ['op', 'ti'] });
+    await expect(
+      withAudienceKey(h, OP_MANAGER.id, input),
+    ).rejects.toMatchObject({ code: 'team_whatsapp.forbidden' });
+    await expect(
+      withAudienceKey(h, OP_MANAGER.id, input, { expectError: true }),
+    ).resolves.toMatchObject({ audienceKey: '0'.repeat(64) });
+  });
 });
 
 // Filtro de nível (C5) sobre TI + Operação na Noite: quem recebe e o rótulo.
@@ -168,12 +207,9 @@ describe('vários setores e nível', () => {
         { sectorId: 'ti', sectorName: 'TI' },
       ],
     });
-    expect(
-      created().roster?.working.map((p) => [p.name, p.sectorName, p.levelName]),
-    ).toEqual([
-      ['Davi', 'Operação', 'Coordenador'],
-      ['Ana', 'TI', 'Coordenador'],
-    ]);
+    // DF4: envio novo não grava a foto; a regra e os excluídos vão à parte.
+    expect(created()).toMatchObject({ roster: null, audienceExcluded: [] });
+    expect(created().audienceRule?.levels).toEqual([COORD]);
   });
 
   it.each(filters)('%s', async (_caso, filter, userIds, label) => {
@@ -188,9 +224,14 @@ describe('apelido sectorId (D7)', () => {
     const input = createTeamDispatchSchema.parse({
       channelId: 'c1',
       text: 'Oi',
+      purpose: 'shift_notice',
+      audienceKey: '0'.repeat(64),
       target: { type: 'sector', sectorId: 'op', date: DATE },
     });
-    await h.service.dispatch(ADMIN.id, input);
+    const keyed = await withAudienceKey(h, ADMIN.id, input);
+    // A chave sai do público real, que também lê o setor: a contagem é só a do envio.
+    h.repo.findSector.mockClear();
+    await h.service.dispatch(ADMIN.id, keyed);
     expect(h.repo.findSector.mock.calls).toEqual([['op']]);
     expect(created()).toMatchObject({
       targetId: 'op',
@@ -211,6 +252,7 @@ describe('recusas', () => {
       send(
         { sectorIds: ['op', 'ti'], shiftIds: ['nope'], userIds: ['ana'] },
         OP_MANAGER.id,
+        true,
       ),
       'team_whatsapp.forbidden',
     );
@@ -227,7 +269,7 @@ describe('recusas', () => {
     'nível inválido → 422 invalid_level sem efeito (%s)',
     async (_caso, levelId) => {
       await rejectsWith(
-        send({ levelIds: [COORD.id, levelId] }),
+        send({ levelIds: [COORD.id, levelId] }, ADMIN.id, true),
         'team_whatsapp.invalid_level',
       );
       // Níveis antes da lista refeita (C5).
@@ -252,8 +294,7 @@ describe('recusas', () => {
 
 describe('agendar vários setores', () => {
   it('agendar TI + Operação no início da Noite grava SCHEDULED só para a lista conferida, com sectors [Operação, TI]', async () => {
-    const out = await h.service.dispatch(
-      ADMIN.id,
+    const out = await sendBody(
       body({ userIds: ['ana', 'eva'] }, 'shift_start'),
     );
     expect(created()).toMatchObject({
@@ -360,7 +401,7 @@ describe('vários turnos: recusas sem efeito (D9)', () => {
 
   it('um turno inativo entre os pedidos → 422 invalid_shift antes de carregar a escala', async () => {
     await rejectsWith(
-      send({ shiftIds: [NOITE.id, 'shift_old'] }),
+      send({ shiftIds: [NOITE.id, 'shift_old'] }, ADMIN.id, true),
       'team_whatsapp.invalid_shift',
     );
     expect(h.repo.loadDayPeople.mock.calls).toHaveLength(0);

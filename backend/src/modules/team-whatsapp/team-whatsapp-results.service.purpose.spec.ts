@@ -81,6 +81,8 @@ const detailRow = (
   scheduledFor: null,
   firedAt: null,
   roster: null,
+  recheckedAt: null,
+  audienceLateJoined: null,
   author: null,
   sectors: [{ sectorId: 's1', sectorName: 'Financeiro' }],
   ...over,

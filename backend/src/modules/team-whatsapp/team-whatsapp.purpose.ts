@@ -1,13 +1,25 @@
-import type { TeamPurpose } from '../../schemas/contracts/team-whatsapp.schema';
-import { zonedStart, type CivilDate } from '../staff-schedule/civil-date';
+import type { ShiftRef } from '../../schemas/contracts/shift.schema';
+import type {
+  TeamPurpose,
+  TeamSchedulePolicy,
+  TeamWhen,
+} from '../../schemas/contracts/team-whatsapp.schema';
+import {
+  diffDays,
+  todayIn,
+  zonedStart,
+  type CivilDate,
+} from '../staff-schedule/civil-date';
 import type { AudienceBase } from './audience-classify';
 import type { TeamAudienceRequest } from './dto/create-team-dispatch.dto';
 import {
   MISSING_ACTIVITY_DATE_TIME_TEXT,
+  SCHEDULE_AT_IN_PAST_TEXT,
   audienceBlock,
   invalidBase,
   invalidOffOption,
   invalidReferenceDate,
+  invalidShift,
   whenNotAllowed,
   type AudienceBlock,
 } from './team-whatsapp.errors';
@@ -28,8 +40,8 @@ export type PurposeRule = {
   urgencyReason: boolean;
   /** Hora extra: pelo menos uma pessoa marcada. */
   selectionRequired: boolean;
-  /** Momentos de disparo permitidos. */
-  when: readonly ('now' | 'shift_start')[];
+  /** Momentos de disparo permitidos (`'at'` = data e hora, DG8; nunca na Urgência). */
+  when: readonly TeamWhen[];
 };
 
 export const PURPOSE_RULES: Record<Purpose, PurposeRule> = {
@@ -39,7 +51,7 @@ export const PURPOSE_RULES: Record<Purpose, PurposeRule> = {
     activity: 'none',
     urgencyReason: false,
     selectionRequired: false,
-    when: ['now', 'shift_start'],
+    when: ['now', 'shift_start', 'at'],
   },
   meeting: {
     bases: ['assigned'],
@@ -47,7 +59,7 @@ export const PURPOSE_RULES: Record<Purpose, PurposeRule> = {
     activity: 'required',
     urgencyReason: false,
     selectionRequired: false,
-    when: ['now'],
+    when: ['now', 'at'],
   },
   alignment: {
     bases: ['assigned', 'on_duty'],
@@ -55,7 +67,7 @@ export const PURPOSE_RULES: Record<Purpose, PurposeRule> = {
     activity: 'optional',
     urgencyReason: false,
     selectionRequired: false,
-    when: ['now'],
+    when: ['now', 'at'],
   },
   lecture: {
     bases: ['assigned'],
@@ -63,7 +75,7 @@ export const PURPOSE_RULES: Record<Purpose, PurposeRule> = {
     activity: 'required',
     urgencyReason: false,
     selectionRequired: false,
-    when: ['now'],
+    when: ['now', 'at'],
   },
   overtime: {
     bases: ['assigned'],
@@ -71,7 +83,7 @@ export const PURPOSE_RULES: Record<Purpose, PurposeRule> = {
     activity: 'required',
     urgencyReason: false,
     selectionRequired: true,
-    when: ['now'],
+    when: ['now', 'at'],
   },
   urgency: {
     bases: ['on_duty'],
@@ -128,16 +140,51 @@ export function activityStart(activity: CompleteActivity): Date {
   return zonedStart(activity.date, activity.time);
 }
 
+/** Prazo máximo da "data e hora": `at.date <= hoje (Manaus) + 30` (DG8). */
+const SCHEDULE_MAX_DAYS_AHEAD = 30;
+
+export type ScheduleInput = {
+  request: Pick<TeamAudienceRequest, 'when' | 'at'>;
+  /** Data de referência do alvo (a do turno no "início do turno"). */
+  date: CivilDate;
+  shifts: readonly Pick<ShiftRef, 'startTime'>[];
+};
+
+/**
+ * Instante do disparo, em Manaus; null = agora (DG8). "Início do turno": o
+ * início do único turno na data (outro número de turnos: 422 `invalid_shift`,
+ * D9). "Data e hora": `at` (sem ele, 422 `when_not_allowed`: nunca vira
+ * "agora"; o DTO já o exige).
+ */
+export function scheduledForOf({
+  request,
+  date,
+  shifts,
+}: ScheduleInput): Date | null {
+  if (request.when === 'at') {
+    if (request.at === undefined) throw whenNotAllowed();
+    return zonedStart(request.at.date, request.at.time);
+  }
+  if (request.when !== 'shift_start') return null;
+  if (shifts.length !== 1) throw invalidShift();
+  return zonedStart(date, shifts[0].startTime);
+}
+
+/** Política do envio de setor (DG6): só o "agora" sai sem reconferência. */
+export function policyOf(when: TeamWhen | undefined): TeamSchedulePolicy {
+  return (when ?? 'now') === 'now' ? 'immediate' : 'frozen_recheck';
+}
+
 export type BlocksInput = {
   request: Pick<
     TeamAudienceRequest,
-    'purpose' | 'text' | 'when' | 'activity' | 'urgencyReason'
+    'purpose' | 'text' | 'when' | 'at' | 'activity' | 'urgencyReason'
   >;
   /** Quantos vão receber (público vazio = `no_recipients`). */
   receivingCount: number;
   /** Tamanho da seleção nominal; null = sem seleção. */
   selectedCount: number | null;
-  /** Início do turno em que o envio sairia; null = agora. */
+  /** Instante do disparo (`scheduledForOf`); null = agora. */
   scheduledFor: Date | null;
   numbersMissing: boolean;
   now: Date;
@@ -185,12 +232,24 @@ const overtimeWithoutSelection: Check = ({ request, selectedCount }) =>
     ? audienceBlock('overtime_without_selection')
     : null;
 
-const scheduleInPast: Check = ({ scheduledFor, now }) =>
-  scheduledFor !== null && scheduledFor.getTime() <= now.getTime()
-    ? audienceBlock('schedule_in_past')
+/** Agendado para agora ou antes; "data e hora" tem texto próprio (CG4). */
+const scheduleInPast: Check = ({ request, scheduledFor, now }) => {
+  if (scheduledFor === null || scheduledFor.getTime() > now.getTime())
+    return null;
+  return request.when === 'at'
+    ? audienceBlock('schedule_in_past', SCHEDULE_AT_IN_PAST_TEXT)
+    : audienceBlock('schedule_in_past');
+};
+
+/** "Data e hora" além de hoje (Manaus) + 30 dias (DG8); a hora não conta. */
+const scheduleTooFar: Check = ({ request, now }) =>
+  request.when === 'at' &&
+  request.at !== undefined &&
+  diffDays(request.at.date, todayIn(now)) > SCHEDULE_MAX_DAYS_AHEAD
+    ? audienceBlock('schedule_too_far')
     : null;
 
-/** GF10: vale no "agora" e no início do turno; sair no instante do início também trava. */
+/** GF10: vale no "agora", no início do turno e em "data e hora"; sair no instante do início também trava. */
 const afterActivityStart: Check = ({ request, scheduledFor, now }) => {
   const { date, time } = request.activity ?? {};
   if (PURPOSE_RULES[request.purpose].activity === 'none') return null;
@@ -214,6 +273,7 @@ const CHECKS: readonly Check[] = [
   missingUrgencyReason,
   overtimeWithoutSelection,
   scheduleInPast,
+  scheduleTooFar,
   afterActivityStart,
   noRecipients,
   sectorWithoutNumber,

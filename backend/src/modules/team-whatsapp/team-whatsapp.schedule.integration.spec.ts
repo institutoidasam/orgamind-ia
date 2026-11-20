@@ -298,19 +298,16 @@ describe('hora do disparo', () => {
     expect(queue.addBulk).not.toHaveBeenCalled();
   });
 
-  it('worker fora: vencido há 3 h dispara no próximo tick com firedAt = now', async () => {
+  it('worker fora: vencido há 3 h não dispara no próximo tick', async () => {
     // Relógio um dia antes dos outros casos: só este agendado está vencido.
+    // Teto de 2 h (DG5); o estado do envio é da T6b (vence para EXPIRED).
     const tick = new Date(NOW.getTime() - 24 * 60 * MINUTE);
-    const d = await seedScheduled({
+    await seedScheduled({
       prisma,
       scheduledFor: new Date(tick.getTime() - 3 * 60 * MINUTE),
     });
-    await expect(service.fireDue(tick)).resolves.toEqual({ fired: 1 });
-    expect(await dispatchOf(d.id)).toEqual({
-      state: 'DISPATCHED',
-      firedAt: tick,
-    });
-    expect(jobsSent()).toEqual(jobsFor(d.recipientIds));
+    await expect(service.fireDue(tick)).resolves.toEqual({ fired: 0 });
+    expect(queue.addBulk).not.toHaveBeenCalled();
   });
 });
 
@@ -367,7 +364,15 @@ describe('condições na hora — pessoas', () => {
         'team_whatsapp.scheduled_fire',
         'TeamWhatsappDispatch',
         d.id,
-        { dispatchId: d.id, queued: 1, skipped: 2, failed: 0 },
+        {
+          dispatchId: d.id,
+          queued: 1,
+          skipped: 2,
+          failed: 0,
+          policy: null,
+          recheckSkipped: 0,
+          lateJoined: 0,
+        },
       ],
     ]);
   });

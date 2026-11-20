@@ -240,7 +240,8 @@ const MEETING_COLUMNS = {
   activityTime: '14:00',
   activityPlace: 'Sala 2',
   urgencyReason: null,
-  schedulePolicy: null,
+  // DG6: setor "agora" grava a política imediata.
+  schedulePolicy: 'IMMEDIATE',
   roster: null,
   audienceRule: {
     shifts: [{ id: FIRST_SHIFT, name: '1º turno' }],
@@ -401,7 +402,7 @@ describe('gravação — reunião por vínculo', () => {
 });
 
 describe('gravação — agendado de aviso de turno', () => {
-  it('agendado de aviso de turno grava SCHEDULED, finalidade e base, com schedulePolicy nulo', async () => {
+  it('agendado de aviso de turno grava SCHEDULED, finalidade e base, com FROZEN_RECHECK (DG6)', async () => {
     const world = await seedWorld();
     await seedPeople(world, ['Ana', 'Bia']);
     const startsAt = zonedStart(DATE, '06:00');
@@ -421,7 +422,7 @@ describe('gravação — agendado de aviso de turno', () => {
     expect(row).toMatchObject({
       state: 'SCHEDULED',
       scheduledFor: startsAt,
-      schedulePolicy: null,
+      schedulePolicy: 'FROZEN_RECHECK',
       purpose: 'SHIFT_NOTICE',
       audienceBase: 'ON_DUTY',
       shiftId: FIRST_SHIFT,
@@ -441,7 +442,7 @@ describe('gravação — agendado de aviso de turno', () => {
     expect(detail.rule).toMatchObject({
       when: 'shift_start',
       scheduledFor: startsAt.toISOString(),
-      schedulePolicy: null,
+      schedulePolicy: 'frozen_recheck',
     });
   });
 });

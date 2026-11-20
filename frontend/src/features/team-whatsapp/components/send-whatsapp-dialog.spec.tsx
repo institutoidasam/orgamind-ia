@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HTTPError } from 'ky';
-import type { ComponentProps } from 'react';
+import { useState, type ComponentProps } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mutateAsync, toastSuccess, toastError, useTeamRoster, useTeamPersonRoute, mutationState, auth } = vi.hoisted(() => ({
@@ -30,6 +30,8 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 
 import { RULE_VIEW } from '../audience-preview.test-fixtures';
+import { useMessageDraft } from '../message-draft';
+import { NOW_MOMENT, type Moment } from '../use-send-filters';
 import { SendWhatsappDialog, type SendAudience } from './send-whatsapp-dialog';
 import type {
   LeftOutPerson, SendTarget, TeamAudiencePreview, TeamAudienceRuleView, TeamExclusionReason, TeamSectorChannel,
@@ -91,6 +93,17 @@ function previewOf(target: SendTarget, over: Partial<TeamAudiencePreview> = {}):
 
 type Route = { roster?: Query; person?: Query; audience?: { preview?: Partial<TeamAudiencePreview>; isFresh?: boolean } };
 
+type DialogProps = ComponentProps<typeof SendWhatsappDialog>;
+
+/** O momento e o texto moram fora do diálogo, como na tela (DG11, DG12): o rádio troca o estado de verdade. */
+function WithMoment(props: DialogProps) {
+  const [value, setValue] = useState<Moment>(NOW_MOMENT);
+  const draft = useMessageDraft('shift_notice', null);
+  const sector = props.target.type === 'sector';
+  const moment = sector ? { value, onChange: setValue, today: '2026-10-21' } : undefined;
+  return <SendWhatsappDialog {...({ ...props, moment, draft: sector ? draft : undefined } as DialogProps)} />;
+}
+
 function setup(target: SendTarget = sector, route: Route = {}) {
   useTeamRoster.mockReturnValue(answer(route.roster ?? { data: rosterOf(target) }));
   useTeamPersonRoute.mockReturnValue(answer(route.person ?? {
@@ -105,7 +118,7 @@ function setup(target: SendTarget = sector, route: Route = {}) {
       : undefined;
     return (
       <QueryClientProvider client={qc}>
-        <SendWhatsappDialog open onOpenChange={onOpenChange} {...({ target, audience } as ComponentProps<typeof SendWhatsappDialog>)} />
+        <WithMoment open onOpenChange={onOpenChange} {...({ target, audience } as DialogProps)} />
       </QueryClientProvider>
     );
   };
@@ -116,6 +129,16 @@ function setup(target: SendTarget = sector, route: Route = {}) {
 async function submit(user: ReturnType<typeof userEvent.setup>, text = 'Oi equipe') {
   await user.type(screen.getByRole('textbox'), text);
   await user.click(screen.getByRole('button', { name: 'Enviar agora' }));
+}
+
+/** Rádio ou botão "No início do turno" (o texto dos dois): ausente quando o alvo ou a finalidade não o oferece. */
+const shiftStartControl = () => screen.queryByText('No início do turno');
+const shiftStartRadio = () => screen.getByRole('radio', { name: 'No início do turno' });
+
+/** Agendar no início do turno só pelo momento escolhido (em "Agora" não há atalho): marca o rádio e devolve o botão. */
+async function chooseShiftStart(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(shiftStartRadio());
+  return screen.getByRole('button', { name: 'No início do turno' });
 }
 
 function httpError(status: number, code: string, detail?: string) {
@@ -185,7 +208,7 @@ describe('SendWhatsappDialog número por área (sem seletor de canal)', () => {
       await user.type(screen.getByRole('textbox'), 'Oi');
       expect(screen.getByText('Áreas sem número: Compras')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeDisabled();
-      expect(screen.getByRole('button', { name: 'No início do turno' })).toBeDisabled();
+      expect(await chooseShiftStart(user)).toBeDisabled();
     });
 
     it('número fora do ar (close): só Enviar agora fica desabilitado', async () => {
@@ -193,7 +216,7 @@ describe('SendWhatsappDialog número por área (sem seletor de canal)', () => {
       await user.type(screen.getByRole('textbox'), 'Oi');
       expect(screen.getByText(`O número ${NUMBER} está desconectado. Áreas: Compras.`)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeDisabled();
-      expect(screen.getByRole('button', { name: 'No início do turno' })).toBeEnabled();
+      expect(await chooseShiftStart(user)).toBeEnabled();
     });
   });
 
@@ -418,14 +441,14 @@ describe('SendWhatsappDialog: agendar no início do turno', () => {
 
   it('No início do turno não aparece em Todos os turnos', () => {
     setup({ ...scheduledTarget, shiftIds: [] });
-    expect(screen.queryByRole('button', { name: 'No início do turno' })).not.toBeInTheDocument();
+    expect(shiftStartControl()).not.toBeInTheDocument();
   });
 
   it('com dois turnos No início do turno fica desabilitado, mesmo com texto e início conhecido', async () => {
     setNow('2026-10-21T15:00:00Z');
     const { user } = setup({ ...scheduledTarget, shiftIds: ['dia', 'noite'] });
     await user.type(screen.getByRole('textbox'), 'Oi');
-    expect(screen.getByRole('button', { name: 'No início do turno' })).toBeDisabled();
+    expect(shiftStartRadio()).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeEnabled();
   });
 
@@ -433,7 +456,7 @@ describe('SendWhatsappDialog: agendar no início do turno', () => {
     setNow(STARTS_AT);
     const { user } = setup(scheduledTarget);
     await user.type(screen.getByRole('textbox'), 'Oi');
-    expect(screen.getByRole('button', { name: 'No início do turno' })).toBeDisabled();
+    expect(shiftStartRadio()).toBeDisabled();
     expect(screen.getByText('O início deste turno já passou')).toBeInTheDocument();
   });
 
@@ -442,7 +465,7 @@ describe('SendWhatsappDialog: agendar no início do turno', () => {
     mutateAsync.mockResolvedValue({ dispatchId: 'd1', queued: 0, scheduled: 2, scheduledFor: STARTS_AT, skipped: [] });
     const { user, onOpenChange } = setup(scheduledTarget);
     await user.type(screen.getByRole('textbox'), 'Oi equipe');
-    await user.click(screen.getByRole('button', { name: 'No início do turno' }));
+    await user.click(await chooseShiftStart(user));
     expect(mutateAsync.mock.calls[0][0]).toMatchObject({ when: 'shift_start', target: { shiftIds: ['noite'] } });
     expect(toastSuccess.mock.calls[0][0]).toBe('Agendado para 21/10 às 22:00');
     expect(onOpenChange).toHaveBeenCalledWith(false);
@@ -541,7 +564,7 @@ describe('SendWhatsappDialog: No início do turno travado pela prévia', () => {
     const rule = ruleOf({ purpose: 'shift_notice' });
     const { user } = setup(noite, { audience: { preview: { rule, blocks }, isFresh } });
     await typeText(user);
-    const button = screen.getByRole('button', { name: 'No início do turno' });
+    const button = await chooseShiftStart(user);
     if (disabled) expect(button).toBeDisabled();
     else expect(button).toBeEnabled();
   });
@@ -594,7 +617,7 @@ describe('SendWhatsappDialog: momento do disparo', () => {
     const names = within(screen.getByRole('list', { name: 'Vão receber (3)' })).getAllByRole('listitem');
     expect(names.map((li) => li.textContent)).toEqual(['Ana', 'Bia', 'Caio']);
     expect(screen.getByText('Falta de energia')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'No início do turno' })).not.toBeInTheDocument();
+    expect(shiftStartControl()).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeInTheDocument();
   });
 
@@ -604,7 +627,7 @@ describe('SendWhatsappDialog: momento do disparo', () => {
     ['Reunião com um turno', 'meeting', ['noite'], false],
   ] as const)('No início do turno só aparece no Aviso de turno com um turno: %s', (_name, purpose, shiftIds, shown) => {
     setup({ ...noite, shiftIds: [...shiftIds] }, { audience: { preview: { rule: ruleOf({ purpose }) } } });
-    expect(screen.queryByRole('button', { name: 'No início do turno' }) !== null).toBe(shown);
+    expect(shiftStartControl() !== null).toBe(shown);
   });
 });
 

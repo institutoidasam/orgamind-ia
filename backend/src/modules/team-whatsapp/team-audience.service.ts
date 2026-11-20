@@ -16,12 +16,9 @@ import { nameView, phoneView } from '../../shared/authz/phone-visibility';
 import type { Env } from '../../shared/config/env.schema';
 import { ConsentService } from '../consent/consent.service';
 import { LevelsRepository } from '../levels/levels.repository';
-import { zonedStart, type CivilDate } from '../staff-schedule/civil-date';
-import {
-  classifySector,
-  type AudienceEntry,
-  type AudienceFilter,
-} from './audience-classify';
+import type { CivilDate } from '../staff-schedule/civil-date';
+import type { AudienceEntry } from './audience-classify';
+import { classifyPeople, shiftNamesOf } from './audience-people';
 import {
   audienceKey,
   deriveAudienceSecret,
@@ -60,12 +57,13 @@ import {
   PURPOSE_RULES,
   assertPurposeRules,
   blocksFor,
+  policyOf,
   resolveBase,
+  scheduledForOf,
 } from './team-whatsapp.purpose';
 import {
   TeamWhatsappRepository,
   type TeamMember,
-  type TeamMemberWithSchedule,
   type TeamSector,
 } from './team-whatsapp.repository';
 
@@ -162,7 +160,12 @@ export class TeamAudienceService {
     const channels = await this.repo.findSectorChannels(
       resolved.sectors.map((s) => s.id),
     );
-    const scheduledFor = scheduledForOf(input, resolved);
+    // O mesmo instante do envio (DG8): o "data e hora" chega às travas.
+    const scheduledFor = scheduledForOf({
+      request: input,
+      date: resolved.date,
+      shifts: resolved.shifts,
+    });
     const blocks = blocksFor({
       request: input,
       receivingCount: resolved.receiving.length,
@@ -190,7 +193,16 @@ export class TeamAudienceService {
       scope.date,
     );
     const audience = buildAudience({
-      sectors: classifyAll(scope, people),
+      sectors: classifyPeople({
+        base: scope.base,
+        includeOff: scope.includeOff,
+        date: scope.date,
+        sectors: scope.sectors,
+        shiftIds: scope.shifts.map((s) => s.id),
+        shiftNames: shiftNamesOf(scope.active, [...people.values()].flat()),
+        level: scope.levels.filter,
+        people,
+      }),
       userIds: scope.userIds ?? undefined,
     });
     const { receiving, skipped } = await this.splitByPhone(audience.included);
@@ -299,47 +311,6 @@ export class TeamAudienceService {
   }
 }
 
-/**
- * Nomes de todos os turnos que a escala pode mostrar (T4a-m2): os ativos e os
- * do vínculo de cada pessoa carregada, inclusive inativos; sem isso o turno da
- * escala que ficou inativo sairia sem nome.
- */
-function shiftNamesOf(
-  active: readonly ShiftRef[],
-  people: readonly TeamMemberWithSchedule[],
-): Map<string, string> {
-  const names = new Map<string, string>();
-  for (const p of people) {
-    if (p.shiftId && p.workShift) names.set(p.shiftId, p.workShift.name);
-  }
-  for (const s of active) names.set(s.id, s.name);
-  return names;
-}
-
-/** Classificação de cada setor (por nome), com o mesmo filtro para todos (GF5). */
-function classifyAll(
-  scope: Scope,
-  people: ReadonlyMap<string, TeamMemberWithSchedule[]>,
-): AudienceEntry[][] {
-  const filter: AudienceFilter = {
-    shiftIds: scope.shifts.length
-      ? new Set(scope.shifts.map((s) => s.id))
-      : null,
-    includeOff: scope.includeOff,
-    level: scope.levels.filter,
-    shiftNames: shiftNamesOf(scope.active, [...people.values()].flat()),
-  };
-  return scope.sectors.map((sector) =>
-    classifySector({
-      base: scope.base,
-      sector,
-      date: scope.date,
-      people: people.get(sector.id) ?? [],
-      filter,
-    }),
-  );
-}
-
 /** `buildAudience` só põe em `excluded` quem tem motivo; aqui o tipo diz isso. */
 function withReason(entries: readonly AudienceEntry[]): ExcludedEntry[] {
   return entries.flatMap((e) => (e.reason ? [{ ...e, reason: e.reason }] : []));
@@ -388,17 +359,6 @@ function ruleSnapshotOf(scope: Scope): AudienceRuleSnapshot {
   };
 }
 
-/** Início do turno escolhido na data (Manaus); só no "início do turno" (o DTO garante um turno). */
-function scheduledForOf(
-  input: TeamAudienceRequest,
-  resolved: ResolvedAudience,
-): Date | null {
-  const [shift] = resolved.shifts;
-  return input.when === 'shift_start' && shift
-    ? zonedStart(resolved.date, shift.startTime)
-    : null;
-}
-
 /** Atividade do painel: só nas finalidades que a têm, e só se algo foi informado. */
 function activityViewOf(input: TeamAudienceRequest): TeamActivity | null {
   if (PURPOSE_RULES[input.purpose].activity === 'none') return null;
@@ -427,8 +387,8 @@ function ruleViewOf(
     urgencyReason: (urgent && input.urgencyReason) || null,
     when: input.when ?? 'now',
     scheduledFor: scheduledFor?.toISOString() ?? null,
-    // Lote F: sem política de agendamento (a coluna fica nula até o Lote G).
-    schedulePolicy: null,
+    // DG6: a política que o envio deste momento grava.
+    schedulePolicy: policyOf(input.when),
   };
 }
 

@@ -1,6 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import { dispatchRecipientsQuerySchema } from './dispatch-recipients-query.dto';
 
+const q = (raw: string) => dispatchRecipientsQuerySchema.safeParse({ q: raw });
+
+describe('dispatchRecipientsQuerySchema — busca por nome (DG13)', () => {
+  it('q aparado; só espaços vira ausente; 81 caracteres é 400', () => {
+    expect(q('  Pessoa A  ')).toMatchObject({ data: { q: 'Pessoa A' } });
+    const blank = q('   ');
+    expect(blank.success && blank.data.q).toBeUndefined();
+    const max = q(` ${'a'.repeat(80)} `);
+    expect(max.success && max.data.q).toBe('a'.repeat(80));
+    expect(q('a'.repeat(81)).success).toBe(false);
+  });
+});
+
 describe('dispatchRecipientsQuerySchema (C5)', () => {
   it.each<[string, Record<string, unknown>, unknown]>([
     [

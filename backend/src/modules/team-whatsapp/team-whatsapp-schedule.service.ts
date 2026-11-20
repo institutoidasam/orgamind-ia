@@ -26,9 +26,11 @@ import {
 } from './team-whatsapp.errors';
 import {
   TeamWhatsappRepository,
+  type RecheckSummary,
   type ScheduledRow,
   type TeamDispatchForCancel,
 } from './team-whatsapp.repository';
+import { recheckAudience } from './scheduled-recheck.runner';
 import { enqueueTeamSend, shiftSnapshotOf } from './team-whatsapp.service';
 
 type ScheduledItem = TeamScheduledListResponse['items'][number];
@@ -54,7 +56,11 @@ export class TeamWhatsappScheduleService {
     private readonly queue: Queue<TeamWhatsappSendJob>,
   ) {}
 
-  /** Um envio que falha não para os outros: o erro vai para o log só com o id. */
+  /**
+   * Um envio que falha (inclusive na reconferência) não para os outros: o erro
+   * vai para o log só com o id, e o envio segue SCHEDULED para o tick seguinte.
+   * Só `'fired'` conta; vencido e pulado, não.
+   */
   async fireDue(now: Date): Promise<{ fired: number }> {
     const due = await this.repo.findDueScheduled(now, DUE_BATCH);
     let fired = 0;
@@ -72,13 +78,21 @@ export class TeamWhatsappScheduleService {
   }
 
   /**
+   * Claim com a reconferência (DG2/DG5): a função fecha sobre o `now` do tick e
+   * só roda para quem venceu o claim; se ela lança, nada sai e o envio segue
+   * SCHEDULED. Sem claim, tenta o vencimento (passou de 2 h → `expired`);
    * `skipped` = outro disparo ou o cancelamento venceu, ou ainda não é a hora.
    * Enfileira como o envio imediato (falha da fila → FAILED queue_unavailable e
-   * o erro sobe). Auditoria com contagens, sem nomes nem texto (GC10).
+   * o erro sobe). Trilhas com ids e contagens, sem nomes, telefone nem texto (GG8).
    */
-  async fireOne(dispatchId: string, now: Date): Promise<'fired' | 'skipped'> {
-    const claim = await this.repo.claimScheduled(dispatchId, now);
-    if (!claim) return 'skipped';
+  async fireOne(
+    dispatchId: string,
+    now: Date,
+  ): Promise<'fired' | 'expired' | 'skipped'> {
+    const claim = await this.repo.claimScheduled(dispatchId, now, (claimed) =>
+      recheckAudience(this.repo, claimed, now),
+    );
+    if (!claim) return this.expire(dispatchId, now);
     if (claim.queuedIds.length > 0) {
       await enqueueTeamSend(this.queue, this.repo, claim.queuedIds);
     }
@@ -91,9 +105,26 @@ export class TeamWhatsappScheduleService {
         queued: claim.queuedIds.length,
         skipped: claim.skipped,
         failed: claim.failed,
+        ...recheckTrailOf(claim.rechecked),
       },
     );
     return 'fired';
+  }
+
+  /** Vencimento (DG5): agendado que passou do teto vira EXPIRED; trilha só com ids e contagens. */
+  private async expire(
+    dispatchId: string,
+    now: Date,
+  ): Promise<'expired' | 'skipped'> {
+    const expired = await this.repo.expireScheduled(dispatchId, now);
+    if (!expired) return 'skipped';
+    await this.audit.log(
+      'team_whatsapp.scheduled_expired',
+      'TeamWhatsappDispatch',
+      dispatchId,
+      { dispatchId, skipped: expired.skipped },
+    );
+    return 'expired';
   }
 
   /** 404 → 403 → 409: a disputa com o disparo é decidida no `updateMany` condicional. */
@@ -165,16 +196,28 @@ export class TeamWhatsappScheduleService {
   }
 }
 
-/** Agendado sem snapshot do turno, data ou hora não é exibível: fica de fora. */
+/** Política e contagens da reconferência na trilha do disparo; regra antiga = `policy` nulo. */
+function recheckTrailOf(rechecked: RecheckSummary | null | undefined) {
+  return {
+    policy: rechecked ? ('frozen_recheck' as const) : null,
+    recheckSkipped: rechecked?.skipped ?? 0,
+    lateJoined: rechecked?.lateJoined ?? 0,
+  };
+}
+
+/**
+ * Agendado sem data ou hora não é exibível: fica de fora. Sem snapshot do turno
+ * ("data e hora" com vários ou todos os turnos) vai com `shift: null`, para
+ * aparecer na lista e poder ser cancelado (G1/G3).
+ */
 function toScheduledItem(row: ScheduledRow, full: boolean): ScheduledItem[] {
-  const shift = shiftSnapshotOf(row);
-  if (!shift || !row.scheduledFor || !row.rosterDate) return [];
+  if (!row.scheduledFor || !row.rosterDate) return [];
   return [
     {
       id: row.id,
       scheduledFor: row.scheduledFor.toISOString(),
       rosterDate: fromDbDate(row.rosterDate),
-      shift,
+      shift: shiftSnapshotOf(row),
       label: nameView(row.targetLabel, { full }),
       recipientCount: row.recipientCount,
       channel: row.channel,

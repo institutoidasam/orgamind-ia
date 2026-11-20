@@ -6,22 +6,25 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Skeleton } from '@/components/ui/skeleton';
 import { usePermission } from '@/features/permissions/use-permission';
 import {
-  useScheduledDispatches, useTeamDispatches, useTeamRoster, useTeamTargets,
+  useScheduledDispatches, useTeamRoster, useTeamTargets,
 } from '@/features/team-whatsapp/api';
 import { InProgressNotice } from '@/features/team-whatsapp/components/in-progress-notice';
 import { PagedError } from '@/features/team-whatsapp/components/paged-error';
 import { PurposeFields } from '@/features/team-whatsapp/components/purpose-fields';
-import { RecentDispatches } from '@/features/team-whatsapp/components/recent-dispatches';
+import { RecentHistory } from '@/features/team-whatsapp/components/recent-dispatches';
 import { ScheduledDispatches } from '@/features/team-whatsapp/components/scheduled-dispatches';
 import { SendWhatsappDialog } from '@/features/team-whatsapp/components/send-whatsapp-dialog';
 import { MemberSelection } from '@/features/team-whatsapp/components/member-selection';
 import { SectorShiftPicker } from '@/features/team-whatsapp/components/sector-shift-picker';
 import { buildSectorTarget, markableIds, toggleAllMarkable } from '@/features/team-whatsapp/member-filter';
+import { useMessageDraft, type MessageDraft } from '@/features/team-whatsapp/message-draft';
 import { apiErrorCode, teamErrorMessage } from '@/features/team-whatsapp/error-messages';
 import type { SendTarget, TeamAudiencePreview, TeamRoster, TeamTargets } from '@/features/team-whatsapp/schemas';
 import { useBackToLastPage } from '@/features/team-whatsapp/use-back-to-last-page';
 import { useDebouncedAudience } from '@/features/team-whatsapp/use-audience-preview';
-import { referenceDate, showsScreenDate, useSendFilters, usesScreenDate } from '@/features/team-whatsapp/use-send-filters';
+import {
+  NOW_MOMENT, referenceDate, showsScreenDate, useSendFilters, usesScreenDate,
+} from '@/features/team-whatsapp/use-send-filters';
 
 const route = createFileRoute('/_authenticated/whatsapp-equipe/')({
   component: TeamWhatsappPage,
@@ -77,6 +80,8 @@ type Filters = ReturnType<typeof useSendFilters>;
 
 function SendSection({ targets }: { targets: TeamTargets }) {
   const filters = useSendFilters(targets.today, targets.sectors);
+  // O texto mora aqui (DG12): fechar o diálogo não o perde; sair da página perde.
+  const draft = useMessageDraft(filters.purpose, filters.activity);
   if (targets.sectors.length === 0) {
     return <p className="rounded-md border p-6 text-sm text-muted-foreground">{NO_SECTORS_TEXT}</p>;
   }
@@ -103,7 +108,7 @@ function SendSection({ targets }: { targets: TeamTargets }) {
         onDateChange={filters.pickDate} onShiftsChange={filters.pickShifts}
       />
       {ready ? (
-        <AudienceSection targets={targets} filters={filters} reference={reference} />
+        <AudienceSection targets={targets} filters={filters} reference={reference} draft={draft} />
       ) : (
         <p className="rounded-md border p-6 text-sm text-muted-foreground">
           {reference === '' && !usesScreenDate(purpose) ? NEEDS_ACTIVITY_DATE_TEXT : NEEDS_CHOICE_TEXT}
@@ -147,6 +152,7 @@ type AudienceProps = {
   filters: Filters;
   /** Data de referência: a da escala que o GET roster lê. */
   reference: string;
+  draft: MessageDraft;
 };
 
 /**
@@ -154,7 +160,7 @@ type AudienceProps = {
  * mudam. O GET roster fica só para o número da área, o estado do número e o início dos turnos (`shiftStarts`).
  * Marcado que perdeu a relação com o setor (422 `invalid_selection`): limpa a seleção, avisa e pede a prévia de novo.
  */
-function AudienceSection({ targets, filters, reference }: AudienceProps) {
+function AudienceSection({ targets, filters, reference, draft }: AudienceProps) {
   const audience = useDebouncedAudience(filters);
   const roster = useTeamRoster(filters.sectorIds, reference);
   const [listChanged, setListChanged] = useState(false);
@@ -174,7 +180,7 @@ function AudienceSection({ targets, filters, reference }: AudienceProps) {
       {preview && (
         <AudienceList
           preview={preview} isFresh={audience.isFresh} filters={filters} shiftStarts={roster.data?.shiftStarts ?? []}
-          targets={targets} onMarked={() => setListChanged(false)}
+          targets={targets} draft={draft} onMarked={() => setListChanged(false)}
         />
       )}
       {!preview && error && code !== INVALID_SELECTION && (
@@ -191,6 +197,7 @@ type ListProps = {
   filters: Filters;
   shiftStarts: TeamRoster['shiftStarts'];
   targets: TeamTargets;
+  draft: MessageDraft;
   onMarked: () => void;
 };
 
@@ -207,7 +214,7 @@ function withShiftStart(shiftStarts: TeamRoster['shiftStarts'], targets: TeamTar
  * A lista e o diálogo de envio. O diálogo recebe a prévia que a tela mostra (a viva) e `isFresh`: só libera o envio
  * com a prévia do corpo atual e manda o `audienceKey` dela (F1, C4). O 409 fecha o diálogo e relê a prévia.
  */
-function AudienceList({ preview, isFresh, filters, shiftStarts, targets, onMarked }: ListProps) {
+function AudienceList({ preview, isFresh, filters, shiftStarts, targets, draft, onMarked }: ListProps) {
   const { selected } = filters;
   // O estado guarda o alvo do clique, sem `shiftStart`: o roster pode chegar depois de o diálogo abrir.
   const [clicked, setTarget] = useState<SendTarget | null>(null);
@@ -227,8 +234,9 @@ function AudienceList({ preview, isFresh, filters, shiftStarts, targets, onMarke
       />
       {target?.type === 'sector' && (
         <SendWhatsappDialog
-          open target={target} audience={{ preview, isFresh }}
-          onOpenChange={(open) => { if (!open) setTarget(null); }}
+          open target={target} audience={{ preview, isFresh }} draft={draft}
+          moment={{ value: filters.moment, onChange: filters.setMoment, today: targets.today }}
+          onOpenChange={(open) => { if (!open) { setTarget(null); filters.setMoment(NOW_MOMENT); } }}
         />
       )}
     </>
@@ -255,19 +263,5 @@ function ScheduledSection() {
 }
 
 function RecentSection() {
-  const [page, setPage] = useState(1);
-  const dispatches = useTeamDispatches(page);
-  useBackToLastPage(page, setPage, dispatches.data);
-  const { data } = dispatches;
-  return (
-    <section className="space-y-3">
-      <h2 className="text-lg font-semibold">Envios recentes</h2>
-      {dispatches.isError && (
-        <PagedError error={dispatches.error} onRetry={dispatches.refetch} page={page} onFirstPage={() => setPage(1)} />
-      )}
-      {data && (
-        <RecentDispatches items={data.items} paging={{ page, pageSize: data.pageSize, total: data.total, onPageChange: setPage }} />
-      )}
-    </section>
-  );
+  return <RecentHistory />;
 }

@@ -20,6 +20,7 @@ import {
 } from '../queue/queue.constants';
 import { ChannelLiveStateService } from '../whatsapp-providers/channel-live-state.service';
 import { isTeamProvider } from './team-whatsapp.policy';
+import { sendPhoneOf } from './recipient-skip';
 import { TeamWhatsappRepository } from './team-whatsapp.repository';
 import { INDETERMINATE_CODE, failureStatus } from './team-whatsapp.outcome';
 
@@ -37,6 +38,8 @@ const recipientSelect = {
   id: true,
   status: true,
   messageId: true,
+  // DG7: telefone gravado na criação do envio; null = envio antigo (usa o atual).
+  phoneE164: true,
   user: {
     select: {
       phoneE164: true,
@@ -73,12 +76,25 @@ type FinishData =
   | FailedData
   | {
       status: 'SKIPPED';
-      skipReason: 'NO_PHONE' | 'SUPPRESSED' | 'NOT_AUTHORIZED';
+      skipReason:
+        'NO_PHONE' | 'PHONE_CHANGED' | 'SUPPRESSED' | 'NOT_AUTHORIZED';
     };
 
-/** Telefone de envio: o do contato vinculado, senão o do usuário (spec §1). */
-function sendPhoneOf(user: LoadedRecipient['user']): string | null {
-  return user?.contact?.phoneE164 ?? user?.phoneE164 ?? null;
+/**
+ * Telefone do envio (DG7): sem telefone atual → `NO_PHONE` (também quando foi
+ * apagado depois da criação); gravado na criação que não é o atual →
+ * `PHONE_CHANGED`; gravado nulo (envio antigo) → o atual. Nenhum dos dois
+ * telefones sai daqui para log, erro ou trilha.
+ */
+function resolveSendPhone(
+  r: LoadedRecipient,
+): { phone: string } | { data: FinishData } {
+  const current = r.user ? sendPhoneOf(r.user) : null;
+  if (!current) return { data: { status: 'SKIPPED', skipReason: 'NO_PHONE' } };
+  if (r.phoneE164 !== null && r.phoneE164 !== current)
+    return { data: { status: 'SKIPPED', skipReason: 'PHONE_CHANGED' } };
+  // Daqui o gravado (se houver) é igual ao atual: o envio sai para ele.
+  return { phone: r.phoneE164 ?? current };
 }
 
 const INDETERMINATE: FinishData = {
@@ -265,15 +281,19 @@ export class TeamWhatsappSendProcessor extends WorkerHost {
   }
 
   /**
-   * Telefone, supressão e autorização de contato, nesta ordem (C8), e canal
-   * ainda válido para o envio. A autorização é lida na hora do envio: quem a
-   * perdeu depois do agendamento ou da fila não recebe (A2).
+   * Telefone, telefone congelado (DG7), supressão e autorização de contato,
+   * nesta ordem, e canal ainda válido para o envio. O telefone gravado na
+   * criação que não é o atual pula o destinatário (`PHONE_CHANGED`, sem Message
+   * nem provedor, nem no "Repetir"); gravado nulo (envio antigo) usa o atual. A
+   * autorização é lida na hora do envio: quem a perdeu depois do agendamento ou
+   * da fila não recebe (A2). Nenhum dos dois telefones vai para log nem erro.
    */
   private async precheck(
     r: LoadedRecipient,
   ): Promise<{ data: FinishData } | Ready> {
-    const phone = sendPhoneOf(r.user);
-    if (!phone) return { data: { status: 'SKIPPED', skipReason: 'NO_PHONE' } };
+    const resolved = resolveSendPhone(r);
+    if ('data' in resolved) return resolved;
+    const { phone } = resolved;
     if (await this.consent.isSuppressed(phone))
       return { data: { status: 'SKIPPED', skipReason: 'SUPPRESSED' } };
     if (r.user?.contactAuthorization !== 'AUTORIZADO')

@@ -3,6 +3,7 @@ import {
   Prisma,
   type TeamAudienceBase,
   type TeamDispatchPurpose,
+  type TeamSchedulePolicy,
   type TeamWhatsappDispatchState,
   type TeamWhatsappRecipientStatus,
   type TeamWhatsappSkipReason,
@@ -12,12 +13,14 @@ import { PrismaService } from '../../shared/prisma/prisma.service';
 import type { ShiftRef } from '../../schemas/contracts/shift.schema';
 import {
   audienceExcludedSnapshotSchema,
+  audienceLateJoinedSnapshotSchema,
   audienceRuleSnapshotSchema,
   rosterSnapshotSchema,
   type AudienceExcludedSnapshot,
   type AudienceRuleSnapshot,
 } from '../../schemas/contracts/team-whatsapp.schema';
 import {
+  fromDbDate,
   toDbDate,
   todayIn,
   type CivilDate,
@@ -38,6 +41,12 @@ import { PROVIDER_DISABLED_CODE } from '../../shared/errors/channel-provider-dis
 import { NOT_REPEATABLE_CODES } from './team-whatsapp.outcome';
 import type { RosterSnapshot } from './team-whatsapp.roster';
 import { findTeamActor } from './team-actor.query';
+import {
+  SCHEDULE_GRACE_MS,
+  type FrozenRecipient,
+  type RecheckPlan,
+  type RecheckSkipReason,
+} from './scheduled-recheck';
 import {
   SECTOR_CHANNEL_SELECT,
   effectiveChannel,
@@ -138,6 +147,18 @@ export type TeamDispatchRow = Prisma.TeamWhatsappDispatchGetPayload<{
   select: typeof dispatchListSelect;
 }>;
 
+/**
+ * Filtros da lista do histórico (DG14), já em instantes: `createdAt >=
+ * createdFrom` e `createdAt < createdBefore` (o serviço converte o dia civil de
+ * Manaus). Ausente = sem filtro; sempre somados ao autor (GG7).
+ */
+export type DispatchListFilter = {
+  createdFrom?: Date;
+  createdBefore?: Date;
+  purpose?: TeamDispatchPurpose;
+  state?: TeamWhatsappDispatchState;
+};
+
 /** Topo da tela de resultado (C5): o texto e a foto da escala, sem destinatários. */
 const dispatchDetailSelect = {
   id: true,
@@ -161,6 +182,9 @@ const dispatchDetailSelect = {
   audienceRule: true,
   audienceExcluded: true,
   schedulePolicy: true,
+  // Reconferência do agendado (Lote G, CG8): hora e "entraram depois"; null = não reconferido.
+  recheckedAt: true,
+  audienceLateJoined: true,
   author: { select: { id: true, name: true } },
   sectors: { select: { sectorId: true, sectorName: true } },
 } satisfies Prisma.TeamWhatsappDispatchSelect;
@@ -184,10 +208,15 @@ export type RecipientChannel = {
   phoneE164: string | null;
 };
 
-/** Destinatário na tela de resultado (C5): turno, setor e nível do snapshot; sem telefone de pessoa. */
+/**
+ * Destinatário na tela de resultado (C5): turno, setor e nível do snapshot.
+ * `phoneE164` = telefone da pessoa gravado na criação (DG7; null = envio
+ * antigo): quem devolve aplica `phoneView`, nunca o repositório.
+ */
 export type DispatchRecipientRow = {
   id: string;
   userName: string;
+  phoneE164?: string | null;
   sectorName: string | null;
   levelName: string | null;
   shiftName: string | null;
@@ -230,6 +259,9 @@ export type NewTeamRecipient = {
   channelId: string | null;
   channelName: string | null;
   channelPhoneE164: string | null;
+  // Telefone da pessoa na criação (DG7), gravado como vier; ausente = null
+  // (envio antigo: o processor usa o telefone atual).
+  phoneE164?: string | null;
 };
 
 /** Setor do envio (C6): uma linha por setor no alvo setor; nenhuma no alvo pessoa. */
@@ -276,7 +308,6 @@ export type NewTeamDispatch = {
   // Envio novo com finalidade grava `roster: null` (DF4).
   roster?: RosterSnapshot | null;
   // Finalidade e público (Lote F, CF8); ausente = null (envio sem finalidade).
-  // `schedulePolicy` não entra: o F nunca a escreve (GF13).
   purpose?: TeamDispatchPurpose | null;
   audienceBase?: TeamAudienceBase | null;
   activity?: DispatchActivity | null;
@@ -287,6 +318,9 @@ export type NewTeamDispatch = {
   // SKIPPED. Ausente = envio imediato (DISPATCHED, sem scheduledFor).
   state?: TeamWhatsappDispatchState;
   scheduledFor?: Date | null;
+  // Política do agendado (DG6); ausente = null (alvo pessoa ou envio antigo:
+  // dispara pela regra antiga, sem reconferência).
+  schedulePolicy?: TeamSchedulePolicy | null;
 };
 
 /** Agendado para a lista "Agendados" (C9): snapshot do turno, sem texto nem telefone. */
@@ -330,10 +364,51 @@ export type ClaimResult = {
   failed: number;
 };
 
+/**
+ * Agendado que acabou de vencer o claim, lido pelo `tx` da transação do claim
+ * (CG7). `frozen` = destinatários ainda SCHEDULED; `recipientUserIds` = usuários
+ * de todas as linhas do envio, de qualquer situação. `audienceRule` vai cru.
+ */
+export type ClaimedDispatch = {
+  id: string;
+  schedulePolicy: TeamSchedulePolicy | null;
+  audienceBase: TeamAudienceBase | null;
+  includeOff: boolean;
+  rosterDate: CivilDate | null;
+  sectors: { id: string; name: string }[];
+  audienceRule: unknown;
+  frozen: FrozenRecipient[];
+  recipientUserIds: string[];
+};
+
+/** Reconferência do agendado (T6b): quem passa fecha sobre o `now` do tick. */
+export type RecheckFn = (claimed: ClaimedDispatch) => Promise<RecheckPlan>;
+
+/** Pulos gravados pela reconferência e quantos "entraram depois". */
+export type RecheckSummary = { skipped: number; lateJoined: number };
+
+/** `rechecked` null = política nula (regra antiga, sem reconferência). */
+export type ClaimOutcome = ClaimResult & { rechecked?: RecheckSummary | null };
+
 /** Canal inexistente, inativo ou de provedor não-equipe na hora do disparo (C10). */
 export const CHANNEL_UNAVAILABLE = 'team_whatsapp.channel_unavailable';
 
 type Tx = Prisma.TransactionClient;
+
+/**
+ * Transação do claim (DG2): a reconferência roda dentro dela (e pode ler por
+ * outra conexão); passou de 20 s, tudo se desfaz e o tick seguinte tenta.
+ */
+const CLAIM_TX = { timeout: 20_000, maxWait: 5_000 };
+/**
+ * Quem disputa a linha do agendado com o claim (cancelamento, vencimento)
+ * espera o commit ou o rollback dele: `timeout` acima dos 20 s do claim (com
+ * os 5 s padrão cairia em P2028 e o cancelamento viraria 500 em vez de 409).
+ */
+const AFTER_CLAIM_TX = { timeout: 25_000, maxWait: 5_000 };
+
+/** Início da janela do teto (DG5): exatamente 2 h de atraso ainda dispara. */
+const graceStart = (now: Date) => new Date(now.getTime() - SCHEDULE_GRACE_MS);
 
 export type TeamStatusCount = {
   dispatchId: string;
@@ -347,6 +422,7 @@ export const DAY_PEOPLE_LIMIT = 2000;
 const recipientRowSelect = {
   id: true,
   userName: true,
+  phoneE164: true,
   sectorName: true,
   levelName: true,
   shiftName: true,
@@ -444,6 +520,44 @@ function purposeColumns(fields: PurposeFields) {
 function pageWindow({ page, pageSize }: PageQuery) {
   return { skip: (page - 1) * pageSize, take: pageSize };
 }
+
+/**
+ * `where` da lista do histórico (DG14): só as chaves conhecidas do filtro
+ * (undefined = sem filtro no Prisma) E, por último, o autor (GG7): nada do
+ * filtro afrouxa "não ADMIN vê só os próprios". `authorId = null` = ADMIN.
+ */
+function dispatchListWhere(
+  authorId: string | null,
+  filter: DispatchListFilter = {},
+): Prisma.TeamWhatsappDispatchWhereInput {
+  return {
+    createdAt: { gte: filter.createdFrom, lt: filter.createdBefore },
+    purpose: filter.purpose,
+    state: filter.state,
+    ...(authorId === null ? {} : { authorId }),
+  };
+}
+
+/** Destinatários do envio, com o filtro de status opcional (C5). */
+function recipientsWhere(
+  dispatchId: string,
+  status?: TeamWhatsappRecipientStatus,
+): Prisma.TeamWhatsappRecipientWhereInput {
+  return { dispatchId, ...(status ? { status } : {}) };
+}
+
+const RECIPIENT_ORDER = [
+  { userName: 'asc' },
+  { id: 'asc' },
+] satisfies Prisma.TeamWhatsappRecipientOrderByWithRelationInput[];
+
+/** Motivos que a reconferência do agendado grava (CG3: `recheck.skipped`). */
+const RECHECK_SKIP_REASONS: readonly RecheckSkipReason[] = [
+  'VACATION',
+  'DAY_OFF',
+  'LEFT_SECTOR',
+  'INACTIVE',
+];
 
 /** Linha de vínculo que cobre a data (DV9): início nulo = desde sempre; fim nulo = aberta. */
 function assignmentCovering(date: CivilDate) {
@@ -830,7 +944,7 @@ export class TeamWhatsappRepository {
         data: { status: 'CANCELLED' },
       });
       return true;
-    });
+    }, AFTER_CLAIM_TX);
   }
 
   /** Agendados vencidos (SCHEDULED, `scheduledFor <= now`), os mais antigos primeiro. */
@@ -845,26 +959,64 @@ export class TeamWhatsappRepository {
 
   /**
    * Disparo único do agendado: o `updateMany` condicional em `state = SCHEDULED`
-   * disputa com outro disparo e com `cancelScheduled` (a linha fica travada até o
-   * commit; quem chega depois vê count 0 → null e não mexe em nada). Na mesma
-   * transação resolve os destinatários SCHEDULED: canal indisponível → FAILED;
-   * senão usuário inativo/apagado → SKIPPED INACTIVE (D8) e o resto → QUEUED.
-   * O canal é o de CADA destinatário (D3/D7): um número inativo falha só as
-   * pessoas dele, e as dos outros números seguem. O estado ao vivo não é
-   * consultado aqui (sem chamada ao provedor dentro da transação): o processor
-   * confere cada mensagem. A lista congelada vale mesmo com o setor desativado
-   * depois (spec §6).
+   * disputa com outro disparo, com o vencimento e com `cancelScheduled` (a linha
+   * fica travada até o commit; quem chega depois vê count 0 → null e não mexe em
+   * nada). Teto de 2 h na mesma condição (DG5): vale também para os antigos.
+   * Na mesma transação (DG2), só quem venceu reconfere (`FROZEN_RECHECK`): os
+   * pulos do plano vêm antes de `failUnavailable` (férias fica SKIPPED VACATION,
+   * nunca FAILED). Depois, canal indisponível → FAILED; usuário inativo/apagado
+   * → SKIPPED INACTIVE (D8); o resto → QUEUED. O canal é o de CADA destinatário
+   * (D3/D7). Erro em qualquer passo (inclusive na reconferência) desfaz tudo: o
+   * envio continua SCHEDULED e o tick seguinte tenta de novo. Sem chamada ao
+   * provedor aqui: o processor confere cada mensagem. A lista congelada vale
+   * mesmo com o setor desativado depois (spec §6).
    */
-  async claimScheduled(id: string, now: Date): Promise<ClaimResult | null> {
+  async claimScheduled(
+    id: string,
+    now: Date,
+    recheck?: RecheckFn,
+  ): Promise<ClaimOutcome | null> {
     return this.prisma.$transaction(async (tx) => {
       const { count } = await tx.teamWhatsappDispatch.updateMany({
-        where: { id, state: 'SCHEDULED', scheduledFor: { lte: now } },
+        where: {
+          id,
+          state: 'SCHEDULED',
+          scheduledFor: { lte: now, gte: graceStart(now) },
+        },
         data: { state: 'DISPATCHED', firedAt: now },
       });
       if (count === 0) return null;
+      const rechecked = await recheckClaimed(tx, id, now, recheck);
       const failed = await failUnavailable(tx, id);
-      return { ...(await queueActive(tx, id)), failed };
-    });
+      return { ...(await queueActive(tx, id)), failed, rechecked };
+    }, CLAIM_TX);
+  }
+
+  /**
+   * Vencimento (DG5): agendado que passou de 2 h do horário sem disparar vira
+   * EXPIRED e os destinatários SCHEDULED viram SKIPPED EXPIRED. Mesmo
+   * `updateMany` condicional do claim e do cancelamento: no máximo um vence.
+   */
+  async expireScheduled(
+    id: string,
+    now: Date,
+  ): Promise<{ skipped: number } | null> {
+    return this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.teamWhatsappDispatch.updateMany({
+        where: {
+          id,
+          state: 'SCHEDULED',
+          scheduledFor: { lt: graceStart(now) },
+        },
+        data: { state: 'EXPIRED' },
+      });
+      if (count === 0) return null;
+      const { count: skipped } = await tx.teamWhatsappRecipient.updateMany({
+        where: { dispatchId: id, status: 'SCHEDULED' },
+        data: { status: 'SKIPPED', skipReason: 'EXPIRED' },
+      });
+      return { skipped };
+    }, AFTER_CLAIM_TX);
   }
 
   /**
@@ -919,12 +1071,17 @@ export class TeamWhatsappRepository {
     };
   }
 
-  /** `authorId = null` → envios de todos (ADMIN); senão só os do autor. Uma página, mais novos primeiro. */
+  /**
+   * `authorId = null` → envios de todos (ADMIN); senão só os do autor. Uma
+   * página, mais novos primeiro. `filter` (DG14) entra somado ao autor, na
+   * página e no total.
+   */
   async listDispatches(
     authorId: string | null,
     page: PageQuery,
+    filter?: DispatchListFilter,
   ): Promise<{ rows: TeamDispatchRow[]; total: number }> {
-    const where = authorId === null ? {} : { authorId };
+    const where = dispatchListWhere(authorId, filter);
     const [rows, total] = await this.prisma.$transaction([
       this.prisma.teamWhatsappDispatch.findMany({
         where,
@@ -996,20 +1153,41 @@ export class TeamWhatsappRepository {
     dispatchId: string,
     { status, ...page }: RecipientsPage,
   ): Promise<{ rows: DispatchRecipientRow[]; total: number }> {
-    const where: Prisma.TeamWhatsappRecipientWhereInput = {
-      dispatchId,
-      ...(status ? { status } : {}),
-    };
+    const where = recipientsWhere(dispatchId, status);
     const [rows, total] = await this.prisma.$transaction([
       this.prisma.teamWhatsappRecipient.findMany({
         where,
-        orderBy: [{ userName: 'asc' }, { id: 'asc' }],
+        orderBy: RECIPIENT_ORDER,
         ...pageWindow(page),
         select: recipientRowSelect,
       }),
       this.prisma.teamWhatsappRecipient.count({ where }),
     ]);
     return { rows: rows.map(toRecipientRow), total };
+  }
+
+  /**
+   * Todos os destinatários do envio, na ordem da página (DG13: a busca por
+   * nome filtra o nome exibido e pagina em memória). Sem paginação: o envio
+   * nasce com no máximo `DAY_PEOPLE_LIMIT` pessoas.
+   */
+  async listAllDispatchRecipients(
+    dispatchId: string,
+    status?: TeamWhatsappRecipientStatus,
+  ): Promise<DispatchRecipientRow[]> {
+    const rows = await this.prisma.teamWhatsappRecipient.findMany({
+      where: recipientsWhere(dispatchId, status),
+      orderBy: RECIPIENT_ORDER,
+      select: recipientRowSelect,
+    });
+    return rows.map(toRecipientRow);
+  }
+
+  /** Quantos destinatários do envio a reconferência pulou (CG3: `recheck.skipped`). */
+  countRecheckSkips(dispatchId: string): Promise<number> {
+    return this.prisma.teamWhatsappRecipient.count({
+      where: { dispatchId, skipReason: { in: [...RECHECK_SKIP_REASONS] } },
+    });
   }
 
   /**
@@ -1109,6 +1287,134 @@ async function failScheduled(
     data: { status: 'FAILED', errorCode },
   });
   return count;
+}
+
+const claimedSelect = {
+  id: true,
+  schedulePolicy: true,
+  audienceBase: true,
+  includeOff: true,
+  rosterDate: true,
+  audienceRule: true,
+  sectors: {
+    select: { sectorId: true, sectorName: true },
+    orderBy: { sectorName: 'asc' },
+  },
+  recipients: {
+    select: {
+      id: true,
+      userId: true,
+      status: true,
+      user: { select: { isActive: true } },
+    },
+    orderBy: { id: 'asc' },
+  },
+} satisfies Prisma.TeamWhatsappDispatchSelect;
+
+/** Agendado que o claim acabou de pegar, lido pelo `tx` (depois do lock). */
+async function loadClaimed(tx: Tx, id: string): Promise<ClaimedDispatch> {
+  const { sectors, recipients, rosterDate, ...row } =
+    await tx.teamWhatsappDispatch.findUniqueOrThrow({
+      where: { id },
+      select: claimedSelect,
+    });
+  const frozen = recipients
+    .filter((r) => r.status === 'SCHEDULED')
+    .map((r) => ({
+      id: r.id,
+      userId: r.userId,
+      userActive: r.user?.isActive ?? false,
+    }));
+  const userIds = recipients.flatMap((r) => (r.userId ? [r.userId] : []));
+  return {
+    ...row,
+    rosterDate: rosterDate ? fromDbDate(rosterDate) : null,
+    sectors: sectors.map((s) => ({ id: s.sectorId, name: s.sectorName })),
+    frozen,
+    recipientUserIds: [...new Set(userIds)],
+  };
+}
+
+/**
+ * Passo da reconferência no claim (DG2, DG6): política nula = regra antiga,
+ * sem reconferência (null). `FROZEN_RECHECK` sem função lança (nunca dispara
+ * congelado sem reconferir). A função não recebe o `tx`: se ler, lê por outra
+ * conexão; os pulos são gravados só pelo `tx`.
+ */
+async function recheckClaimed(
+  tx: Tx,
+  id: string,
+  now: Date,
+  recheck: RecheckFn | undefined,
+): Promise<RecheckSummary | null> {
+  const claimed = await loadClaimed(tx, id);
+  if (claimed.schedulePolicy !== 'FROZEN_RECHECK') return null;
+  if (!recheck) {
+    throw new Error(`Agendado ${id} exige reconferência e veio sem a função`);
+  }
+  return applyRecheck(tx, id, await recheck(claimed), now);
+}
+
+/**
+ * Lista "entraram depois" fora do contrato. O `fireDue` registra o erro no log,
+ * então ele leva só o id do envio e, de cada issue, o caminho e o código: nunca
+ * `received`, valores, nomes nem o `ZodError` (nem como `cause`).
+ */
+export class RecheckPlanContractError extends Error {
+  constructor(
+    readonly dispatchId: string,
+    readonly issues: readonly { path: string; code: string }[],
+  ) {
+    super(
+      `Reconferência do agendado ${dispatchId} fora do contrato: ${issues
+        .map((i) => `${i.path}:${i.code}`)
+        .join(', ')}`,
+    );
+    this.name = 'RecheckPlanContractError';
+  }
+}
+
+function parseLateJoined(id: string, lateJoined: RecheckPlan['lateJoined']) {
+  const parsed = audienceLateJoinedSnapshotSchema.safeParse(lateJoined);
+  if (parsed.success) return parsed.data;
+  throw new RecheckPlanContractError(
+    id,
+    parsed.error.issues.map((i) => ({
+      path: i.path.map(String).join('.'),
+      code: i.code,
+    })),
+  );
+}
+
+/**
+ * Grava o plano (GG4): só linhas ainda SCHEDULED deste envio mudam, para
+ * SKIPPED com o motivo; nenhuma linha é criada ("entraram depois" vai só para
+ * `audienceLateJoined`, pelo parse do contrato, que descarta telefone).
+ */
+async function applyRecheck(
+  tx: Tx,
+  id: string,
+  plan: RecheckPlan,
+  now: Date,
+): Promise<RecheckSummary> {
+  const byReason = new Map<TeamWhatsappSkipReason, string[]>();
+  for (const { recipientId, reason } of plan.skips) {
+    byReason.set(reason, [...(byReason.get(reason) ?? []), recipientId]);
+  }
+  let skipped = 0;
+  for (const [skipReason, ids] of byReason) {
+    const { count } = await tx.teamWhatsappRecipient.updateMany({
+      where: { dispatchId: id, status: 'SCHEDULED', id: { in: ids } },
+      data: { status: 'SKIPPED', skipReason },
+    });
+    skipped += count;
+  }
+  const lateJoined = parseLateJoined(id, plan.lateJoined);
+  await tx.teamWhatsappDispatch.update({
+    where: { id },
+    data: { recheckedAt: now, audienceLateJoined: lateJoined },
+  });
+  return { skipped, lateJoined: lateJoined.length };
 }
 
 /** Apagado = `userId` null (SetNull); inativo = `isActive` false. O resto vira QUEUED. */

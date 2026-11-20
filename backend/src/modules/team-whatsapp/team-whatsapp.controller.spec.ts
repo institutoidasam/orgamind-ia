@@ -165,6 +165,97 @@ async function postPreview(
   return { res: await request(server).post(PREVIEW_URL).send(body), audience };
 }
 
+const HISTORY_URL = '/internal/team-whatsapp/dispatches';
+
+/**
+ * GET do histórico (CG1) com os portões globais na ordem real: ator do JWT com
+ * `role`, papéis, permissões da matriz inicial, pipe Zod e filtro de erros. Só
+ * a lista e os destinatários respondem.
+ */
+async function getHistory(role: Role, path: string) {
+  const team = { listDispatches: vi.fn().mockResolvedValue({ items: [] }) };
+  const results = { recipients: vi.fn().mockResolvedValue({ items: [] }) };
+  const signedIn = (ctx: ExecutionContext) => {
+    const user = { sub: 'actor-1', role };
+    Object.assign(ctx.switchToHttp().getRequest<object>(), { user });
+    return true;
+  };
+  const effectiveFor = (r: Role) => Promise.resolve(permissionsWith(r));
+  const moduleRef = await Test.createTestingModule({
+    controllers: [TeamWhatsappController],
+    providers: [
+      ...fakeServices({}),
+      { provide: APP_FILTER, useClass: DomainExceptionFilter },
+      { provide: APP_PIPE, useClass: ZodValidationPipe },
+      { provide: PermissionsService, useValue: { effectiveFor } },
+      { provide: APP_GUARD, useValue: { canActivate: signedIn } },
+      { provide: APP_GUARD, useClass: RolesGuard },
+      { provide: APP_GUARD, useClass: PermissionsGuard },
+    ],
+  })
+    .overrideProvider(TeamWhatsappService)
+    .useValue(team)
+    .overrideProvider(TeamWhatsappResultsService)
+    .useValue(results)
+    .compile();
+  const app = moduleRef.createNestApplication();
+  openApps.push(app);
+  await app.init();
+  const http = request(app.getHttpServer() as Parameters<typeof request>[0]);
+  return { res: await http.get(`${HISTORY_URL}${path}`), team, results };
+}
+
+describe('TeamWhatsappController — histórico: filtros e busca (CG1, DG13, DG14)', () => {
+  afterEach(async () => {
+    await Promise.all(openApps.splice(0).map((app) => app.close()));
+  });
+
+  it('GET dispatches com query inválida 400', async () => {
+    const { res, team } = await getHistory(
+      'OPERATOR',
+      '?from=2026-11-10&to=2026-11-01',
+    );
+    expect(res.status).toBe(400);
+    expect(team.listDispatches).not.toHaveBeenCalled();
+  });
+
+  it('GET dispatches repassa os filtros validados', async () => {
+    const query = 'from=2026-11-01&to=2026-11-10&purpose=meeting&state=EXPIRED';
+    const { res, team } = await getHistory('OPERATOR', `?${query}`);
+    expect(res.status).toBe(200);
+    expect(team.listDispatches).toHaveBeenCalledWith('actor-1', {
+      page: 1,
+      pageSize: 20,
+      from: '2026-11-01',
+      to: '2026-11-10',
+      purpose: 'meeting',
+      state: 'EXPIRED',
+    });
+  });
+
+  it('GET recipients repassa q', async () => {
+    const path = '/d1/recipients?q=%20Jo%C3%A3o%20&status=FAILED';
+    const { res, results } = await getHistory('OPERATOR', path);
+    expect(res.status).toBe(200);
+    expect(results.recipients).toHaveBeenCalledWith('actor-1', 'd1', {
+      page: 1,
+      pageSize: 50,
+      status: 'FAILED',
+      q: 'João',
+    });
+  });
+
+  it('VIEWER 403', async () => {
+    for (const path of ['?state=SCHEDULED', '/d1/recipients?q=ana']) {
+      const { res, team, results } = await getHistory('VIEWER', path);
+      expect(res.status).toBe(403);
+      expect(res.body).toMatchObject({ code: 'auth.insufficient_role' });
+      expect(team.listDispatches).not.toHaveBeenCalled();
+      expect(results.recipients).not.toHaveBeenCalled();
+    }
+  });
+});
+
 describe('TeamWhatsappController — POST dispatches/preview (C4, CF1)', () => {
   afterEach(async () => {
     await Promise.all(openApps.splice(0).map((app) => app.close()));

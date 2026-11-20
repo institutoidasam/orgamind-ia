@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HTTPError } from 'ky';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -47,6 +47,18 @@ beforeEach(() => {
   mutateAsync.mockClear();
   onPageChange.mockClear();
   useAuthStore.setState({ user: OPERATOR });
+});
+
+describe('ScheduledDispatches: quando sai', () => {
+  it('whenText dos agendados: com turno e sem turno (scheduledFor em Manaus)', () => {
+    // Com turno vale a data da escala + a hora gravada no turno, mesmo que scheduledFor diga outra coisa.
+    renderList([{ ...item, scheduledFor: '2026-10-22T12:00:00.000Z' }]);
+    expect(screen.getByText('21/10 22:00')).toBeInTheDocument();
+    cleanup();
+    // Sem turno (data e hora livres): dia/mês e hora de scheduledFor em Manaus (02:00 UTC = 22:00 da véspera).
+    renderList([{ ...item, shift: null, rosterDate: '2026-10-26', scheduledFor: '2026-10-27T02:00:00.000Z' }]);
+    expect(screen.getByText('26/10 22:00')).toBeInTheDocument();
+  });
 });
 
 describe('ScheduledDispatches: permissão (DB6, DB10)', () => {

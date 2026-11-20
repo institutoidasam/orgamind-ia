@@ -82,15 +82,19 @@ const activityInputSchema = z.object({
   place: z.string().trim().max(MAX_PLACE).optional(),
 });
 
+/** DG8: data e hora livres do disparo, dia civil e `HH:mm` em Manaus. */
+const atInputSchema = z.object({ date: civilDateSchema, time: hhmmSchema });
+
 /**
  * Campos comuns à prévia e ao envio (CF2). O texto não é aparado. `when`
  * (C7): ausente = `'now'`; `'shift_start'` agenda para o início do turno na
- * data. `base` ausente = a fixa/padrão da finalidade. `urgencyReason` aparado,
- * até 200.
+ * data; `'at'` (DG8) agenda para `at`. `base` ausente = a fixa/padrão da
+ * finalidade. `urgencyReason` aparado, até 200.
  */
 const audienceFields = {
   text: z.string().max(MAX_TEXT),
   when: teamWhenSchema.optional(),
+  at: atInputSchema.optional(),
   base: teamAudienceBaseSchema.optional(),
   activity: activityInputSchema.optional(),
   urgencyReason: z.string().trim().max(MAX_URGENCY_REASON).optional(),
@@ -108,6 +112,27 @@ const shiftStartIssue = {
   path: ['when'],
 };
 
+function issue(ctx: z.RefinementCtx, path: string, message: string): void {
+  ctx.addIssue({ code: 'custom', path: [path], message });
+}
+
+/**
+ * DG8: `at` é obrigatório com `when: 'at'` e proibido sem ele; `'at'` só no
+ * alvo setor (alvo pessoa → 400). Qualquer seleção de turnos vale.
+ */
+function atRules(
+  b: { when?: string; at?: unknown; target: { type: string } },
+  ctx: z.RefinementCtx,
+): void {
+  const isAt = b.when === 'at';
+  if (isAt && b.at === undefined)
+    issue(ctx, 'at', "when 'at' exige a data e a hora");
+  if (!isAt && b.at !== undefined)
+    issue(ctx, 'at', "Data e hora só vão com when 'at'");
+  if (isAt && b.target.type !== 'sector')
+    issue(ctx, 'when', "when 'at' só vale no envio para setor");
+}
+
 /**
  * Corpo do POST /internal/team-whatsapp/dispatches/preview (C4). Só alvo
  * setor (alvo pessoa → 400) e sempre com finalidade. Aceita texto vazio e
@@ -121,7 +146,8 @@ export const teamAudienceRequestSchema = z
     audienceKey: z.string().max(64).optional(),
     target: z.preprocess(targetAliases, sectorTargetSchema),
   })
-  .refine(shiftStartAllowed, shiftStartIssue);
+  .refine(shiftStartAllowed, shiftStartIssue)
+  .superRefine(atRules);
 
 const sendBodySchema = z.object({
   channelId: z.string().optional(),
@@ -133,10 +159,6 @@ const sendBodySchema = z.object({
     z.discriminatedUnion('type', [userTargetSchema, sendSectorTargetSchema]),
   ),
 });
-
-function issue(ctx: z.RefinementCtx, path: string, message: string): void {
-  ctx.addIssue({ code: 'custom', path: [path], message });
-}
 
 /**
  * Alvo pessoa não muda (GF1): sem finalidade e com texto não vazio (400).
@@ -163,7 +185,8 @@ function sendRules(b: z.output<typeof sendBodySchema>, ctx: z.RefinementCtx) {
  */
 export const createTeamDispatchSchema = sendBodySchema
   .superRefine(sendRules)
-  .refine(shiftStartAllowed, shiftStartIssue);
+  .refine(shiftStartAllowed, shiftStartIssue)
+  .superRefine(atRules);
 
 export class CreateTeamDispatchDto extends createZodDto(
   createTeamDispatchSchema,

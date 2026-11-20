@@ -7,6 +7,22 @@ import type {
 /** Dados da atividade como o operador os digita: '' = não informado. */
 export type ActivityDraft = { date: string; time: string; place: string };
 
+/**
+ * Momento do disparo (G1, DG11). 'at' = data e hora livres no fuso de Manaus, como o operador as digita ('' = falta);
+ * `at` só existe com 'at'. Vai na prévia, para o painel, as travas e o aviso serem os do momento escolhido.
+ */
+export type Moment = {
+  when: 'now' | 'shift_start' | 'at';
+  at: { date: string; time: string } | null;
+};
+
+export const NOW_MOMENT: Moment = { when: 'now', at: null };
+
+/** "Data e hora" sem a data ou sem a hora: a prévia ainda é a de agora e o envio fica travado (GG2). */
+export function momentIncomplete({ when, at }: Moment): boolean {
+  return when === 'at' && !(at?.date && at.time);
+}
+
 type Filters = {
   /** null = ainda não mexeu: vazio, ou o único setor possível (já escolhido). */
   sectorIds: string[] | null;
@@ -21,6 +37,7 @@ type Filters = {
   includeOff: boolean;
   activity: ActivityDraft;
   urgencyReason: string;
+  moment: Moment;
 };
 
 const NO_ACTIVITY: ActivityDraft = { date: '', time: '', place: '' };
@@ -35,10 +52,10 @@ function defaultOff(purpose: TeamPurpose, base: TeamAudienceBase): boolean {
   return offAvailable(purpose, base) && PURPOSE_RULES[purpose].offOption === 'checked';
 }
 
-/** Trocar a finalidade volta à base padrão dela e ao estado inicial da folga. */
+/** Trocar a finalidade volta à base padrão dela, ao estado inicial da folga e ao momento "Agora" (DG11). */
 function withPurpose(prev: Filters, purpose: TeamPurpose): Filters {
   const base = PURPOSE_RULES[purpose].bases[0];
-  return { ...prev, purpose, base, includeOff: defaultOff(purpose, base) };
+  return { ...prev, purpose, base, includeOff: defaultOff(purpose, base), moment: NOW_MOMENT };
 }
 
 /** Só o Alinhamento tem mais de uma base; outra base da finalidade é ignorada. */
@@ -56,7 +73,7 @@ export function useSendFilters(today: string, sectors: readonly TeamSector[]) {
   const [filters, setFilters] = useState<Filters>({
     sectorIds: null, levelIds: [], withoutLevel: false, shiftIds: null, date: today,
     purpose: 'shift_notice', base: PURPOSE_RULES.shift_notice.bases[0], includeOff: false,
-    activity: NO_ACTIVITY, urgencyReason: '',
+    activity: NO_ACTIVITY, urgencyReason: '', moment: NOW_MOMENT,
   });
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const change = (next: (prev: Filters) => Filters) => {
@@ -85,6 +102,8 @@ export function useSendFilters(today: string, sectors: readonly TeamSector[]) {
       else change(merge);
     },
     pickUrgencyReason: (urgencyReason: string) => setFilters((prev) => ({ ...prev, urgencyReason })),
+    /** O momento não muda quem recebe nem a impressão da prévia: a seleção fica (o diálogo aberto a leva). */
+    setMoment: (moment: Moment) => setFilters((prev) => ({ ...prev, moment })),
     viewShift: (date: string, shiftId: string) => update({ date, shiftIds: [shiftId] }),
     toggle: (id: string) =>
       setSelected((prev) => {
@@ -124,7 +143,7 @@ export function referenceDate(filters: DateFilters): string {
 type RequestFilters = DateFilters & Pick<
   SendFilters,
   'sectorIds' | 'levelIds' | 'withoutLevel' | 'shiftIds' | 'shiftsPicked' | 'base' | 'includeOff' | 'urgencyReason'
->;
+> & { moment?: Moment };
 
 /** Só o que o operador informou, aparado; nenhum campo = sem atividade. Finalidade sem atividade não a leva. */
 function activityBody({ purpose, activity }: Pick<RequestFilters, 'purpose' | 'activity'>): TeamActivityInput | undefined {
@@ -151,8 +170,16 @@ function targetBody(filters: RequestFilters, date: string): SectorTargetInput {
   };
 }
 
+/** `when` e `at` da prévia: "Agora" não os leva; "Data e hora" só quando a data e a hora estão preenchidas. */
+function momentBody(moment: Moment | undefined): Pick<TeamAudienceRequest, 'when' | 'at'> {
+  if (!moment || moment.when === 'now') return {};
+  if (moment.when === 'shift_start') return { when: 'shift_start' };
+  const { date, time } = moment.at ?? { date: '', time: '' };
+  return date && time ? { when: 'at', at: { date, time } } : {};
+}
+
 /**
- * Corpo da prévia (CF2) montado dos filtros, sem texto (a prévia aceita vazio) e sem `when` (do diálogo). `null`
+ * Corpo da prévia (CF2) montado dos filtros, sem texto (a prévia aceita vazio), com o momento (DG11). `null`
  * = ainda não dá para pedir: falta setor, turno ou a data de referência. A seleção nominal (`userIds`) é de quem
  * confere ou envia. Folga só vai onde a opção existe (na base em serviço o servidor recusa).
  */
@@ -167,6 +194,7 @@ export function audienceRequest(filters: RequestFilters): TeamAudienceRequest | 
     purpose,
     base,
     target: targetBody(filters, date),
+    ...momentBody(filters.moment),
     ...(activity ? { activity } : {}),
     ...(PURPOSE_RULES[purpose].urgencyReason && reason ? { urgencyReason: reason } : {}),
   };

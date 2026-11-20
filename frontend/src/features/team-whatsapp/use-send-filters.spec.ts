@@ -134,3 +134,46 @@ describe('audienceRequest', () => {
     });
   });
 });
+
+describe('useSendFilters: momento do disparo (DG11)', () => {
+  it('começa em Agora; trocar a finalidade volta para Agora; mudar o momento não limpa a seleção', () => {
+    const { result } = setup();
+    expect(result.current.moment).toEqual({ when: 'now', at: null });
+    act(() => result.current.pickPurpose('meeting'));
+    act(() => result.current.setSelected(new Set(['ana'])));
+    act(() => result.current.setMoment({ when: 'at', at: { date: '2026-10-25', time: '09:00' } }));
+    expect(result.current.moment.when).toBe('at');
+    expect([...result.current.selected]).toEqual(['ana']);
+    act(() => result.current.pickPurpose('lecture'));
+    expect(result.current.moment).toEqual({ when: 'now', at: null });
+  });
+});
+
+describe('audienceRequest: momento', () => {
+  function meeting() {
+    const hook = setup();
+    act(() => hook.result.current.pickSectors(['s1']));
+    act(() => hook.result.current.pickShifts([]));
+    act(() => hook.result.current.pickPurpose('meeting'));
+    act(() => hook.result.current.pickActivity({ date: '2026-10-25', time: '14:30', place: 'Sala 2' }));
+    return hook.result;
+  }
+
+  it('Agora vai sem when; Data e hora completa leva when at e at; incompleta vai sem when', () => {
+    const result = meeting();
+    expect(audienceRequest(result.current)).not.toHaveProperty('when');
+    act(() => result.current.setMoment({ when: 'at', at: { date: '2026-10-24', time: '' } }));
+    expect(audienceRequest(result.current)).not.toHaveProperty('when');
+    expect(audienceRequest(result.current)).not.toHaveProperty('at');
+    act(() => result.current.setMoment({ when: 'at', at: { date: '2026-10-24', time: '09:00' } }));
+    expect(audienceRequest(result.current)).toMatchObject({ when: 'at', at: { date: '2026-10-24', time: '09:00' } });
+  });
+
+  it('No início do turno leva só when shift_start', () => {
+    const result = meeting();
+    act(() => result.current.setMoment({ when: 'shift_start', at: null }));
+    const body = audienceRequest(result.current);
+    expect(body).toMatchObject({ when: 'shift_start' });
+    expect(body).not.toHaveProperty('at');
+  });
+});

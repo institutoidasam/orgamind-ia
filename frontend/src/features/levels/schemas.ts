@@ -10,11 +10,16 @@ export const levelRefSchema = z.object({
   name: z.string(),
 });
 
-/** `userCount` = pessoas com o nível (ativas ou não); nível não se apaga. */
+/**
+ * `userCount` = pessoas com o nível (ativas ou não); nível não se apaga. `activePeople` bloqueia a
+ * desativação e `inactivePeople` só informa; tolerantes (`.nullish()`) até o back novo no ar (CJ4).
+ */
 export const levelAdminSchema = levelRefSchema.extend({
   isActive: z.boolean(),
   sortOrder: z.number().int(),
   userCount: z.number().int().nonnegative(),
+  activePeople: z.number().int().nonnegative().nullish(),
+  inactivePeople: z.number().int().nonnegative().nullish(),
 });
 
 export const levelListSchema = z.object({ items: levelAdminSchema.array() });

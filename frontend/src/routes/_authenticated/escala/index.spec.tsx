@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@tanstack/react-router', () => ({
-  createFileRoute: () => (opts: Record<string, unknown>) => ({ ...opts }),
+  createFileRoute: () => (opts: Record<string, unknown>) => ({ ...opts, useSearch: () => ({}) }),
 }));
 vi.mock('@/features/staff-schedule/api', () => ({
   useScheduleOptions: () => mocks.useScheduleOptions(),

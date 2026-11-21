@@ -1,4 +1,5 @@
 import { DomainError } from '../../shared/errors/domain.error';
+import { usageDetail } from '../../shared/errors/usage-detail';
 
 export function levelNotFound(): DomainError {
   return new DomainError({
@@ -23,5 +24,18 @@ export function invalidLevelOrder(): DomainError {
     code: 'levels.invalid_order',
     message: 'A ordem deve conter cada nível exatamente uma vez',
     status: 422,
+  });
+}
+
+/**
+ * Nível com pessoas ativas não é desativado (E3): 409 com o `detail` só de
+ * contagem (`people=2`), sem dado pessoal. Pessoa inativa não conta.
+ */
+export function levelInUse(activePeople: number): DomainError {
+  return new DomainError({
+    code: 'levels.in_use',
+    message: 'Nível em uso não pode ser desativado',
+    status: 409,
+    detail: usageDetail({ people: activePeople }),
   });
 }

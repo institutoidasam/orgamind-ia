@@ -1,6 +1,7 @@
 import { Link } from '@tanstack/react-router';
 import { Button } from '@/components/ui/button';
 import { useAuthStore } from '@/stores/auth.store';
+import { FactoryPanorama } from '@/features/team-panorama/components/factory-panorama';
 import { useInternalDashboard } from '../api';
 import type { CommunicationKind, InternalDashboard } from '../schemas';
 import { dateTime, isViewer, personName } from '../utils';
@@ -35,7 +36,7 @@ function getOverviewContext(user: { role?: string; sectorId?: string | null } | 
 
 function OverviewContent({ data, user }: { data: InternalDashboard; user: { role?: string; sectorId?: string | null } | null | undefined }) {
   const context = getOverviewContext(user, data);
-  return <div className="space-y-6"><Header eyebrow="Trabalho interno" title="Visão geral" description={context.description} action={<OverviewActions readonly={context.readonly} />} />{context.unconfigured ? <EmptyState><p>Peça a um administrador para definir seu setor antes de usar os módulos internos.</p></EmptyState> : <DashboardContent data={data} />}</div>;
+  return <div className="space-y-6"><Header eyebrow="Trabalho interno" title="Visão geral" description={context.description} action={<OverviewActions readonly={context.readonly} />} /><FactoryPanorama />{context.unconfigured ? <EmptyState><p>Peça a um administrador para definir seu setor antes de usar os módulos internos.</p></EmptyState> : <DashboardContent data={data} />}</div>;
 }
 
 export function InternalDashboardPage() {

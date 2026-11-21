@@ -15,10 +15,12 @@ import { ExceptionDialog, type ExceptionTarget } from '@/features/staff-schedule
 import { ScheduleBoardTable } from '@/features/staff-schedule/components/schedule-board';
 import { ScheduleEditorDialog, type ScheduleTarget } from '@/features/staff-schedule/components/schedule-editor-dialog';
 import { periodRange, stepAnchor, type PeriodMode } from '@/features/staff-schedule/period';
+import { initialSchedule, validateScheduleSearch } from '@/features/staff-schedule/schedule-search';
 import type { ScheduleBoard, ScheduleOptions, SectorRef } from '@/features/staff-schedule/schemas';
 import { formatDayMonth } from '@/lib/civil-date';
 
 const route = createFileRoute('/_authenticated/escala/')({
+  validateSearch: validateScheduleSearch,
   component: SchedulePage,
 });
 export { route as Route };
@@ -60,9 +62,10 @@ function ScheduleError({ error, onRetry }: { error: unknown; onRetry: () => void
 }
 
 function ScheduleContent({ options }: { options: ScheduleOptions }) {
-  const [pickedSectorId, setPickedSectorId] = useState<string | null>(null);
+  const initial = initialSchedule(route.useSearch(), options);
+  const [pickedSectorId, setPickedSectorId] = useState<string | null>(initial.sectorId);
   const [mode, setMode] = useState<PeriodMode>('week');
-  const [anchor, setAnchor] = useState(options.today);
+  const [anchor, setAnchor] = useState(initial.anchor);
   const [target, setTarget] = useState<ExceptionTarget | null>(null);
   const [editing, setEditing] = useState<ScheduleTarget | null>(null);
   const sectorId = pickedSectorId ?? (options.sectors.length === 1 ? options.sectors[0].id : null);

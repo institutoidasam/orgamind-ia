@@ -11,14 +11,23 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { sectorInputSchema, type Sector, type SectorInput } from "../schemas";
+import {
+  sectorInputSchema,
+  type Sector,
+  type SectorInput,
+  type SectorUsage,
+} from "../schemas";
+import { sectorInUse } from "../sector-usage";
 import { useAllUsers } from "@/features/users/api";
 import { useAuthStore } from "@/stores/auth.store";
 import { canSetSectorManagerUi } from "../sector-policy";
 import { FormField } from "./form-field";
+import { SectorInUse } from "./sector-in-use";
 
 type Props = {
   sector?: Sector;
+  /** Uso do setor (E4): em uso e ativo, a opção "Inativo" fica desligada. */
+  usage?: SectorUsage | null;
   pending: boolean;
   onSubmit: (input: SectorInput) => Promise<void>;
   onCancel: () => void;
@@ -31,7 +40,13 @@ const EMPTY: SectorInput = {
   isActive: true,
 };
 
-export function SectorForm({ sector, pending, onSubmit, onCancel }: Props) {
+export function SectorForm({
+  sector,
+  usage,
+  pending,
+  onSubmit,
+  onCancel,
+}: Props) {
   const form = useForm<SectorInput>({
     resolver: zodResolver(sectorInputSchema) as never,
     defaultValues: EMPTY,
@@ -48,7 +63,7 @@ export function SectorForm({ sector, pending, onSubmit, onCancel }: Props) {
           Gestor: {sector?.manager?.name ?? "A definir"}
         </p>
       )}
-      <SectorState form={form} />
+      <SectorState form={form} usage={sector?.isActive ? usage : null} />
       <div className="flex gap-2">
         <Button type="button" variant="outline" onClick={onCancel}>
           Cancelar
@@ -127,8 +142,10 @@ function SectorManager({
 
 function SectorState({
   form,
+  usage,
 }: {
   form: ReturnType<typeof useForm<SectorInput>>;
+  usage?: SectorUsage | null;
 }) {
   const isActive = useWatch({ control: form.control, name: "isActive" });
   return (
@@ -142,9 +159,12 @@ function SectorState({
         </SelectTrigger>
         <SelectContent>
           <SelectItem value="active">Ativo</SelectItem>
-          <SelectItem value="inactive">Inativo</SelectItem>
+          <SelectItem value="inactive" disabled={sectorInUse(usage)}>
+            Inativo
+          </SelectItem>
         </SelectContent>
       </Select>
+      <SectorInUse usage={usage} />
       <p className="mt-1 text-xs text-muted-foreground">
         Setores inativos preservam o histórico e saem de novas seleções.
       </p>

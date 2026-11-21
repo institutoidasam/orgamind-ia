@@ -1,4 +1,5 @@
 import { readApiErrorBody } from '@/lib/api-error';
+import { LEVEL_IN_USE_409, LEVEL_IN_USE_CODE } from './in-use';
 
 const FALLBACK_MESSAGE = 'Não foi possível salvar o nível.';
 
@@ -8,6 +9,7 @@ const LEVEL_ERROR_MESSAGES: Record<string, string> = {
   [LEVEL_NAME_TAKEN_CODE]: 'Já existe um nível com esse nome.',
   'levels.invalid_order': 'A lista de níveis mudou. Atualize a página e tente de novo.',
   'levels.not_found': 'Nível não encontrado. Atualize a página.',
+  [LEVEL_IN_USE_CODE]: LEVEL_IN_USE_409,
 };
 
 /** Mensagem PT-BR para o código de erro da API de níveis. */

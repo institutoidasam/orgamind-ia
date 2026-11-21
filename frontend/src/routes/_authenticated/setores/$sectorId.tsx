@@ -1,17 +1,17 @@
 import { useState } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { QueryErrorFallback } from "@/components/query-error-fallback";
 import { Skeleton } from "@/components/ui/skeleton";
-import { extractApiError } from "@/lib/api-error";
 import { useAuthStore } from "@/stores/auth.store";
 import { usePermission } from "@/features/permissions/use-permission";
 import { ExportPeopleButton } from "@/features/people-export/components/export-people-button";
 import { SectorForm } from "@/features/internal-admin/components/sector-form";
 import { useSector, useUpdateSector } from "@/features/internal-admin/api";
+import { SectorInactivateDialog } from "@/features/internal-admin/components/sector-inactivate-dialog";
 import { SectorNumber } from "@/features/internal-admin/components/sector-number";
+import { useSectorSave } from "@/features/internal-admin/use-sector-save";
 import type { SectorChannel, SectorDetail } from "@/features/internal-admin/schemas";
 import { useSectorPeople } from "@/features/sector-people/api";
 import { AddPeopleDialog } from "@/features/sector-people/components/add-people-dialog";
@@ -196,6 +196,7 @@ function AdminPanel({ sectorId }: { sectorId: string }) {
   const sector = useSector(sectorId);
   const update = useUpdateSector(sectorId);
   const navigate = useNavigate();
+  const save = useSectorSave(sectorId, sector.data, update.mutateAsync);
   if (!sector.data) return null;
   return (
     <>
@@ -204,19 +205,20 @@ function AdminPanel({ sectorId }: { sectorId: string }) {
         <h2 className="font-heading text-lg font-semibold">Editar setor</h2>
         <SectorForm
           sector={sector.data}
+          usage={sector.data.usage}
           pending={update.isPending}
           onCancel={() => navigate({ to: "/setores" })}
-          onSubmit={async (input) => {
-            try {
-              await update.mutateAsync(input);
-              toast.success("Setor atualizado");
-            } catch (error) {
-              const apiError = await extractApiError(error);
-              toast.error(apiError.title, { description: apiError.message });
-            }
-          }}
+          onSubmit={save.submit}
         />
       </section>
+      <SectorInactivateDialog
+        open={save.inactivating !== null}
+        name={save.inactivating?.name ?? sector.data.name}
+        hasAreaNumber={sector.data.channel !== null}
+        pending={update.isPending}
+        onConfirm={save.confirm}
+        onCancel={save.cancel}
+      />
     </>
   );
 }

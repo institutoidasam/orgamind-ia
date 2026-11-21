@@ -36,6 +36,26 @@ export function invalidLevel(): DomainError {
   });
 }
 
+/** Reativar quem tem o setor principal inativo (E10, DJ15): troque ou reative o setor antes. */
+export function sectorInactiveOnReactivation(): DomainError {
+  return new DomainError({
+    code: 'user.sector_inactive',
+    message:
+      'O setor desta pessoa está inativo. Reative o setor ou troque o setor antes de reativar a pessoa.',
+    status: 409,
+  });
+}
+
+/** Reativar quem tem o nível desativado (E10, DJ15): troque ou reative o nível antes. */
+export function levelInactiveOnReactivation(): DomainError {
+  return new DomainError({
+    code: 'user.level_inactive',
+    message:
+      'O nível desta pessoa está desativado. Reative o nível ou troque o nível antes de reativar a pessoa.',
+    status: 409,
+  });
+}
+
 export function emailTaken(): ConflictError {
   return new ConflictError('Email already taken', 'user.email_taken');
 }

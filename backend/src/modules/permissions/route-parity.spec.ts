@@ -25,6 +25,7 @@ import { SectorPeopleController } from '../sector-people/sector-people.controlle
 import { StaffScheduleController } from '../staff-schedule/staff-schedule.controller';
 import { TeamWhatsappController } from '../team-whatsapp/team-whatsapp.controller';
 import { TeamAlertController } from '../team-whatsapp/team-alert.controller';
+import { TeamPanoramaController } from '../team-whatsapp/team-panorama.controller';
 import { ShiftsController } from '../shifts/shifts.controller';
 import { LevelsController } from '../levels/levels.controller';
 import { InternalSectorsController } from '../internal-sectors/internal-sectors.controller';
@@ -108,6 +109,7 @@ const PARITY: ParityRow[] = [
       ['POST /dispatches/:id/reminders', ASO],
     ],
   },
+  { controller: TeamPanoramaController, routes: [['GET /panorama', ASO]] },
   { controller: ShiftsController, routes: CRUD_A },
   { controller: LevelsController, routes: CRUD_A },
   {

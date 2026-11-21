@@ -25,7 +25,9 @@
   - GK12: a migração tem `SET LOCAL lock_timeout` e nenhum `UPDATE` ou `DROP`.
   - GK13: nenhum `logger` novo.
 - Gate completo do back contra `origin/main`: nada novo do K2. Os 30 achados de lint em `chat/chat-media.send.spec.ts` são dívida do K1 (arquivo que o K2 não toca).
-- **Próximo passo:** gate completo do front (rodando sozinho), depois o QA visual (QA-1 a QA-5), depois commits e o PR rascunho sobre `feat/caixa-situacao`.
+- Gate completo do front contra `origin/main`: nada novo do K2 (lint 105, sonar 18 e complexidade 224 iguais ao K1).
+- QA visual na stack local de QA: 10 critérios em 2 rodadas, sem defeito (`qa/qa-result-1.md`, `qa/qa-result-2.md`); gate completo do back repetido no estado final, sem nada novo.
+- **Fechado (21/11):** commits `f19432e` (back), `57d9789` (front) e `39be4e1` (docs); PR rascunho #24 sobre `feat/caixa-situacao`. Sem merge e sem deploy. O Lote K3 (passagem de turno) segue em `feat/passagem-turno`.
 
 ## Preparação (principal, antes da T1)
 

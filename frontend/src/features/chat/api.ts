@@ -97,7 +97,11 @@ function conversationListQuery({ filter, search, status, instanceId, assignee, p
       });
       if (search) params.set('search', search);
       if (instanceId) params.set('instanceId', instanceId);
-      if (assignee) params.set('assignee', assignee);
+      // Aba "Recebidas na passagem de turno" (K3-3): o servidor força o atendente = quem olha.
+      if (assignee === 'handover') {
+        params.set('assignee', 'me');
+        params.set('handover', 'true');
+      } else if (assignee) params.set('assignee', assignee);
       if (provider) params.set('provider', provider);
       return api.get(`chat/conversations?${params.toString()}`).json<unknown>().then(parseConversationsPage);
     },

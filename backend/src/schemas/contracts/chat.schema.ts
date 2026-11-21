@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { channelProviderEnum, type ChannelProviderContract } from './channel-provider.schema';
+import type { TeamPurpose } from './team-whatsapp.schema';
 
 export const listConversationsQuerySchema = z.object({
   filter: z.enum(['all', 'unread', 'awaiting']).default('all'),
@@ -18,6 +19,9 @@ export const listConversationsQuerySchema = z.object({
   // low-volume provider like a warming-up Twilio number next to a
   // high-volume Evolution one).
   provider: channelProviderEnum.optional(),
+  // Recebidas na passagem de turno (K3-3): 'true' = só as que a última mudança
+  // de atendente foi uma passagem; o servidor força assignee = quem olha (DT3).
+  handover: z.enum(['true', 'false']).optional(),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(30),
 });
@@ -76,6 +80,12 @@ export type ChatMessageMedia = {
   sizeBytes: number | null; durationSec: number | null; width: number | null; height: number | null;
 };
 
+/** `sentAt` do envio = COALESCE(firedAt, createdAt); `alertSentAt` = hora real do disparo do alerta (DT6). */
+export type ChatMessageTeamTag =
+  | { kind: 'dispatch'; purpose: TeamPurpose | null; sentAt: string }
+  | { kind: 'reminder' }
+  | { kind: 'alert_reply'; alertSentAt: string };
+
 export type ChatMessage = {
   id: string; conversationId: string; direction: 'INBOUND' | 'OUTBOUND'; kind: string;
   content: string | null; status: string; providerMessageId: string | null;
@@ -92,6 +102,8 @@ export type ChatMessage = {
    * Additive field: existing consumers that don't read it are unaffected.
    */
   errorCode: string | null;
+  /** K3-6: etiqueta de envio da equipe; `listMessages` sempre preenche, outros caminhos omitem. */
+  teamTag?: ChatMessageTeamTag | null;
 };
 
 export type MessagesPage = { items: ChatMessage[]; nextCursor: string | null };
@@ -134,6 +146,34 @@ export const reopenConversationSchema = z.object({
   note: conversationNoteSchema,
 });
 export type ReopenConversationInput = z.infer<typeof reopenConversationSchema>;
+
+// K3-1/DT5: teto = o maior `pageSize` da lista de origem; observação obrigatória,
+// aparada, comum a todas; só vai para o histórico, nunca para trilha nem log.
+export const HANDOVER_MAX_CONVERSATIONS = 100;
+export const shiftHandoverSchema = z.object({
+  toUserId: z.string().min(1),
+  // Ausente = quem pede (K3-1); outro = só o ADMIN (K3-2).
+  fromUserId: z.string().min(1).optional(),
+  note: z.string().trim().min(1).max(200),
+  conversationIds: z
+    .array(z.string().min(1))
+    .min(1)
+    .max(HANDOVER_MAX_CONVERSATIONS)
+    .refine((ids) => new Set(ids).size === ids.length, {
+      message: 'Há conversas repetidas.',
+    }),
+});
+export type ShiftHandoverInput = z.infer<typeof shiftHandoverSchema>;
+export type HandoverSkipReason =
+  | 'resolved'
+  | 'other_assignee'
+  | 'unassigned'
+  | 'already_with_target'
+  | 'not_found';
+export type ShiftHandoverResult = {
+  transferred: { id: string }[];
+  skipped: { id: string; reason: HandoverSkipReason }[];
+};
 
 export type ConversationHistoryAction =
   | 'ASSUMED'

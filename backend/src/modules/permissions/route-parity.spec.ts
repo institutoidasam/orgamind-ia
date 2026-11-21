@@ -27,6 +27,8 @@ import { TeamWhatsappController } from '../team-whatsapp/team-whatsapp.controlle
 import { TeamAlertController } from '../team-whatsapp/team-alert.controller';
 import { TeamPanoramaController } from '../team-whatsapp/team-panorama.controller';
 import { TeamPendencyController } from '../team-whatsapp/team-pendency.controller';
+import { TeamPendencyHandoverController } from '../team-whatsapp/team-pendency-handover.controller';
+import { TeamConversationDispatchController } from '../team-whatsapp/team-conversation-dispatch.controller';
 import { ShiftsController } from '../shifts/shifts.controller';
 import { LevelsController } from '../levels/levels.controller';
 import { InternalSectorsController } from '../internal-sectors/internal-sectors.controller';
@@ -123,6 +125,24 @@ const PARITY: ParityRow[] = [
       ['POST /pendencies/:id/notes', ASO],
       ['POST /pendencies/:id/close', ASO],
       ['POST /pendencies/:id/reopen', ASO],
+    ],
+  },
+  {
+    // Lote K3 (DT4): leitura e passagem só com `@RequirePermission('equipe.enviar')`.
+    controller: TeamPendencyHandoverController,
+    routes: [
+      ['GET /pendency-handover/targets', ASO],
+      ['POST /pendency-handover', ASO],
+    ],
+  },
+  {
+    // Lote K3 (DT7): último envio da conversa, da caixa (`@Roles('ADMIN', 'OPERATOR')`).
+    controller: TeamConversationDispatchController,
+    routes: [
+      [
+        'GET /conversations/:conversationId/last-dispatch',
+        ['ADMIN', 'OPERATOR'],
+      ],
     ],
   },
   { controller: ShiftsController, routes: CRUD_A },

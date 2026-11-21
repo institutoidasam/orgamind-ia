@@ -167,6 +167,13 @@ export type ChatMediaDownloadJob = {
    * before this field existed still deserialize.
    */
   mediaUrl?: string | null;
+  /**
+   * K3-7(d): mídia de histórico importado (sync da Evolution ou backfill do
+   * ingest). Com `true` o processor nunca enfileira o robô, mesmo que a
+   * mensagem seja recente. Optional: jobs enfileirados antes do campo existir
+   * não o têm e continuam decididos só pela idade.
+   */
+  imported?: boolean;
 };
 
 export type BotReplyJob = {

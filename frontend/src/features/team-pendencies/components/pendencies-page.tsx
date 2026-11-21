@@ -11,9 +11,14 @@ import {
   type PendencyFilters,
 } from "../api";
 import type { PendencyMe } from "../pendency-actions";
-import type { TeamPendencyList } from "../schemas";
+import type { TeamPendencyItem, TeamPendencyList } from "../schemas";
 import { PendencyActionsBar } from "./pendency-actions-bar";
 import { PendencyFiltersBar } from "./pendency-filters";
+import {
+  HandoverOwnButton,
+  HandoverRowButton,
+  PendencyHandoverProvider,
+} from "./pendency-handover-dialog";
 import { PendencyRow } from "./pendency-row";
 
 const TITLE = "Pendências da equipe";
@@ -47,6 +52,16 @@ function useBackToLastPage(
     const lastPage = Math.ceil(data.total / data.pageSize);
     if (filters.page > lastPage) setFilters({ ...filters, page: lastPage });
   }, [data, filters, setFilters]);
+}
+
+/** Ações da tratativa e, só para o ADMIN, "Passar as pendências de {nome}" (K3-4). */
+function RowActions({ item, me }: { item: TeamPendencyItem; me: PendencyMe }) {
+  return (
+    <>
+      <PendencyActionsBar item={item} me={me} />
+      <HandoverRowButton item={item} me={me} />
+    </>
+  );
 }
 
 type ListProps = {
@@ -86,7 +101,7 @@ function PendencyListBody({ query, me, filters, onFilters }: ListProps) {
             <PendencyRow
               item={item}
               me={me}
-              renderActions={(row) => <PendencyActionsBar item={row} me={me} />}
+              renderActions={(row) => <RowActions item={row} me={me} />}
             />
           </li>
         ))}
@@ -105,10 +120,12 @@ function PendencyListBody({ query, me, filters, onFilters }: ListProps) {
 
 function PageShell({ children }: { children: ReactNode }) {
   return (
-    <main className="mx-auto max-w-5xl space-y-4">
-      <h1 className="text-2xl font-bold">{TITLE}</h1>
-      {children}
-    </main>
+    <PendencyHandoverProvider>
+      <main className="mx-auto max-w-5xl space-y-4">
+        <h1 className="text-2xl font-bold">{TITLE}</h1>
+        {children}
+      </main>
+    </PendencyHandoverProvider>
   );
 }
 
@@ -136,6 +153,7 @@ export function PendenciesPage() {
   }
   return (
     <PageShell>
+      <HandoverOwnButton me={me} />
       <PendencyFiltersBar
         filters={filters}
         sectors={query.data?.sectors ?? []}

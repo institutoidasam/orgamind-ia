@@ -6,6 +6,7 @@ import { MessageComposer, type ReplyTarget } from './message-composer';
 import { BotControl } from './bot-control';
 import { ConversationActions } from './conversation-actions';
 import { ConversationHistory } from './conversation-history';
+import { LastDispatchBanner } from './last-dispatch-banner';
 import { SituationBadge } from './situation-badge';
 import { Button } from '@/components/ui/button';
 import { QueryErrorFallback } from '@/components/query-error-fallback';
@@ -92,12 +93,13 @@ function ThreadHeader({ conversationId, conv }: { conversationId: string; conv?:
   );
 }
 
-/** Cabeçalho e, logo abaixo, o "Histórico da conversa" (recolhido). */
+/** Cabeçalho e, logo abaixo, o "Histórico da conversa" (recolhido) e a faixa do último envio à equipe. */
 function ThreadTop({ conversationId, conv }: { conversationId: string; conv?: ConversationSummary }) {
   return (
     <>
       <ThreadHeader conversationId={conversationId} conv={conv} />
       <ConversationHistory conversationId={conversationId} />
+      <LastDispatchBanner conversationId={conversationId} />
     </>
   );
 }

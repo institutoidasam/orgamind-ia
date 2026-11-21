@@ -10,6 +10,7 @@ import {
 import type { ConversationSummary } from '../schemas';
 import { conversationActions } from '../situation';
 import { ConversationActionDialog } from './conversation-action-dialog';
+import { PassConversationsButton } from './shift-handover-dialog';
 import { TransferMenu } from './transfer-menu';
 
 type Kind = 'resolve' | 'reopen' | 'remove';
@@ -102,6 +103,7 @@ export function ConversationActions({ conv }: { conv: ConversationSummary }) {
         <TransferMenu assignedUserId={expectedAssigneeId} meId={me.id} disabled={busy} onTransfer={assign} />
       ) : null}
       {can.remove ? <ActionButton label="Remover atendente" disabled={busy} onClick={() => start('remove')} /> : null}
+      <PassConversationsButton conv={conv} />
       <ConversationActionDialog
         open={dialogOpen}
         title={DIALOG_TITLE[pending?.kind ?? 'resolve']}

@@ -15,6 +15,7 @@ import { ChatEventsService } from './chat-events.service';
 import { WhatsappProvidersService } from '../whatsapp-providers/whatsapp-providers.service';
 import { WhatsappSendError } from '../whatsapp-providers/errors/whatsapp.errors';
 import { claimForReply } from './conversation-claim';
+import { findHandoverReceivedIds } from './conversation-handover-received.query';
 import { toConversationSummary } from './conversation-summary.mapper';
 import { resolveConversationForOutbound } from './resolve-conversation';
 import { SESSION_WINDOW_MS, hasSessionWindow } from './session-window';
@@ -136,6 +137,13 @@ export class ChatService {
   ) {}
 
   listConversations(q: ListConversationsQuery, currentUserId: string) {
+    // K3-3/DT3: "Recebidas na passagem de turno". O servidor força o atendente =
+    // quem olha (ignora `assignee`) e a lista fica restrita aos ids da consulta.
+    if (q.handover === 'true') {
+      return findHandoverReceivedIds(this.prisma, currentUserId).then((ids) =>
+        this.repo.listConversations({ ...q, assignee: currentUserId }, { ids }),
+      );
+    }
     // 'me' is resolved here (the repo never sees it) so the filter maps to a
     // concrete assignedUserId equality.
     const resolved = q.assignee === 'me' ? { ...q, assignee: currentUserId } : q;

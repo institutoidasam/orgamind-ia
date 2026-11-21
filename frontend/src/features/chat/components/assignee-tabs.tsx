@@ -1,5 +1,8 @@
-/** Assignee filter value: null = Todas, 'me' = Minhas, 'unassigned' = Não atribuídas. */
-export type AssigneeFilter = null | 'me' | 'unassigned';
+/**
+ * Assignee filter value: null = Todas, 'me' = Minhas, 'unassigned' = Não atribuídas,
+ * 'handover' = Recebidas na passagem de turno (K3-3; a consulta manda assignee=me&handover=true).
+ */
+export type AssigneeFilter = null | 'me' | 'unassigned' | 'handover';
 
 export function AssigneeTabs({
   value,
@@ -12,6 +15,7 @@ export function AssigneeTabs({
     { id: null, label: 'Todas' },
     { id: 'me', label: 'Minhas' },
     { id: 'unassigned', label: 'Não atribuídas' },
+    { id: 'handover', label: 'Recebidas na passagem de turno' },
   ];
 
   return (
@@ -22,7 +26,7 @@ export function AssigneeTabs({
       >
         atribuição
       </div>
-      <div className="mt-1 flex gap-1.5 overflow-x-auto pb-0.5 text-xs">
+      <div className="mt-1 flex flex-wrap gap-1.5 pb-0.5 text-xs">
         {tabs.map((t) => {
           const selected = value === t.id;
           return (

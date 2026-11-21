@@ -53,6 +53,19 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+describe('PermissionsMatrix: criar alerta urgente', () => {
+  it('mostra Criar alerta urgente com a explicação; Supervisor e Operador desligados no padrão, Administrador ligado', async () => {
+    await renderMatrix(matrixWith(DEFAULTS.OPERATOR));
+
+    expect(box('Supervisor', 'Criar alerta urgente')).not.toBeChecked();
+    expect(box('Operador', 'Criar alerta urgente')).not.toBeChecked();
+    expect(box('Administrador', 'Criar alerta urgente')).toBeChecked();
+    expect(box('Leitura', 'Criar alerta urgente')).not.toBeChecked();
+    expect(screen.getByText(/Sem ela, a finalidade Urgência não aparece\.$/)).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('equipe.urgencia');
+  });
+});
+
 describe('PermissionsMatrix: importar planilha de pessoas', () => {
   it('mostra a linha com a explicação, desmarcada para Supervisor e Operador por padrão', async () => {
     await renderMatrix(matrixWith(DEFAULTS.OPERATOR));
@@ -69,7 +82,7 @@ describe('PermissionsMatrix: importar planilha de pessoas', () => {
     expect(document.body.textContent).not.toContain('pessoas.importar');
   });
 
-  it('aceita a matriz que o back manda com as 10 chaves, sem cair no erro de leitura', async () => {
+  it('aceita a matriz que o back manda com as 11 chaves, sem cair no erro de leitura', async () => {
     const keys = [
       'pessoas.editar',
       'pessoas.inativar',
@@ -81,11 +94,12 @@ describe('PermissionsMatrix: importar planilha de pessoas', () => {
       'trilha.consultar',
       'pessoas.exportar',
       'pessoas.importar',
+      'equipe.urgencia',
     ] as PermissionKey[];
     const matrix = matrixWith(DEFAULTS.OPERATOR);
     await renderMatrix({ ...matrix, keys, roles: { ...matrix.roles, ADMIN: keys } });
 
-    expect(keys).toHaveLength(10);
+    expect(keys).toHaveLength(11);
     expect(box('Administrador', 'Importar planilha de pessoas')).toBeChecked();
     expect(screen.queryByText(/não foi possível/i)).not.toBeInTheDocument();
   });

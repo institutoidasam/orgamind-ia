@@ -1,11 +1,13 @@
 import { Input } from '@/components/ui/input';
 import { useDebouncedSearch } from '@/features/sector-people/components/search-state';
+import { reminderOfText } from '../alert-labels';
 import { channelLabel, countParts, OFF_REASON_LABEL } from '../error-messages';
 import {
   BASE_LABEL, DISPATCH_STATE_LABEL, dispatchSituation, LEGACY_BASE_LABEL, PURPOSE_LABEL,
 } from '../labels';
 import { hasTerm, matchesName, narrowedCount, NO_NAME_MATCH_TEXT } from '../name-search';
 import type { DispatchDetail, LeftOutRosterPerson, TeamExclusionReason } from '../schemas';
+import { AlertAndRecipients } from './alert-panel';
 import { ExcludedGroups } from './excluded-groups';
 import { RecheckSummary } from './recheck-summary';
 import { RecipientTable } from './recipient-table';
@@ -141,12 +143,14 @@ function situationText(dispatch: DispatchDetail): string | null {
 export function DispatchResult({ dispatch }: { dispatch: DispatchDetail }) {
   const { text, setText, q } = useDebouncedSearch();
   const situation = situationText(dispatch);
+  const tableProps = { dispatchId: dispatch.id, failedCount: dispatch.counts.failed, query: q };
   return (
     <div className="space-y-6">
       <header className="space-y-2">
         <p className="ds-eyebrow">comunicação · equipe</p>
         <h1 className="text-2xl font-bold">Resultado do envio</h1>
         <p className="font-medium">{dispatch.targetLabel}</p>
+        {dispatch.reminderOf && <p className="text-sm font-medium">{reminderOfText(dispatch.reminderOf)}</p>}
         <p className="text-sm text-muted-foreground">
           {whenText(dispatch)}
           {situation && ` · ${situation}`}
@@ -173,7 +177,7 @@ export function DispatchResult({ dispatch }: { dispatch: DispatchDetail }) {
       />
       <Audience dispatch={dispatch} term={q} />
       <RecheckSummary recheck={dispatch.recheck} term={q} />
-      <RecipientTable dispatchId={dispatch.id} failedCount={dispatch.counts.failed} query={q} />
+      {dispatch.ackDeadlineMinutes != null ? <AlertAndRecipients {...tableProps} /> : <RecipientTable {...tableProps} />}
     </div>
   );
 }

@@ -1967,6 +1967,18 @@ model TeamWhatsappRecipient {
   parentRecipientId  String?
   parentRecipient    TeamWhatsappRecipient?      @relation("ReminderRecipients", fields: [parentRecipientId], references: [id], onDelete: SetNull)
   reminderRecipients TeamWhatsappRecipient[]     @relation("ReminderRecipients")
+  // Pendência do alerta (Lote K2, K2-3); tudo nulo = sem responsável e aberta.
+  // Responsável (sem FK: sobrevive à exclusão, como ackByUserId).
+  pendencyHandlerId   String?
+  // Última vez que foi assumida ou transferida.
+  pendencyAssignedAt  DateTime?
+  // Prazo da tratativa = assumida + 60 min (K2-8).
+  pendencyDueAt       DateTime?
+  pendencyClosedAt    DateTime?
+  // Quem encerrou (sem FK).
+  pendencyClosedById  String?
+  pendencyCloseReason String?                     @db.VarChar(200)
+  pendencyNotes       TeamPendencyNote[]
   createdAt  DateTime                    @default(now())
   updatedAt  DateTime                    @updatedAt
 
@@ -1976,6 +1988,29 @@ model TeamWhatsappRecipient {
   // Verificador de presos (H2).
   @@index([status, updatedAt])
   @@index([parentRecipientId])
+}
+
+// Tipo da anotação da pendência (Lote K2, DK2): contato registrado, observação ao
+// assumir, motivo do encerramento e passagem de turno (K3).
+enum TeamPendencyNoteKind {
+  CONTACT
+  ASSUME
+  CLOSE
+  HANDOVER
+}
+
+/// Anotação da pendência (Lote K2, DK2): só de inclusão. `authorId` sem FK (sobrevive
+/// à exclusão do usuário); o texto vai até 200 e nunca entra em log nem trilha.
+model TeamPendencyNote {
+  id          String                @id @default(cuid())
+  recipientId String
+  recipient   TeamWhatsappRecipient @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  kind        TeamPendencyNoteKind
+  authorId    String
+  text        String                @db.VarChar(200)
+  createdAt   DateTime              @default(now())
+
+  @@index([recipientId, createdAt])
 }
 
 enum StaffScheduleTemplate {

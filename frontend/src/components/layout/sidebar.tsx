@@ -4,6 +4,7 @@ import { initials } from '@/lib/initials';
 import { WORKSPACE_NAME } from '@/lib/brand';
 import { useInternalUnreadCount } from '@/lib/internal-unread';
 import { usePermissions } from '@/features/permissions/use-permission';
+import { usePendencyCount } from '@/features/team-pendencies/api';
 import { isNavActive, navSection, type NavItem, type NavRole } from '@/lib/nav';
 
 type Props = {
@@ -35,7 +36,8 @@ export function Sidebar({ collapsed, user, onNavigate }: Props) {
   const permissions = usePermissions();
   const unread = useInternalUnreadCount({ role: user?.role, userKey: user?.email });
   const unreadTotal = unread.data?.count ?? 0;
-  const work = navSection('ops', role, permissions);
+  const pendencies = usePendencyMenu(role);
+  const work = navSection('ops', role, permissions, { teamSender: pendencies.teamSender });
   const followUp = navSection('sys', role, permissions);
   const administration = navSection('admin', role, permissions);
 
@@ -46,7 +48,7 @@ export function Sidebar({ collapsed, user, onNavigate }: Props) {
     >
       <SidebarBrand collapsed={collapsed} />
 
-      <Section eyebrow="Trabalho" items={work} badges={{ '/caixa-de-entrada': unreadTotal }} collapsed={collapsed} isActive={isActive} onNavigate={onNavigate} />
+      <Section eyebrow="Trabalho" items={work} badges={{ '/caixa-de-entrada': unreadTotal, '/pendencias-equipe': pendencies.count }} collapsed={collapsed} isActive={isActive} onNavigate={onNavigate} />
       <Section eyebrow="Acompanhar" items={followUp} collapsed={collapsed} isActive={isActive} onNavigate={onNavigate} />
       {administration.length > 0 && <Section eyebrow="Administração" items={administration} collapsed={collapsed} isActive={isActive} onNavigate={onNavigate} />}
 
@@ -55,6 +57,12 @@ export function Sidebar({ collapsed, user, onNavigate }: Props) {
       <SidebarIdentity collapsed={collapsed} user={user} />
     </div>
   );
+}
+
+/** Contador do menu (DK21): só ADMIN/SUPERVISOR/OPERATOR consultam; carregando ou `null` (não remetente) = item escondido, sem erro. */
+function usePendencyMenu(role?: NavRole) {
+  const { data } = usePendencyCount(role === 'ADMIN' || role === 'SUPERVISOR' || role === 'OPERATOR');
+  return { teamSender: typeof data === 'number', count: data ?? 0 };
 }
 
 function Section({ eyebrow, items, badges, collapsed, isActive, onNavigate }: SectionProps) {

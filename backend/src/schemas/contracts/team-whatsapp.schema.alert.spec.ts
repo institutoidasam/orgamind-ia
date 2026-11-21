@@ -18,6 +18,7 @@ const person = {
   lastReply: null,
   eligible: false,
   mayHaveReceived: false,
+  closure: null,
 };
 
 const panel = {

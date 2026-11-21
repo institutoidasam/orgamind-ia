@@ -9,6 +9,9 @@ import { TeamAlertController } from './team-alert.controller';
 import { TeamAudienceService } from './team-audience.service';
 import { TeamPanoramaController } from './team-panorama.controller';
 import { TeamPanoramaService } from './team-panorama.service';
+import { TeamPendencyActionsService } from './team-pendency-actions.service';
+import { TeamPendencyController } from './team-pendency.controller';
+import { TeamPendencyService } from './team-pendency.service';
 import { TeamWhatsappController } from './team-whatsapp.controller';
 import { TeamWhatsappRepository } from './team-whatsapp.repository';
 import { TeamWhatsappResultsService } from './team-whatsapp-results.service';
@@ -40,6 +43,7 @@ import { TeamWhatsappService } from './team-whatsapp.service';
     TeamWhatsappController,
     TeamAlertController,
     TeamPanoramaController,
+    TeamPendencyController,
   ],
   providers: [
     TeamWhatsappService,
@@ -51,6 +55,8 @@ import { TeamWhatsappService } from './team-whatsapp.service';
     TeamAlertAckService,
     TeamAlertReminderService,
     TeamPanoramaService,
+    TeamPendencyService,
+    TeamPendencyActionsService,
     TeamWhatsappRepository,
   ],
   exports: [TeamWhatsappRepository],

@@ -50,6 +50,8 @@ function setup(s: Setup) {
       }),
     },
     teamWhatsappRecipient: {
+      // Alcance da pendência (K2-7): o envio invisível consulta os fatos; sem eles, 404.
+      findUnique: vi.fn().mockResolvedValue(null),
       findFirst: vi
         .fn()
         .mockResolvedValue(s.inDispatch === false ? null : { id: 'r1' }),

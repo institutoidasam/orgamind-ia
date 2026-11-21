@@ -36,6 +36,13 @@ const alertAckSchema = z.object({
   note: z.string().nullish(),
 });
 
+const alertClosureSchema = z.object({
+  at: z.string(),
+  // Nulo quando o usuário que encerrou foi removido.
+  byName: z.string().nullable(),
+  reason: z.string(),
+});
+
 const alertPersonSchema = z.object({
   // Destinatário do alerta original: é o `id` da linha na tabela de destinatários.
   recipientId: z.string(),
@@ -48,6 +55,8 @@ const alertPersonSchema = z.object({
   lastReply: alertMessageSchema.nullish(),
   eligible: z.boolean(),
   mayHaveReceived: z.boolean(),
+  // Tratativa encerrada sem ciência (K2-2); o back antigo não manda o campo.
+  closure: alertClosureSchema.nullish(),
 });
 
 const alertReminderSchema = z.object({
@@ -81,5 +90,6 @@ export type TeamAlertPanel = z.infer<typeof teamAlertPanelSchema>;
 export type AlertPerson = TeamAlertPanel["people"][number];
 export type AlertMessage = NonNullable<AlertPerson["lastReply"]>;
 export type AlertAck = NonNullable<AlertPerson["ack"]>;
+export type AlertClosure = NonNullable<AlertPerson["closure"]>;
 export type AlertReminder = TeamAlertPanel["reminders"]["items"][number];
 export type AlertGroup = (typeof ALERT_GROUPS)[number];

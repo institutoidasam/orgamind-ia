@@ -3,6 +3,7 @@ import type { TeamAlertPanel } from '../../schemas/contracts/team-whatsapp.schem
 import { nameView } from '../../shared/authz/phone-visibility';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { requireViewable } from './team-alert-access';
+import { loadAlertClosures, type AlertClosure } from './team-alert-closure';
 import {
   factsOf,
   loadAlertHeader,
@@ -49,6 +50,7 @@ type PanelData = {
   people: readonly AlertPersonRow[];
   messages: ReadonlyMap<string, AlertReplyMessage>;
   reminders: readonly AlertReminderRow[];
+  closures: ReadonlyMap<string, AlertClosure>;
   names: ReadonlyMap<string, string | null>;
   /** O ator tem `telefone.ver_completo`: os nomes saem sem máscara (D11). */
   full: boolean;
@@ -73,16 +75,28 @@ export class TeamAlertPanelService {
     await requireViewable(this.repo, actor, dispatchId);
     const header = await loadAlertHeader(this.prisma, dispatchId);
     const people = await loadAlertPeople(this.prisma, dispatchId);
-    const [messages, reminders] = await Promise.all([
+    const [messages, reminders, closures] = await Promise.all([
       loadAlertMessages(this.prisma, messageIdsOf(people)),
       loadAlertReminders(this.prisma, dispatchId),
+      loadAlertClosures(this.prisma, dispatchId),
     ]);
     const names = await loadUserNames(this.prisma, [
       ...people.flatMap((p) => (p.ackByUserId ? [p.ackByUserId] : [])),
       ...reminders.flatMap((r) => (r.authorId ? [r.authorId] : [])),
+      ...[...closures.values()].flatMap((c) =>
+        c.byUserId ? [c.byUserId] : [],
+      ),
     ]);
     const full = seesFullPhone(actor);
-    return buildPanel({ header, people, messages, reminders, names, full });
+    return buildPanel({
+      header,
+      people,
+      messages,
+      reminders,
+      closures,
+      names,
+      full,
+    });
   }
 }
 
@@ -152,6 +166,21 @@ function personView(
     lastReply: messageView(data.messages, row.lastReplyMessageId),
     eligible,
     mayHaveReceived,
+    closure: closureView(data, row.id),
+  };
+}
+
+/** Só a pessoa com tratativa encerrada tem `closure`; o grupo não depende dele (K2-2). */
+function closureView(
+  data: PanelData,
+  recipientId: string,
+): PanelPerson['closure'] {
+  const closure = data.closures.get(recipientId);
+  if (!closure) return null;
+  return {
+    at: closure.at.toISOString(),
+    byName: viewedName(data, closure.byUserId),
+    reason: closure.reason,
   };
 }
 

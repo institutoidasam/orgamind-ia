@@ -17,6 +17,7 @@ import {
   Layers,
   History,
   Upload,
+  ClipboardList,
   type LucideIcon,
 } from 'lucide-react';
 import type { PermissionKey } from '@/features/permissions/keys';
@@ -57,6 +58,8 @@ export type NavItem = {
    * listed in the sidebar (reachable from elsewhere). Still shown in the palette.
    */
   hideInSidebar?: boolean;
+  /** Só aparece no sidebar quando quem olha é remetente (`navSection` com `teamSender`); paleta e `canAccessPath` não olham. */
+  requiresTeamSender?: true;
 };
 
 /**
@@ -86,6 +89,7 @@ export const NAV: NavItem[] = [
   { to: '/caixa-de-entrada', label: 'Caixa de entrada', icon: MessageSquare, section: 'ops', roles: ALL_INTERNAL_ROLES },
   { to: '/nova-comunicacao', label: 'Nova comunicação', icon: Send, section: 'ops', roles: WRITE_INTERNAL_ROLES },
   { to: '/whatsapp-equipe', label: 'WhatsApp da equipe', icon: MessageCircle, section: 'ops', roles: WRITE_INTERNAL_ROLES },
+  { to: '/pendencias-equipe', label: 'Pendências da equipe', icon: ClipboardList, section: 'ops', roles: WRITE_INTERNAL_ROLES, requiresTeamSender: true },
   { to: '/escala', label: 'Escala', icon: CalendarDays, section: 'ops', roles: WRITE_INTERNAL_ROLES },
   { to: '/demandas', label: 'Demandas', icon: FileText, section: 'sys', roles: ALL_INTERNAL_ROLES },
   { to: '/comunicados', label: 'Comunicados', icon: MessageSquare, section: 'sys', roles: ALL_INTERNAL_ROLES },
@@ -167,12 +171,18 @@ export function canUseLegacyModules(role?: NavRole): boolean {
   return role === 'ADMIN' || role === 'OPERATOR';
 }
 
-export function navSection(section: NavSection, role?: NavRole, permissions?: readonly PermissionKey[]): NavItem[] {
+export function navSection(
+  section: NavSection,
+  role?: NavRole,
+  permissions?: readonly PermissionKey[],
+  opts?: { teamSender?: boolean },
+): NavItem[] {
   return NAV.filter(
     (n) =>
       n.section === section
       && !n.hideInSidebar
       && !HIDDEN_FROM_SIDEBAR.includes(n.to)
+      && (!n.requiresTeamSender || opts?.teamSender === true)
       && itemAllows(n, role, permissions),
   );
 }

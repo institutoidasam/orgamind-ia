@@ -789,13 +789,13 @@ export class ChatIngestService {
     }
 
     if (m.media && m.kind !== 'TEXT' && message.media) {
-      await this.mediaQueue.add('download', {
+      /* prettier-ignore */ await this.mediaQueue.add('download', {
         messageMediaId: message.media.id, messageId: message.id, conversationId: conversation.id,
         instanceId, evolutionInstanceName: inst?.evolutionInstanceName ?? '', providerMessageId: m.providerMessageId,
         remoteJid: m.remoteJid, kind: m.kind, mimeType: m.media.mimeType ?? null, fromMe: !isInbound,
         // Twilio: mídia baixada por URL autenticada (MediaUrl0); Evolution não
         // preenche url e continua no caminho por message-key.
-        mediaUrl: m.media.url ?? null,
+        mediaUrl: m.media.url ?? null, imported: backfill, // K3-7(d): backfill = histórico, sem robô
       });
     }
 

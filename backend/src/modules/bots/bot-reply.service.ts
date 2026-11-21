@@ -15,6 +15,9 @@ import type { Env } from '../../shared/config/env.schema';
 const LOCK_TTL_MS = 120_000;
 const RELEASE_LOCK_LUA = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end";
 const KIND_TO_DIFY: Record<string, DifyFile['type']> = { IMAGE: 'image', AUDIO: 'audio' };
+// GT11: log do robô só com ids e o nome do erro, nunca mensagem/texto.
+const errName = (err: unknown): string =>
+  err instanceof Error ? err.name : typeof err;
 
 @Injectable()
 export class BotReplyService {
@@ -120,11 +123,40 @@ export class BotReplyService {
       if (!conv.difyConversationId && difyConversationId) {
         await this.chatRepo.setDifyConversationId(conversationId, difyConversationId);
       }
-      if (answer.trim().length > 0) {
-        await this.chat.sendBotReply(conversationId, answer, bot.id);
-      }
+      await this.sendAnswer(conversationId, bot.id, answer);
     } finally {
+      await this.releaseLock(lockKey, lockToken, conversationId);
+    }
+  }
+
+  // K3-7(c)/(e): resposta vazia não sai; depois do Dify nada relança — o BullMQ
+  // retentaria (Dify + envio de novo) e violaria "no máximo uma resposta".
+  private async sendAnswer(
+    conversationId: string,
+    botId: string,
+    answer: string,
+  ): Promise<void> {
+    if (answer.trim().length === 0) return;
+    try {
+      await this.chat.sendBotReply(conversationId, answer, botId);
+    } catch (err) {
+      await this.handleSendFailure(conversationId, botId, err);
+    }
+  }
+
+  // Nunca lança: a trava expira pelo TTL, então falhar aqui não pode virar retentativa.
+  private async releaseLock(
+    lockKey: string,
+    lockToken: string,
+    conversationId: string,
+  ): Promise<void> {
+    try {
       await this.redis.eval(RELEASE_LOCK_LUA, 1, lockKey, lockToken);
+    } catch (err) {
+      this.logger.warn(
+        { conversationId, errName: errName(err) },
+        'bot reply lock release failed; TTL will expire it',
+      );
     }
   }
 
@@ -170,9 +202,50 @@ export class BotReplyService {
         // best-effort
       }
     }
-    await this.chatRepo.setBotPaused(conversationId);
-    await this.audit.log('bot.reply_failed', 'Conversation', conversationId, {
-      botId, error: err instanceof Error ? err.message.slice(0, 300) : String(err),
+    await this.pauseAndAudit(conversationId, botId, {
+      error: err instanceof Error ? err.message.slice(0, 300) : String(err),
     });
+  }
+
+  // O envio da resposta falhou: pode ter saído, então só pausa e audita (sem
+  // contingência) e nunca relança.
+  private async handleSendFailure(
+    conversationId: string,
+    botId: string,
+    err: unknown,
+  ): Promise<void> {
+    this.logger.warn(
+      { conversationId, botId, errName: errName(err) },
+      'bot reply send failed; pausing bot',
+    );
+    await this.pauseAndAudit(conversationId, botId, { stage: 'send' });
+  }
+
+  // Pausa e trilha de `bot.reply_failed`, cada uma isolada: nunca lança, pois
+  // depois de o envio começar uma exceção viraria retentativa (resposta duplicada).
+  private async pauseAndAudit(
+    conversationId: string,
+    botId: string,
+    details: Record<string, unknown>,
+  ): Promise<void> {
+    try {
+      await this.chatRepo.setBotPaused(conversationId);
+    } catch (err) {
+      this.logger.warn(
+        { conversationId, botId, errName: errName(err) },
+        'bot pause failed after reply failure',
+      );
+    }
+    try {
+      await this.audit.log('bot.reply_failed', 'Conversation', conversationId, {
+        botId,
+        ...details,
+      });
+    } catch (err) {
+      this.logger.warn(
+        { conversationId, botId, errName: errName(err) },
+        'bot.reply_failed audit failed',
+      );
+    }
   }
 }

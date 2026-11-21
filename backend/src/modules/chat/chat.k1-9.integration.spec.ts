@@ -123,6 +123,7 @@ const ALLOWED = new Set([
   'chat/conversation-ownership.repository.ts',
   'chat/conversation-summary.mapper.ts',
   'chat/conversation-assign.rules.ts',
+  'chat/conversation-handover.rules.ts',
   'chat/conversation-claim.ts',
   'chat/conversation-ownership.service.ts',
   'chat/conversation-situation.ts',

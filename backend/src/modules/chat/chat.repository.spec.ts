@@ -3,6 +3,16 @@ import { mockDeep, type MockProxy } from 'vitest-mock-extended';
 import { ChatRepository } from './chat.repository';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
+/** Repositório com Prisma falso; `$queryRaw` devolve [] (listMessages consulta etiquetas de envio, K3-6). */
+function mockRepo(): {
+  prisma: MockProxy<PrismaService>;
+  repo: ChatRepository;
+} {
+  const prisma = mockDeep<PrismaService>();
+  prisma.$queryRaw.mockResolvedValue([] as never);
+  return { prisma, repo: new ChatRepository(prisma) };
+}
+
 describe('ChatRepository.findMediaById', () => {
   it('lê a MessageMedia pelo id e devolve o que o banco devolveu', async () => {
     const prisma = mockDeep<PrismaService>();
@@ -31,7 +41,7 @@ describe('ChatRepository.resetDifyConversationIdsForInstance', () => {
 describe('ChatRepository', () => {
   let prisma: MockProxy<PrismaService>;
   let repo: ChatRepository;
-  beforeEach(() => { prisma = mockDeep<PrismaService>(); repo = new ChatRepository(prisma); });
+  beforeEach(() => ({ prisma, repo } = mockRepo()));
 
   it('lists conversations ordered by lastMessageAt desc, non-archived, with unread filter', async () => {
     prisma.conversation.findMany.mockResolvedValue([] as never);

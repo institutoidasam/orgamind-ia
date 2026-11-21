@@ -2,7 +2,6 @@ import { Inject, Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import type { Readable } from 'node:stream';
 import type { ChannelProvider } from '@prisma/client';
-import { PrismaService } from '../../shared/prisma/prisma.service';
 import { NotFoundError, ConflictError, ChannelNotEvolutionError } from '../../shared/errors/domain.error';
 import { ChannelProviderDisabledError } from '../../shared/errors/channel-provider-disabled.error';
 import { isEnabledChannelProvider } from '../../shared/config/enabled-providers';
@@ -10,19 +9,20 @@ import { MEDIA_STORE, type MediaStore } from '../../shared/media/media-store.por
 import { ChatRepository } from './chat.repository';
 import { ChatEventsService } from './chat-events.service';
 import { WhatsappProvidersService } from '../whatsapp-providers/whatsapp-providers.service';
+import { ConversationOwnershipService } from './conversation-ownership.service';
 
 @Injectable()
 export class ChatMediaService {
   constructor(
-    private readonly prisma: PrismaService,
     @Inject(MEDIA_STORE) private readonly store: MediaStore,
     private readonly repo: ChatRepository,
     private readonly events: ChatEventsService,
     private readonly wa: WhatsappProvidersService,
+    private readonly ownership: ConversationOwnershipService,
   ) {}
 
   async getReadyMedia(mediaId: string): Promise<{ stream: Readable; mimeType: string; fileName: string | null }> {
-    const media = await this.prisma.messageMedia.findUnique({ where: { id: mediaId } });
+    const media = await this.repo.findMediaById(mediaId);
     if (!media) throw new NotFoundError('Media', mediaId);
     if (media.status !== 'READY' || !media.storageKey) throw new ConflictError('Media not ready', 'media.not_ready');
     const stream = await this.store.getStream(media.storageKey);
@@ -51,6 +51,8 @@ export class ChatMediaService {
     const conv = await this.repo.getConversationForSend(conversationId);
     if (!conv) throw new NotFoundError('Conversation', conversationId);
     this.assertProviderEnabled(conv.instance.provider);
+    // K1-5: reivindica a conversa (409 se é de outro) ANTES de gravar o arquivo no store.
+    await this.ownership.claimForReply(conversationId, userId);
     const cappedCaption = caption?.slice(0, 4096);
     const mt = this.mediatypeFor(file.mimetype);
     const kind = this.kindFor(mt);

@@ -17,6 +17,10 @@ import { OptInLinkService } from '../consent/optin-link.service';
 import type { ChatMediaDownloadJob, BotReplyJob } from '../queue/queue.constants';
 import type { Env } from '../../shared/config/env.schema';
 
+vi.mock('./conversation-inbound', () =>
+  vi.importActual('./conversation-inbound.test-fixtures'),
+);
+
 /**
  * I13/I14 — A IDENTIDADE NO CAMINHO DE ENTRADA.
  *

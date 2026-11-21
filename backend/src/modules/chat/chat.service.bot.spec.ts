@@ -7,6 +7,10 @@ import { WhatsappProvidersService } from '../whatsapp-providers/whatsapp-provide
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { AuditService } from '../../shared/audit/audit.service';
 
+vi.mock('./conversation-claim', () => ({
+  claimForReply: vi.fn().mockResolvedValue({ changed: false }),
+}));
+
 function make() {
   const repo = mockDeep<ChatRepository>();
   const events = mockDeep<ChatEventsService>();
@@ -61,22 +65,6 @@ describe('ChatService handoff', () => {
     await svc.sendReply('c1', 'user1', { text: 'resposta humana' });
 
     expect(repo.setBotPaused).toHaveBeenCalledWith('c1');
-  });
-
-  it('assignConversation to a user pauses the bot; unassign does not', async () => {
-    const { svc, repo, prisma } = make();
-    repo.findConversation.mockResolvedValue({ id: 'c1', instanceId: 'i1' } as never);
-    prisma.user.findUnique.mockResolvedValue({
-      id: 'u1',
-      hasAccess: true,
-    } as never);
-
-    await svc.assignConversation('c1', 'u1', 'actor1');
-    expect(repo.setBotPaused).toHaveBeenCalledWith('c1');
-
-    repo.setBotPaused.mockClear();
-    await svc.assignConversation('c1', null, 'actor1');
-    expect(repo.setBotPaused).not.toHaveBeenCalled();
   });
 
   it('resumeBot clears the pause', async () => {

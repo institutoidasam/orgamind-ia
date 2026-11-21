@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mockDeep, type MockProxy } from 'vitest-mock-extended';
 import { ChatService } from './chat.service';
 import { ChatRepository } from './chat.repository';
@@ -6,6 +6,10 @@ import { ChatEventsService } from './chat-events.service';
 import { WhatsappProvidersService } from '../whatsapp-providers/whatsapp-providers.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { AuditService } from '../../shared/audit/audit.service';
+
+vi.mock('./conversation-claim', () => ({
+  claimForReply: vi.fn().mockResolvedValue({ changed: false }),
+}));
 
 // Characterization tests for sendReply pinning the dispatch flow that the
 // attemptSend()/dispatchOutbound() extraction must preserve:

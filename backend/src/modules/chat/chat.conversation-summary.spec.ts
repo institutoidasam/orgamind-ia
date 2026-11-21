@@ -27,7 +27,7 @@ const fullRow = {
   lastMessageDirection: 'INBOUND',
   unreadCount: 3,
   assignedUserId: 'u9',
-  assignedUser: { name: 'Ana' },
+  assignedUser: { name: 'Ana', isActive: true, hasAccess: true },
   botPausedAt: null,
   // T6 (twilio-platform): último inbound → janela de 24h (TWILIO).
   lastInboundAt: new Date('2026-06-15T12:00:00.000Z'),
@@ -50,6 +50,11 @@ const expectedFull = {
   unreadCount: 3,
   assignedUserId: 'u9',
   assignedUserName: 'Ana',
+  // K1: situação calculada + marcas novas do resumo.
+  assignedUserActive: true,
+  status: 'IN_PROGRESS',
+  resolvedAt: null,
+  lastInboundAt: '2026-06-15T12:00:00.000Z',
   botId: 'b1',
   botName: 'Atendente',
   botPaused: false,

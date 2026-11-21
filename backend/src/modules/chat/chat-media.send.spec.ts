@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mockDeep, type MockProxy } from 'vitest-mock-extended';
 import { ChatMediaService } from './chat-media.service';
-import { PrismaService } from '../../shared/prisma/prisma.service';
 import { ChatRepository } from './chat.repository';
 import { ChatEventsService } from './chat-events.service';
 import { WhatsappProvidersService } from '../whatsapp-providers/whatsapp-providers.service';
 import type { MediaStore } from '../../shared/media/media-store.port';
+import { ConversationOwnershipService } from './conversation-ownership.service';
 
 const conv = {
   id: 'c1',
@@ -17,16 +17,31 @@ const conv = {
   instance: { id: 'i1', provider: 'EVOLUTION', evolutionInstanceName: 'picoa' },
 };
 
+function createMediaFixture() {
+  const store = mockDeep<MediaStore>();
+  const repo = mockDeep<ChatRepository>();
+  const events = mockDeep<ChatEventsService>();
+  const wa = mockDeep<WhatsappProvidersService>();
+  const svc = new ChatMediaService(
+    store,
+    repo,
+    events,
+    wa,
+    mockDeep<ConversationOwnershipService>(),
+  );
+  repo.getConversationForSend.mockResolvedValue(conv as never);
+  repo.createOutboundMediaMessage.mockResolvedValue('m1');
+  repo.getMessageById.mockResolvedValue({ id: 'm1', status: 'SENT', kind: 'IMAGE' } as never);
+  return { store, repo, wa, svc };
+}
+
 describe('ChatMediaService.sendMediaReply', () => {
-  let prisma: MockProxy<PrismaService>; let store: MockProxy<MediaStore>; let repo: MockProxy<ChatRepository>;
-  let events: MockProxy<ChatEventsService>; let wa: MockProxy<WhatsappProvidersService>; let svc: ChatMediaService;
+  let store: MockProxy<MediaStore>;
+  let repo: MockProxy<ChatRepository>;
+  let wa: MockProxy<WhatsappProvidersService>;
+  let svc: ChatMediaService;
   beforeEach(() => {
-    prisma = mockDeep<PrismaService>(); store = mockDeep<MediaStore>(); repo = mockDeep<ChatRepository>();
-    events = mockDeep<ChatEventsService>(); wa = mockDeep<WhatsappProvidersService>();
-    svc = new ChatMediaService(prisma, store, repo, events, wa);
-    repo.getConversationForSend.mockResolvedValue(conv as never);
-    repo.createOutboundMediaMessage.mockResolvedValue('m1');
-    repo.getMessageById.mockResolvedValue({ id: 'm1', status: 'SENT', kind: 'IMAGE' } as never);
+    ({ store, repo, wa, svc } = createMediaFixture());
   });
 
   it('stores the upload, sends image via provider, marks SENT', async () => {
@@ -65,6 +80,17 @@ describe('ChatMediaService.sendMediaReply', () => {
     expect(repo.createOutboundMediaMessage).toHaveBeenCalledWith(
       expect.objectContaining({ kind: 'IMAGE', content: 'legenda' }),
     );
+  });
+
+});
+
+describe('ChatMediaService.sendMediaReply (falha e storageKey)', () => {
+  let store: MockProxy<MediaStore>;
+  let repo: MockProxy<ChatRepository>;
+  let wa: MockProxy<WhatsappProvidersService>;
+  let svc: ChatMediaService;
+  beforeEach(() => {
+    ({ store, repo, wa, svc } = createMediaFixture());
   });
 
   it('marks FAILED when the provider send throws', async () => {

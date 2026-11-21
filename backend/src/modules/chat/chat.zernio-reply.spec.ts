@@ -8,6 +8,10 @@ import { WhatsappSendError } from '../whatsapp-providers/errors/whatsapp.errors'
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { AuditService } from '../../shared/audit/audit.service';
 
+vi.mock('./conversation-claim', () => ({
+  claimForReply: vi.fn().mockResolvedValue({ changed: false }),
+}));
+
 // O envio por GOZAP/ZERNIO/TWILIO é código inativo (GC5): esta suíte segue
 // cobrindo-o com todo provedor "ligado". O guard de provedor desligado do chat
 // tem o seu teste em chat.service.spec.ts.

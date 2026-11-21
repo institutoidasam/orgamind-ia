@@ -14,6 +14,7 @@ import { ChatRepository } from './chat.repository';
 import { ChatEventsService } from './chat-events.service';
 import { WhatsappProvidersService } from '../whatsapp-providers/whatsapp-providers.service';
 import { WhatsappSendError } from '../whatsapp-providers/errors/whatsapp.errors';
+import { claimForReply } from './conversation-claim';
 import { toConversationSummary } from './conversation-summary.mapper';
 import { resolveConversationForOutbound } from './resolve-conversation';
 import { SESSION_WINDOW_MS, hasSessionWindow } from './session-window';
@@ -154,24 +155,6 @@ export class ChatService {
     return toConversationSummary(conv);
   }
 
-  async assignConversation(conversationId: string, userId: string | null, actorUserId: string) {
-    const conv = await this.repo.findConversation(conversationId);
-    if (!conv) throw new NotFoundError('Conversation', conversationId);
-    if (userId) {
-      // Pessoa sem acesso (GC5) não é atribuível: mesmo erro de inexistente.
-      const user = await this.prisma.user.findUnique({
-        where: { id: userId },
-        select: { hasAccess: true },
-      });
-      if (!user?.hasAccess) throw new NotFoundError('User', userId);
-    }
-    await this.repo.assignConversation(conversationId, userId);
-    // Handoff: atribuir a conversa a um operador pausa o bot (não pausa ao desatribuir).
-    if (userId) await this.repo.setBotPaused(conversationId);
-    await this.audit.log('conversation.assign', 'Conversation', conversationId, { assignedUserId: userId, assignedBy: actorUserId });
-    await this.events.publish({ type: 'conversation.updated', conversationId, instanceId: conv.instanceId });
-  }
-
   async sendReply(conversationId: string, userId: string, input: SendReplyInput) {
     const conv = await this.repo.getConversationForSend(conversationId);
     if (!conv) throw new NotFoundError('Conversation', conversationId);
@@ -182,6 +165,14 @@ export class ChatService {
     // garantido, que além de não entregar nada queima cota e qualidade do
     // número.
     this.assertSessionWindowOpen(conv);
+    // K1-5: quem responde assume a conversa (ou recebe 409 se é de outro,
+    // inclusive o ADMIN). Depois das conferências de canal e de janela e antes
+    // de gravar a mensagem; a atribuição fica mesmo que o envio falhe.
+    await claimForReply(
+      { prisma: this.prisma, audit: this.audit, events: this.events },
+      conversationId,
+      userId,
+    );
     // Normalize the optional quoted fields ONCE (undefined -> null) so the
     // persisted row and the provider call always agree.
     const quoted = {

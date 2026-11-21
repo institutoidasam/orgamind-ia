@@ -3,6 +3,9 @@ import { channelProviderEnum, type ChannelProviderContract } from './channel-pro
 
 export const listConversationsQuerySchema = z.object({
   filter: z.enum(['all', 'unread', 'awaiting']).default('all'),
+  // Situação (K1-10): 'open' = Pendente + Em atendimento (padrão); 'resolved' =
+  // só as resolvidas. Combina com os demais filtros; `archivedAt: null` sempre.
+  status: z.enum(['open', 'resolved']).default('open'),
   search: z.string().optional(),
   instanceId: z.string().optional(),
   // Assignee filter: special values 'me' (resolved to the caller in the service)
@@ -26,6 +29,9 @@ export const listMessagesQuerySchema = z.object({
 });
 export type ListMessagesQuery = z.infer<typeof listMessagesQuerySchema>;
 
+// K1-1: calculada no mapper — resolvedAt → RESOLVED; senão atendente → IN_PROGRESS; senão PENDING.
+export type ConversationStatus = 'PENDING' | 'IN_PROGRESS' | 'RESOLVED';
+
 export type ConversationSummary = {
   id: string;
   instanceId: string;
@@ -47,6 +53,12 @@ export type ConversationSummary = {
   unreadCount: number;
   assignedUserId: string | null;
   assignedUserName: string | null;
+  // K1-8: isActive && hasAccess do atendente; null quando não há atendente.
+  assignedUserActive: boolean | null;
+  status: ConversationStatus;
+  resolvedAt: string | null;
+  // Último INBOUND (ISO); o front o devolve em "Resolver" (K1-3/K1-7).
+  lastInboundAt: string | null;
   botId: string | null;
   botName: string | null;
   botPaused: boolean;
@@ -96,8 +108,60 @@ export const typingSchema = z.object({
 });
 export type TypingInput = z.infer<typeof typingSchema>;
 
+// DK15: observação opcional de até 200 caracteres; só espaços vira vazia (o
+// service grava null). Vai só para o histórico, nunca para trilha nem log.
+export const conversationNoteSchema = z.string().trim().max(200).optional();
+
 export const assignConversationSchema = z.object({
   // null unassigns the conversation; a userId assigns it to that operator.
   userId: z.string().nullable(),
+  // Atendente que a tela mostrava (null = sem atendente). Obrigatório: ausente → 400.
+  expectedAssigneeId: z.string().nullable(),
+  note: conversationNoteSchema,
 });
 export type AssignConversationInput = z.infer<typeof assignConversationSchema>;
+
+export const resolveConversationSchema = z.object({
+  expectedAssigneeId: z.string().nullable(),
+  expectedLastInboundAt: z.iso.datetime().nullable(),
+  note: conversationNoteSchema,
+});
+export type ResolveConversationInput = z.infer<
+  typeof resolveConversationSchema
+>;
+
+export const reopenConversationSchema = z.object({
+  note: conversationNoteSchema,
+});
+export type ReopenConversationInput = z.infer<typeof reopenConversationSchema>;
+
+export type ConversationHistoryAction =
+  | 'ASSUMED'
+  | 'ASSUMED_ON_REPLY'
+  | 'TRANSFERRED'
+  | 'UNASSIGNED'
+  | 'RESOLVED'
+  | 'REOPENED'
+  | 'SHIFT_HANDOVER';
+
+export type ConversationHistoryItem = {
+  id: string;
+  action: ConversationHistoryAction;
+  createdAt: string;
+  actorId: string | null;
+  actorName: string | null;
+  fromUserId: string | null;
+  fromUserName: string | null;
+  toUserId: string | null;
+  toUserName: string | null;
+  note: string | null;
+};
+
+// hasMore: há mais de 200 entradas (M8).
+export type ConversationHistoryResponse = {
+  items: ConversationHistoryItem[];
+  hasMore: boolean;
+};
+
+export type ChatAssignee = { id: string; name: string };
+export type ChatAssigneesResponse = { items: ChatAssignee[] };

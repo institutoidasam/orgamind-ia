@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import type { ListConversationsQuery, ListMessagesQuery, ConversationsPage, ChatMessage, MessagesPage } from '../../schemas/contracts/chat.schema';
 import { conversationSummaryInclude, toConversationSummary } from './conversation-summary.mapper';
+import { resolvedAtFilter } from './conversation-situation';
 import { resolveConversationForOutbound } from './resolve-conversation';
 
 @Injectable()
@@ -10,6 +11,8 @@ export class ChatRepository {
 
   async listConversations(q: ListConversationsQuery): Promise<ConversationsPage> {
     const where: Record<string, unknown> = { archivedAt: null };
+    // K1-10: abertas × resolvidas é só `resolvedAt`; `archivedAt: null` fica sempre.
+    where.resolvedAt = resolvedAtFilter(q.status);
     if (q.filter === 'unread') where.unreadCount = { gt: 0 };
     // "Aguardando resposta": a última mensagem foi do CONTATO e ninguém
     // respondeu ainda — diferente de 'unread', que zera assim que o operador
@@ -73,17 +76,15 @@ export class ChatRepository {
     });
   }
 
+  /** Linha de `MessageMedia` pelo id (leitura do arquivo pronto); `null` se não existe. */
+  findMediaById(mediaId: string) {
+    return this.prisma.messageMedia.findUnique({ where: { id: mediaId } });
+  }
+
   /** Cheap existence check (id-only) for guards that don't need the joined row. */
   async conversationExists(id: string): Promise<boolean> {
     const row = await this.prisma.conversation.findUnique({ where: { id }, select: { id: true } });
     return row !== null;
-  }
-
-  async assignConversation(id: string, userId: string | null): Promise<void> {
-    await this.prisma.conversation.update({
-      where: { id },
-      data: { assignedUserId: userId, assignedAt: userId ? new Date() : null },
-    });
   }
 
   private toChatMessage(m: any): ChatMessage {

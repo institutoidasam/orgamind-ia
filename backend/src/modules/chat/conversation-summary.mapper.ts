@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import type { ConversationSummary } from '../../schemas/contracts/chat.schema';
+import { conversationSituationFields } from './conversation-situation';
 import { sessionWindowExpiresAt } from './session-window';
 
 /**
@@ -13,7 +14,7 @@ export const conversationSummaryInclude = {
   // `provider` is a plain scalar select on the already-joined instance row —
   // no extra query (see toConversationSummary's `provider` mapping below).
   instance: { select: { name: true, botId: true, provider: true, bot: { select: { id: true, name: true } } } },
-  assignedUser: { select: { name: true } },
+  assignedUser: { select: { name: true, isActive: true, hasAccess: true } },
 } as const satisfies Prisma.ConversationInclude;
 
 /** A Conversation row joined with exactly the relations declared above. */
@@ -47,6 +48,8 @@ export function toConversationSummary(row: ConversationSummaryRow): Conversation
     unreadCount: row.unreadCount,
     assignedUserId: row.assignedUserId ?? null,
     assignedUserName: row.assignedUser?.name ?? null,
+    // K1-1/K1-8: situação calculada, marcas de resolução e atendente ativo.
+    ...conversationSituationFields(row),
     botId: row.instance?.botId ?? null,
     botName: row.instance?.bot?.name ?? null,
     botPaused: row.botPausedAt !== null,

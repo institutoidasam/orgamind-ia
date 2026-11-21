@@ -3,6 +3,19 @@ import { mockDeep, type MockProxy } from 'vitest-mock-extended';
 import { ChatRepository } from './chat.repository';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 
+describe('ChatRepository.findMediaById', () => {
+  it('lê a MessageMedia pelo id e devolve o que o banco devolveu', async () => {
+    const prisma = mockDeep<PrismaService>();
+    const row = { id: 'm1', status: 'READY' };
+    prisma.messageMedia.findUnique.mockResolvedValue(row as never);
+    const repo = new ChatRepository(prisma);
+    await expect(repo.findMediaById('m1')).resolves.toBe(row);
+    expect(prisma.messageMedia.findUnique.mock.calls).toEqual([
+      [{ where: { id: 'm1' } }],
+    ]);
+  });
+});
+
 describe('ChatRepository.resetDifyConversationIdsForInstance', () => {
   it('clears difyConversationId for the instance conversations', async () => {
     const prisma = mockDeep<PrismaService>();
@@ -23,7 +36,12 @@ describe('ChatRepository', () => {
   it('lists conversations ordered by lastMessageAt desc, non-archived, with unread filter', async () => {
     prisma.conversation.findMany.mockResolvedValue([] as never);
     prisma.conversation.count.mockResolvedValue(0 as never);
-    await repo.listConversations({ filter: 'unread', page: 1, pageSize: 30 });
+    await repo.listConversations({
+      filter: 'unread',
+      status: 'open',
+      page: 1,
+      pageSize: 30,
+    });
     expect(prisma.conversation.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ archivedAt: null, unreadCount: { gt: 0 } }),
@@ -84,29 +102,17 @@ describe('ChatRepository', () => {
   it('findConversation includes the assignedUser relation', () => {
     prisma.conversation.findUnique.mockResolvedValue(null as never);
     void repo.findConversation('conv1');
+    const include: unknown = expect.objectContaining({
+      assignedUser: {
+        select: { name: true, isActive: true, hasAccess: true },
+      },
+    });
     expect(prisma.conversation.findUnique).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: 'conv1' },
-        include: expect.objectContaining({ assignedUser: { select: { name: true } } }),
+        include,
       }),
     );
-  });
-
-  it('assignConversation sets assignedUserId and assignedAt when assigning', async () => {
-    prisma.conversation.update.mockResolvedValue({} as never);
-    await repo.assignConversation('conv1', 'user-3');
-    const arg = prisma.conversation.update.mock.calls[0][0] as any;
-    expect(arg.where).toEqual({ id: 'conv1' });
-    expect(arg.data.assignedUserId).toBe('user-3');
-    expect(arg.data.assignedAt).toBeInstanceOf(Date);
-  });
-
-  it('assignConversation clears assignedUserId and assignedAt when unassigning', async () => {
-    prisma.conversation.update.mockResolvedValue({} as never);
-    await repo.assignConversation('conv1', null);
-    const arg = prisma.conversation.update.mock.calls[0][0] as any;
-    expect(arg.data.assignedUserId).toBeNull();
-    expect(arg.data.assignedAt).toBeNull();
   });
 
   // markRead pagination (Baixo › Chat/Inbox): getUnreadInboundKeys must honor a
@@ -160,7 +166,12 @@ describe('ChatRepository', () => {
   it('ordena por lastMessageAt desc com NULLS LAST', async () => {
     prisma.conversation.findMany.mockResolvedValue([] as never);
     prisma.conversation.count.mockResolvedValue(0 as never);
-    await repo.listConversations({ filter: 'all', page: 1, pageSize: 30 });
+    await repo.listConversations({
+      filter: 'all',
+      status: 'open',
+      page: 1,
+      pageSize: 30,
+    });
     expect(prisma.conversation.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ orderBy: { lastMessageAt: { sort: 'desc', nulls: 'last' } } }),
     );

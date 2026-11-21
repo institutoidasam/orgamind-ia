@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CHANNEL_PROVIDERS } from '@/features/whatsapp/api';
+import { teamPurposeSchema } from '@/features/team-whatsapp/schemas';
 
 export const conversationStatusSchema = z.enum(['PENDING', 'IN_PROGRESS', 'RESOLVED']);
 export type ConversationStatus = z.infer<typeof conversationStatusSchema>;
@@ -53,6 +54,17 @@ export const conversationsPageSchema = z.object({
 });
 export type ConversationsPage = z.infer<typeof conversationsPageSchema>;
 
+/**
+ * Etiqueta de envio à equipe de uma mensagem (K3-6, CT1). `sentAt`/`alertSentAt`
+ * são a hora real do disparo; a tela as mostra na hora de Manaus.
+ */
+export const chatMessageTeamTagSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('dispatch'), purpose: teamPurposeSchema.nullable(), sentAt: z.string() }),
+  z.object({ kind: z.literal('reminder') }),
+  z.object({ kind: z.literal('alert_reply'), alertSentAt: z.string() }),
+]);
+export type ChatMessageTeamTag = z.infer<typeof chatMessageTeamTagSchema>;
+
 export const chatMessageSchema = z.object({
   id: z.string(),
   conversationId: z.string(),
@@ -75,6 +87,8 @@ export const chatMessageSchema = z.object({
   /** Speech-to-text transcript for voice notes (null when absent). */
   transcript: z.string().nullable().optional(),
   botId: z.string().nullable().optional(),
+  /** K3-6: etiqueta de envio à equipe; ausente em resposta antiga ou fora de `listMessages`. */
+  teamTag: chatMessageTeamTagSchema.nullish(),
 });
 export type ChatMessage = z.infer<typeof chatMessageSchema>;
 
@@ -116,7 +130,7 @@ export type ChatAssignees = z.infer<typeof chatAssigneesSchema>;
  * failure we fall back to the raw (cast) value so the UI degrades gracefully
  * rather than going blank.
  */
-function boundaryParse<T>(schema: z.ZodType<T>, data: unknown, label: string): T {
+export function boundaryParse<T>(schema: z.ZodType<T>, data: unknown, label: string): T {
   const result = schema.safeParse(data);
   if (result.success) return result.data;
   console.warn(`[chat] response did not match ${label} schema (drift?):`, result.error.issues);

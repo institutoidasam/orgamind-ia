@@ -14,6 +14,7 @@ vi.mock('../api', () => ({
 }));
 vi.mock('./message-composer', () => ({ MessageComposer: () => null }));
 vi.mock('./bot-control', () => ({ BotControl: () => null }));
+vi.mock('./last-dispatch-banner', () => ({ LastDispatchBanner: () => null }));
 vi.mock('./conversation-history', () => ({ ConversationHistory: () => null }));
 vi.mock('./conversation-actions', () => ({
   ConversationActions: ({ conv }: { conv: ConversationSummary }) => <div data-testid="actions" data-conv={conv.id} />,

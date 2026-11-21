@@ -6,11 +6,12 @@ import { QueryErrorFallback } from '@/components/query-error-fallback';
 import { InboxTabs } from './inbox-tabs';
 import { AssigneeTabs, type AssigneeFilter } from './assignee-tabs';
 import { ConversationStatusFilter } from './conversation-status-filter';
+import { ShiftHandoverHeader } from './shift-handover-dialog';
 import { assigneeForStatus, type ConversationStatusFilterValue } from './conversation-status';
 import { useInstances } from '@/features/whatsapp/api';
 import { useAuthStore } from '@/stores/auth.store';
 
-const ASSIGNEE_FILTERS: AssigneeFilter[] = [null, 'me', 'unassigned'];
+const ASSIGNEE_FILTERS: AssigneeFilter[] = [null, 'me', 'unassigned', 'handover'];
 
 /**
  * Debounce a fast-changing value (e.g. the search box) so it only settles
@@ -33,7 +34,7 @@ function assigneeStorageKey(userId?: string): string {
 function readStoredAssignee(userId?: string): AssigneeFilter {
   try {
     const raw = localStorage.getItem(assigneeStorageKey(userId));
-    if (raw === 'me' || raw === 'unassigned') return raw;
+    if (raw === 'me' || raw === 'unassigned' || raw === 'handover') return raw;
     return null;
   } catch {
     return null;
@@ -117,7 +118,7 @@ export function ConversationsList({ activeId }: { activeId?: string }) {
   return (
     <div className="flex h-full flex-col" style={{ background: 'var(--surface)', borderRight: '1px solid var(--border)' }}>
       <div className="space-y-2 px-3.5 py-3" style={{ borderBottom: '1px solid var(--border)' }}>
-        <div className="ds-eyebrow">inbox</div>
+        <ShiftHandoverHeader />
         <div className="flex items-center gap-1.5">
           <input
             value={search}

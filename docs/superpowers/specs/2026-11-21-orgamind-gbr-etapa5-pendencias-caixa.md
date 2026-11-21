@@ -243,6 +243,16 @@ Segunda parte da Etapa 5 (P1, "Governança e operação") do plano entregue à G
 9. Pendência aberta fica na lista e no contador sem limite de data, até alguém tratar ou encerrar. Serve? E "Ciente"/"Encerrada" olhando 7 dias (ou 30)?
 10. Conversa só com envio da equipe deve aparecer como "Pendente" na caixa?
 
+Decididas provisoriamente no K2 (21/11; detalhe em "Dúvidas de produto" do plano do K2). A recomendação é manter todas:
+
+11. Registrar contato vale também em pendência ciente ou encerrada, se a pessoa ainda for a responsável. Assim, o contato feito no minuto em que a ciência chega não se perde. A tela só oferece o botão nas pendências abertas.
+12. Se quem já é o responsável clicar em "Assumir", ou transferir para si mesmo, nada é gravado. Se a pendência mudou no meio do caminho (ficou ciente, foi encerrada ou transferida), o servidor recusa e a tela avisa.
+13. O motivo do encerramento e a observação de "Assumir" viram anotações no histórico da pendência. Transferir não pede observação.
+14. Uma pendência encerrada pelo ADMIN sem responsável volta a "Sem responsável" quando é reaberta.
+15. O telefone da linha é o número gravado no envio. Envio antigo sem número gravado mostra "Sem telefone".
+16. O período de busca usa a data do alerta. Cada consulta da lista traz no máximo 2.000 linhas, das mais novas para as mais antigas, com aviso. O contador não tem teto.
+17. O contador não mostra número quando é zero, e o item do menu some enquanto carrega. Quem não envia mensagens à equipe e abre a tela pelo atalho vê só "Esta tela é para quem envia mensagens à equipe.".
+
 ## Aceite
 
 **K1 — caixa**
@@ -267,7 +277,7 @@ Segunda parte da Etapa 5 (P1, "Governança e operação") do plano entregue à G
 15. Ordem e filtros de K2-5. Abertas aparecem sem limite de data; "Ciente" e "Encerrada sem ciência" mostram 7 dias, ou 30 na opção; as ações valem para pendência fora do período. O contador do menu mostra as "Sem responsável" com prazo de ciência vencido no alcance, sem limite de data.
 16. Assumir grava responsável e prazo de 60 min. Dois "Assumir" simultâneos: um vence e o outro recebe 409 `team_whatsapp.pendency_taken` com o nome (teste com banco real). Pendência com responsável inativo ou fora do alcance pode ser assumida por quem a vê. Quem não é responsável nem ADMIN recebe 403 `team_whatsapp.not_handler` ao transferir, registrar contato, encerrar ou reabrir.
 17. Assumir de outro e transferir seguem K2-7, com 409 `team_whatsapp.pendency_changed` e 404 para destino que não vê a pendência ou não tem `equipe.enviar`. O prazo recomeça.
-18. Registrar contato exige texto, só pelo responsável, e não muda situação nem prazo. Encerrar exige motivo; com ciência já registrada dá 422 `team_whatsapp.ack_exists`. Reabrir só vale para encerrada sem ciência e volta a "Em tratativa" com prazo novo. Responsável que perde `equipe.enviar` ou o setor gerido faz a pendência voltar a "Sem responsável", com "(sem acesso)".
+18. Registrar contato exige texto, só pelo responsável, e não muda situação nem prazo. Encerrar exige motivo; com ciência já registrada dá 422 `team_whatsapp.ack_exists`. Reabrir só vale para encerrada sem ciência e volta a "Em tratativa" com prazo novo. Responsável que perde `equipe.enviar` ou o setor gerido faz a pendência voltar a "Sem responsável", com "(fora do alcance)" (K2-2, revisão 2 N5).
 19. Prazo vencido sem ciência vira "Em tratativa — atrasada". Ciência depois do encerramento põe a pendência em "Ciente".
 20. O painel do alerta mantém a pessoa no grupo e mostra "Tratativa encerrada por {nome}: {motivo}".
 21. Ciência manual e desfazer pela tela de pendências funcionam para quem tem `equipe.urgencia` e vê a pendência, mesmo sem ver o envio, nas rotas do Lote I com a ordem 403 → 404 → 422.

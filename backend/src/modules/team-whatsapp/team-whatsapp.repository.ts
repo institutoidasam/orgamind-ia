@@ -140,6 +140,9 @@ const dispatchListSelect = {
   activityTime: true,
   activityPlace: true,
   urgencyReason: true,
+  // Alerta e lembrete (Lote I, CI10): prazo gravado e o alerta de origem do lembrete.
+  ackDeadlineMinutes: true,
+  parentDispatch: { select: { id: true, createdAt: true } },
   author: { select: { id: true, name: true, email: true } },
   sectors: { select: { sectorId: true, sectorName: true } },
 } satisfies Prisma.TeamWhatsappDispatchSelect;
@@ -185,6 +188,9 @@ const dispatchDetailSelect = {
   // Reconferência do agendado (Lote G, CG8): hora e "entraram depois"; null = não reconferido.
   recheckedAt: true,
   audienceLateJoined: true,
+  // Alerta e lembrete (Lote I, CI10): prazo gravado e o alerta de origem do lembrete.
+  ackDeadlineMinutes: true,
+  parentDispatch: { select: { id: true, createdAt: true } },
   author: { select: { id: true, name: true } },
   sectors: { select: { sectorId: true, sectorName: true } },
 } satisfies Prisma.TeamWhatsappDispatchSelect;
@@ -325,6 +331,9 @@ export type NewTeamDispatch = {
   // Política do agendado (DG6); ausente = null (alvo pessoa ou envio antigo:
   // dispara pela regra antiga, sem reconferência).
   schedulePolicy?: TeamSchedulePolicy | null;
+  // Prazo de ciência do alerta urgente em minutos (Lote I, I3); ausente/null =
+  // não é alerta (outra finalidade, urgência antiga e lembrete).
+  ackDeadlineMinutes?: number | null;
 };
 
 /** Agendado para a lista "Agendados" (C9): snapshot do turno, sem texto nem telefone. */

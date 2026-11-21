@@ -24,6 +24,7 @@ import { sendPhoneOf } from './recipient-skip';
 import { TeamWhatsappRepository } from './team-whatsapp.repository';
 import { INDETERMINATE_CODE, failureStatus } from './team-whatsapp.outcome';
 import { finishSkipped, type SkipReasonOf } from './team-recipient-finish';
+import { skipWhenParentAcked } from './team-alert-send';
 
 const CHANNEL_DISCONNECTED = 'team_whatsapp.channel_disconnected';
 const CHANNEL_UNVERIFIED = 'team_whatsapp.channel_unverified';
@@ -39,6 +40,8 @@ const recipientSelect = {
   id: true,
   status: true,
   messageId: true,
+  // I7: o destinatário do alerta de que este lembrete é cópia (null = não é lembrete).
+  parentRecipientId: true,
   // DG7: telefone gravado na criação do envio; null = envio antigo (usa o atual).
   phoneE164: true,
   user: {
@@ -225,6 +228,8 @@ export class TeamWhatsappSendProcessor extends WorkerHost {
     if (paced) await this.waitPacing(job, token, ready.channel.id);
     let sent = false;
     try {
+      // I7 (DI11): original já ciente = nada sai; a leitura é nova e vem depois do pacing.
+      if (await skipWhenParentAcked(this.prisma, r)) return;
       // Depois do pacing e antes de qualquer Message: só `open` segue (D7).
       const live = await this.liveBlock(job, ready.channel);
       if ('blocked' in live) return await this.finishFailed(r, live.blocked);

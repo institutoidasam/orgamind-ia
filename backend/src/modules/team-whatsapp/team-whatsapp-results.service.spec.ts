@@ -48,6 +48,8 @@ const detailRow = (
   activityTime: null,
   activityPlace: null,
   urgencyReason: null,
+  ackDeadlineMinutes: null,
+  parentDispatch: null,
   audienceRule: null,
   audienceExcluded: null,
   schedulePolicy: null,
@@ -206,6 +208,9 @@ const TOP_DETAIL = {
   base: null,
   rule: null,
   excluded: [],
+  ackDeadlineMinutes: null,
+  ackDeadlineAt: null,
+  reminderOf: null,
   recheck: null,
 };
 

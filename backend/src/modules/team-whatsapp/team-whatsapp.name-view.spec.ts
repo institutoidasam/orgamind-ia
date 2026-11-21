@@ -195,6 +195,8 @@ const dispatchRow = (): TeamDispatchRow => ({
   activityTime: null,
   activityPlace: null,
   urgencyReason: null,
+  ackDeadlineMinutes: null,
+  parentDispatch: null,
   author: { id: 'sk', name: NUM, email: null },
   sectors: [],
 });
@@ -268,6 +270,8 @@ const detailRow = (
   activityTime: null,
   activityPlace: null,
   urgencyReason: null,
+  ackDeadlineMinutes: null,
+  parentDispatch: null,
   audienceRule: null,
   audienceExcluded: null,
   schedulePolicy: null,

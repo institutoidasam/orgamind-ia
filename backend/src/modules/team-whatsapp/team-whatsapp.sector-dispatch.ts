@@ -14,6 +14,7 @@ import type {
   SectorTargetInput,
 } from './dto/create-team-dispatch.dto';
 import { sendPhoneOf, type PhoneSkipReason } from './recipient-skip';
+import { alertFieldsOf } from './team-alert-create';
 import type {
   AudienceRequest,
   ExcludedEntry,
@@ -229,6 +230,7 @@ export function sectorDispatchFields(
     audienceRule: { ...r.ruleSnapshot, when: input.when ?? 'now' },
     audienceExcluded: r.excluded.map(excludedOf),
     schedulePolicy: toDbPolicy(policyOf(input.when)),
+    ...alertFieldsOf(input.purpose),
   } satisfies Partial<NewTeamDispatch>;
 }
 

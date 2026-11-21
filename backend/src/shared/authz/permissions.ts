@@ -18,6 +18,7 @@ export const PERMISSION_KEYS = [
   'trilha.consultar',
   'pessoas.exportar',
   'pessoas.importar',
+  'equipe.urgencia',
 ] as const;
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
 
@@ -112,6 +113,7 @@ export const PERMISSION_DENIED_TEXT: Readonly<Record<PermissionKey, string>> = {
   'pessoas.exportar': 'Você não tem permissão para exportar pessoas e escala.',
   'pessoas.importar':
     'Você não tem permissão para importar planilhas de pessoas.',
+  'equipe.urgencia': 'Você não tem permissão para criar alerta urgente.',
 };
 
 export function permissionDenied(key: PermissionKey): DomainError {

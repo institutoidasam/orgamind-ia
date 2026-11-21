@@ -1,8 +1,8 @@
 import type { PrismaService } from '../../shared/prisma/prisma.service';
 
-/** Motivo do pulo decidido pelo processor (o Lote I acrescenta `ACKED`). */
+/** Motivo do pulo decidido pelo processor (`ACKED`: lembrete cujo original já confirmou, I7). */
 export type SkipReasonOf =
-  'NO_PHONE' | 'PHONE_CHANGED' | 'SUPPRESSED' | 'NOT_AUTHORIZED';
+  'NO_PHONE' | 'PHONE_CHANGED' | 'SUPPRESSED' | 'NOT_AUTHORIZED' | 'ACKED';
 
 export type FinishSkippedInput = {
   recipientId: string;

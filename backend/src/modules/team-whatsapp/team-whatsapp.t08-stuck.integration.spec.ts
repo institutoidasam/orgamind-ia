@@ -108,9 +108,12 @@ async function hangInProviderCall(w: T08World, id: string): Promise<void> {
     () => new Promise<never>(() => undefined),
   );
   void w.queue.runAttempt(w.processor, id, 0);
-  await vi.waitFor(async () => {
-    expect((await w.messages()).map((m) => m.status)).toContain('SENDING');
-  }, { timeout: 10_000 });
+  await vi.waitFor(
+    async () => {
+      expect((await w.messages()).map((m) => m.status)).toContain('SENDING');
+    },
+    { timeout: 10_000 },
+  );
 }
 
 /**

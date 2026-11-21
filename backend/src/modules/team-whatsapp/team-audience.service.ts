@@ -38,6 +38,7 @@ import {
   sendPhoneOf,
   type PhoneSkipReason,
 } from './recipient-skip';
+import { requireUrgencyFor } from './team-alert.policy';
 import { buildAudience } from './team-whatsapp.audience';
 import {
   broadSendDenied,
@@ -155,6 +156,7 @@ export class TeamAudienceService {
     input: TeamAudienceRequest,
   ): Promise<TeamAudiencePreview> {
     const actor = await this.requireSender(actorId);
+    requireUrgencyFor(actor, input.purpose);
     const resolved = await this.resolve(actor, input);
     if (resolved.unknownSelected.length > 0) throw invalidSelection();
     const channels = await this.repo.findSectorChannels(

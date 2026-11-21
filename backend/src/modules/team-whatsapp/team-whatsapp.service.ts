@@ -59,6 +59,8 @@ import {
   noSector,
   teamForbidden,
 } from './team-whatsapp.errors';
+import { dispatchTextOf } from './team-alert-create';
+import { requireUrgencyFor } from './team-alert.policy';
 import { blocksFor, scheduledForOf } from './team-whatsapp.purpose';
 import {
   requireNoBlock,
@@ -219,6 +221,7 @@ export class TeamWhatsappService {
     input: CreateTeamDispatchInput,
   ): Promise<CreateTeamDispatchResponse> {
     const actor = await this.requireSender(actorId);
+    requireUrgencyFor(actor, input.purpose);
     const draft =
       input.target.type === 'user'
         ? await this.userDraft(actor, input, input.target.userId)
@@ -310,7 +313,7 @@ export class TeamWhatsappService {
         authorId: actor.id,
         ...sectorDispatchFields(resolved, input),
         channelId: singleChannelId(channelIds),
-        text: input.text,
+        text: dispatchTextOf(input),
         recipients,
         ...(scheduledFor ? { state: 'SCHEDULED' as const, scheduledFor } : {}),
       },

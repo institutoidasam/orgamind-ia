@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  type AlertRow,
   type DetailPurposeRow,
   purposeDetail,
   purposeView,
@@ -27,8 +28,13 @@ const EXCLUDED = [
   },
 ];
 
-const row = (over: Partial<DetailPurposeRow> = {}): DetailPurposeRow => ({
+type Row = DetailPurposeRow & AlertRow;
+
+const row = (over: Partial<Row> = {}): Row => ({
   id: 'd1',
+  createdAt: new Date('2026-11-20T12:00:00.000Z'),
+  ackDeadlineMinutes: null,
+  parentDispatch: null,
   purpose: 'SHIFT_NOTICE',
   audienceBase: 'ON_DUTY',
   includeOff: false,
@@ -55,6 +61,9 @@ describe('purposeView — atividade', () => {
       base: 'on_duty',
       activity: { date: null, time: '14:00', place: null },
       urgencyReason: null,
+      ackDeadlineMinutes: null,
+      ackDeadlineAt: null,
+      reminderOf: null,
     });
     expect(purposeView(row()).activity).toBeNull();
   });

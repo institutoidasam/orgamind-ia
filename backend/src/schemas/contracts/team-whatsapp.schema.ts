@@ -17,7 +17,8 @@ export const teamProviderSchema = z.enum(['GOZAP', 'EVOLUTION']);
 // Reconferência do agendado no disparo (DG4): VACATION = de férias; DAY_OFF = de
 // folga; LEFT_SECTOR = saiu do setor, do turno ou do nível; PHONE_CHANGED =
 // telefone mudou depois da criação do envio. EXPIRED = agendado que não disparou
-// até 2 horas depois da hora marcada.
+// até 2 horas depois da hora marcada. ACKED = lembrete do alerta que não saiu
+// porque a pessoa já deu ciência (Lote I).
 export const teamSkipReasonSchema = z.enum([
   'NO_PHONE',
   'SUPPRESSED',
@@ -28,6 +29,7 @@ export const teamSkipReasonSchema = z.enum([
   'LEFT_SECTOR',
   'PHONE_CHANGED',
   'EXPIRED',
+  'ACKED',
 ]);
 export const teamTargetTypeSchema = z.enum(['user', 'sector']);
 // Último estado de conexão do canal; null = sem evento ou fora destes valores.
@@ -404,6 +406,19 @@ const dispatchPurposeShape = {
   urgencyReason: z.string().nullable(),
 };
 
+/**
+ * CI10 (I3, I7): prazo de ciência do alerta e ligação do lembrete ao alerta.
+ * Chaves sempre presentes; urgência antiga e demais finalidades → as três nulas.
+ */
+const dispatchAlertShape = {
+  ackDeadlineMinutes: z.number().int().nullable(),
+  // ISO; createdAt + ackDeadlineMinutes.
+  ackDeadlineAt: z.string().nullable(),
+  reminderOf: z
+    .object({ dispatchId: z.string(), createdAt: z.string() })
+    .nullable(),
+};
+
 export const teamDispatchListResponseSchema = z.object({
   items: z
     .object({
@@ -431,6 +446,7 @@ export const teamDispatchListResponseSchema = z.object({
       // Hora real do disparo do agendado (ISO); null = imediato ou não disparado.
       firedAt: z.string().nullable(),
       ...dispatchPurposeShape,
+      ...dispatchAlertShape,
     })
     .array(),
   ...pageMetaShape,
@@ -476,6 +492,7 @@ export const teamDispatchDetailResponseSchema = z.object({
   base: dispatchPurposeShape.base,
   rule: teamAudienceRuleViewSchema.nullable(),
   excluded: teamAudienceExcludedPersonSchema.array(),
+  ...dispatchAlertShape,
   // null = envio não reconferido (imediato, antigo, cancelado, vencido ou ainda
   // agendado). Opcional só até a T11; a API devolve sempre, nulo quando não há.
   recheck: teamDispatchRecheckSchema.nullable().optional(),
@@ -556,6 +573,86 @@ export const retryTeamDispatchResponseSchema = z.object({
   requeued: z.number().int().nonnegative(),
 });
 
+/** Mensagem recebida ligada ao alerta (`Message.content`, `kind`, `receivedAt ?? createdAt`). */
+const alertMessageSchema = z.object({
+  text: z.string().nullable(),
+  kind: z.enum([
+    'TEXT',
+    'IMAGE',
+    'VIDEO',
+    'AUDIO',
+    'DOCUMENT',
+    'STICKER',
+    'LOCATION',
+    'CONTACT',
+    'UNSUPPORTED',
+  ]),
+  at: z.string(),
+});
+
+/**
+ * CI5 (I6, DI9): painel de pendências do alerta, GET
+ * /internal/team-whatsapp/dispatches/:id/alert. Pessoas por grupo (ordem da
+ * spec) e por nome exibido; sem telefone. `recipientId` = destinatário do
+ * alerta original; `status` = melhor estado do original e dos lembretes.
+ */
+export const teamAlertPanelSchema = z.object({
+  dispatchId: z.string(),
+  createdAt: z.string(),
+  ackDeadlineMinutes: z.number().int(),
+  ackDeadlineAt: z.string(),
+  counts: z.object({
+    noDelivery: countSchema,
+    noReply: countSchema,
+    replied: countSchema,
+    acked: countSchema,
+  }),
+  people: z.array(
+    z.object({
+      recipientId: z.string(),
+      userName: z.string(),
+      group: z.enum(['no_delivery', 'no_reply', 'replied', 'acked']),
+      status: teamRecipientStatusSchema,
+      ack: z
+        .object({
+          at: z.string(),
+          kind: z.enum(['keyword', 'manual']),
+          late: z.boolean(),
+          byName: z.string().nullable(),
+          note: z.string().nullable(),
+        })
+        .nullable(),
+      ackReply: alertMessageSchema.nullable(),
+      lastReply: alertMessageSchema.nullable(),
+      eligible: z.boolean(),
+      mayHaveReceived: z.boolean(),
+    }),
+  ),
+  reminders: z.object({
+    count: countSchema,
+    max: z.number().int(),
+    nextAllowedAt: z.string().nullable(),
+    items: z.array(
+      z.object({
+        dispatchId: z.string(),
+        createdAt: z.string(),
+        authorName: z.string().nullable(),
+        recipients: countSchema,
+      }),
+    ),
+  }),
+});
+
+/**
+ * CI7 (I7, DI10): resposta (202) do POST
+ * /internal/team-whatsapp/dispatches/:id/reminders. `queued` = destinatários
+ * do lembrete que entraram na fila (os pulados por telefone não contam).
+ */
+export const teamReminderResponseSchema = z.object({
+  reminderId: z.string(),
+  queued: countSchema,
+});
+
 export type TeamShiftSnapshot = z.infer<typeof teamShiftSnapshotSchema>;
 export type TeamRosterPerson = z.infer<typeof rosterPersonSchema>;
 export type TeamTargetsResponse = z.infer<typeof teamTargetsResponseSchema>;
@@ -609,3 +706,4 @@ export type AudienceLateJoinedSnapshot = z.infer<
 export type TeamDispatchState = z.infer<typeof teamDispatchStateSchema>;
 export type TeamSkipReason = z.infer<typeof teamSkipReasonSchema>;
 export type TeamDispatchRecheck = z.infer<typeof teamDispatchRecheckSchema>;
+export type TeamAlertPanel = z.infer<typeof teamAlertPanelSchema>;

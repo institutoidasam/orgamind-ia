@@ -13,7 +13,7 @@ const { useTeamTargets, useTeamDispatches, useTeamRoster, useScheduledDispatches
 }));
 
 vi.mock('@tanstack/react-router', () => ({
-  createFileRoute: () => (opts: Record<string, unknown>) => ({ ...opts }),
+  createFileRoute: () => (opts: Record<string, unknown>) => ({ ...opts, useSearch: () => ({}) }),
   Link: ({ children, to, params }: { children: React.ReactNode; to: string; params: Record<string, string> }) => (
     <a href={Object.entries(params).reduce((path, [key, value]) => path.replace('$' + key, value), to)}>{children}</a>
   ),

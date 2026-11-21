@@ -17,6 +17,9 @@ const SECTOR_PEOPLE_ERROR_MESSAGES: Record<string, string> = {
   'user.registration_taken': 'Já existe uma pessoa com esta matrícula',
   'user.reason_required': 'Informe o motivo da alteração, de 3 a 200 caracteres.',
   'user.authorization_future_date': 'A data da autorização não pode ser futura.',
+  // Reativação recusada (E10, DJ15): mesmo texto do DomainError do back e do mapa de users.
+  'user.sector_inactive': 'O setor desta pessoa está inativo. Reative o setor ou troque o setor antes de reativar a pessoa.',
+  'user.level_inactive': 'O nível desta pessoa está desativado. Reative o nível ou troque o nível antes de reativar a pessoa.',
 };
 
 /** O texto vem do servidor porque diz qual ação não é permitida (spec B1). */

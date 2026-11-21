@@ -28,6 +28,8 @@ vi.mock('@/features/levels/api', () => ({
   useReorderLevels: () => ({ mutateAsync: mocks.reorder, isPending: false }),
 }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: mocks.toastError } }));
+// A tabela recarrega a lista no 409 levels.in_use (coberto em levels-table.in-use.spec.tsx).
+vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries: vi.fn() }) }));
 
 import { Route } from './index';
 
@@ -82,6 +84,7 @@ describe('/niveis: lista e ações', () => {
     const user = userEvent.setup();
     const { rerender } = render(<route.component />);
     await user.click(within(rowOf('Operador')).getByRole('button', { name: 'Desativar' }));
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Desativar' }));
     expect(mocks.update).toHaveBeenCalledWith({ id: 'lvl_operator', isActive: false });
     mocks.useLevels.mockReturnValue({ data: [coordinator, leader, staff, { ...operator, isActive: false }], isLoading: false, isError: false });
     rerender(<route.component />);

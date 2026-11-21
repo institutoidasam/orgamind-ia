@@ -8,6 +8,9 @@ vi.mock('../api', () => ({
   useSendReply: () => ({ mutateAsync: sendText, isPending: false, isError: false }),
   useSendMedia: () => ({ mutateAsync: sendMedia, isPending: false, isError: false }),
   useTyping: () => ({ mutate: typingMutate }),
+  // Trava por outro atendente (K1): sem conversa carregada o compositor fica livre.
+  useConversation: () => ({ data: undefined, dataUpdatedAt: 0 }),
+  useAssignConversation: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 // message-composer agora lê traits+capabilities do backend via useProviderInfo
 // (pré-requisito da F-A); sem mock, o hook real chamaria useQuery e explodiria

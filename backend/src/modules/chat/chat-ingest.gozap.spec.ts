@@ -22,6 +22,10 @@ import type {
 } from '../queue/queue.constants';
 import type { Env } from '../../shared/config/env.schema';
 
+vi.mock('./conversation-inbound', () =>
+  vi.importActual('./conversation-inbound.test-fixtures'),
+);
+
 /**
  * O INGEST POR PROVEDOR — só a Evolution está ligada (spec somente-evolution).
  *

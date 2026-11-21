@@ -6,8 +6,13 @@ import {
   invalidateConversationThread,
   chatQueries,
   dedupeById,
+  type ConversationListParams,
 } from './api';
 import type { ConversationSummary } from './schemas';
+
+/** Lista de abertas, sem filtro: o padrão da caixa de entrada. */
+const openList = (over: Partial<ConversationListParams> = {}) =>
+  chatQueries.conversationList({ filter: 'all', search: '', status: 'open', ...over });
 
 describe('invalidateChat', () => {
   it('invalidates a specific conversation thread and the conversation lists', () => {
@@ -55,48 +60,48 @@ describe('invalidateConversationLists / invalidateConversationThread', () => {
   });
 });
 
-describe('chatQueries.conversations — instanceId', () => {
+describe('chatQueries.conversationList — instanceId', () => {
   it('includes instanceId in the queryKey when provided', () => {
-    const opts = chatQueries.conversations('all', '', 'inst-42');
-    expect(opts.queryKey).toEqual(['chat', 'conversations', { filter: 'all', search: '', instanceId: 'inst-42' }]);
+    const opts = openList({ instanceId: 'inst-42' });
+    expect(opts.queryKey).toEqual(['chat', 'conversations', { filter: 'all', search: '', status: 'open', instanceId: 'inst-42' }]);
   });
 
   it('omits instanceId from the queryKey when not provided', () => {
-    const opts = chatQueries.conversations('all', '');
-    expect(opts.queryKey).toEqual(['chat', 'conversations', { filter: 'all', search: '' }]);
+    const opts = openList();
+    expect(opts.queryKey).toEqual(['chat', 'conversations', { filter: 'all', search: '', status: 'open' }]);
   });
 
   it('includes assignee in the queryKey when provided', () => {
-    const opts = chatQueries.conversations('all', '', undefined, 'me');
-    expect(opts.queryKey).toEqual(['chat', 'conversations', { filter: 'all', search: '', assignee: 'me' }]);
+    const opts = openList({ assignee: 'me' });
+    expect(opts.queryKey).toEqual(['chat', 'conversations', { filter: 'all', search: '', status: 'open', assignee: 'me' }]);
   });
 
   it('omits assignee from the queryKey when not provided', () => {
-    const opts = chatQueries.conversations('all', '');
-    expect(opts.queryKey).toEqual(['chat', 'conversations', { filter: 'all', search: '' }]);
+    const opts = openList();
+    expect(opts.queryKey).toEqual(['chat', 'conversations', { filter: 'all', search: '', status: 'open' }]);
   });
 });
 
 // F4b — the inbox provider filter must be sent to the backend (server-side
 // filtering, before the page cut) instead of being applied client-side over
 // an already-paginated page.
-describe('chatQueries.conversations — provider (F4b)', () => {
+describe('chatQueries.conversationList — provider (F4b)', () => {
   it('includes provider in the queryKey when provided', () => {
-    const opts = chatQueries.conversations('all', '', undefined, undefined, 'TWILIO');
-    expect(opts.queryKey).toEqual(['chat', 'conversations', { filter: 'all', search: '', provider: 'TWILIO' }]);
+    const opts = openList({ provider: 'TWILIO' });
+    expect(opts.queryKey).toEqual(['chat', 'conversations', { filter: 'all', search: '', status: 'open', provider: 'TWILIO' }]);
   });
 
   it('omits provider from the queryKey when not provided', () => {
-    const opts = chatQueries.conversations('all', '');
-    expect(opts.queryKey).toEqual(['chat', 'conversations', { filter: 'all', search: '' }]);
+    const opts = openList();
+    expect(opts.queryKey).toEqual(['chat', 'conversations', { filter: 'all', search: '', status: 'open' }]);
   });
 
   it('combines provider with instanceId and assignee in the queryKey', () => {
-    const opts = chatQueries.conversations('all', '', 'inst-1', 'me', 'EVOLUTION');
+    const opts = openList({ instanceId: 'inst-1', assignee: 'me', provider: 'EVOLUTION' });
     expect(opts.queryKey).toEqual([
       'chat',
       'conversations',
-      { filter: 'all', search: '', instanceId: 'inst-1', assignee: 'me', provider: 'EVOLUTION' },
+      { filter: 'all', search: '', status: 'open', instanceId: 'inst-1', assignee: 'me', provider: 'EVOLUTION' },
     ]);
   });
 });
@@ -105,24 +110,24 @@ describe('chatQueries.conversations — provider (F4b)', () => {
 // 30) — mas o frontend nunca pedia a página 2: com 138 conversas o operador só
 // alcançava as 30 mais recentes, sem indício de que faltava alguma. A query
 // virou infinita para o scroll carregar o resto.
-describe('chatQueries.conversations — paginação', () => {
+describe('chatQueries.conversationList — paginação', () => {
   const page = (n: number, total: number, pageSize = 30) => ({
     items: [] as ConversationSummary[], total, page: n, pageSize,
   });
 
   it('começa na página 1', () => {
-    const opts = chatQueries.conversations('all', '');
+    const opts = openList();
     expect(opts.initialPageParam).toBe(1);
   });
 
   it('pede a próxima página enquanto o carregado não cobre o total', () => {
-    const opts = chatQueries.conversations('all', '');
+    const opts = openList();
     expect(opts.getNextPageParam(page(1, 138), [page(1, 138)], 1, [1])).toBe(2);
     expect(opts.getNextPageParam(page(4, 138), [page(4, 138)], 4, [4])).toBe(5);
   });
 
   it('para quando a última página cobre o total (nada de página vazia extra)', () => {
-    const opts = chatQueries.conversations('all', '');
+    const opts = openList();
     expect(opts.getNextPageParam(page(5, 138), [page(5, 138)], 5, [5])).toBeUndefined();
     expect(opts.getNextPageParam(page(1, 0), [page(1, 0)], 1, [1])).toBeUndefined();
     expect(opts.getNextPageParam(page(1, 30), [page(1, 30)], 1, [1])).toBeUndefined();

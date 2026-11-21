@@ -5,6 +5,7 @@ import type Redis from 'ioredis';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { WhatsappProvidersService } from '../whatsapp-providers/whatsapp-providers.service';
 import { ChatEventsService } from './chat-events.service';
+import { applyInboundUpdate } from './conversation-inbound';
 import { REDIS_CLIENT } from '../../shared/redis/redis.module';
 import { ConsentAction, ConsentSource, MessageDirection, MessageKind, MessageStatus, MediaStatus, Prisma } from '@prisma/client';
 import type { ChannelProvider } from '@prisma/client';
@@ -773,30 +774,10 @@ export class ChatIngestService {
       throw err;
     }
 
-    // Monotonicidade (só o backfill precisa): uma mensagem ANTIGA que o webhook
-    // nunca viu não pode puxar o resumo da conversa nem a janela para trás. Ao
-    // vivo o evento é sempre o mais novo — nada a comparar.
-    const advanceSummary =
-      !backfill || !conversation.lastMessageAt || m.receivedAt >= conversation.lastMessageAt;
-    const advanceInbound =
-      isInbound &&
-      (!backfill || !conversation.lastInboundAt || m.receivedAt > conversation.lastInboundAt);
-
-    await this.prisma.conversation.update({
-      where: { id: conversation.id },
-      data: {
-        ...(advanceSummary
-          ? { lastMessageAt: m.receivedAt, lastMessagePreview: previewFor(m), lastMessageDirection: opts.direction }
-          : {}),
-        // Janela de 24h: todo INBOUND abre/renova a janela (timestamp de
-        // recebimento do webhook, nunca Date.now() de processamento). Ecos
-        // outbound não contam.
-        ...(advanceInbound ? { lastInboundAt: m.receivedAt } : {}),
-        ...(opts.bumpUnread ? { unreadCount: { increment: 1 } } : {}),
-      },
-    });
+    const { reopened } = await this.applyFinalUpdate(m, conversation, opts);
     /* prettier-ignore */ await this.trackTeamReply(m, { messageId: message.id, instanceId, twinIds }, opts);
     await this.events.publish({ type: 'message.created', conversationId: conversation.id, instanceId, messageId: message.id });
+    await this.publishIfReopened(reopened, conversation.id, instanceId);
 
     // Auto-resposta: só texto entra aqui; imagem/áudio disparam o bot no fim do
     // download de mídia (quando o arquivo está READY). O processor revalida tudo.
@@ -822,6 +803,72 @@ export class ChatIngestService {
     // earlier failure never blocks the Evolution redelivery from retrying.
     await this.redis.set(dedupKey, '1', 'EX', 72 * 3600);
     return true;
+  }
+
+  /**
+   * A atualização final da conversa depois de gravar a mensagem (resumo, janela
+   * de 24h, não lidas). K1-4/DK9: só a mensagem da pessoa, ao vivo, devolve a
+   * resolvida a "Pendente" (a regra mora em `conversation-inbound.ts`).
+   */
+  private applyFinalUpdate(
+    m: InboundChatMessage,
+    conversation: {
+      id: string;
+      lastMessageAt: Date | null;
+      lastInboundAt: Date | null;
+    },
+    opts: {
+      direction: MessageDirection;
+      bumpUnread: boolean;
+      backfill?: boolean;
+    },
+  ): Promise<{ reopened: boolean }> {
+    const backfill = opts.backfill === true;
+    const isInbound = opts.direction === MessageDirection.INBOUND;
+    // Monotonicidade (só o backfill precisa): uma mensagem ANTIGA que o webhook
+    // nunca viu não pode puxar o resumo da conversa nem a janela para trás. Ao
+    // vivo o evento é sempre o mais novo — nada a comparar.
+    const advanceSummary =
+      !backfill ||
+      !conversation.lastMessageAt ||
+      m.receivedAt >= conversation.lastMessageAt;
+    const advanceInbound =
+      isInbound &&
+      (!backfill ||
+        !conversation.lastInboundAt ||
+        m.receivedAt > conversation.lastInboundAt);
+    return applyInboundUpdate(this.prisma, {
+      conversationId: conversation.id,
+      data: {
+        ...(advanceSummary
+          ? {
+              lastMessageAt: m.receivedAt,
+              lastMessagePreview: previewFor(m),
+              lastMessageDirection: opts.direction,
+            }
+          : {}),
+        // Janela de 24h: todo INBOUND abre/renova a janela (timestamp de
+        // recebimento do webhook, nunca Date.now() de processamento). Ecos
+        // outbound não contam.
+        ...(advanceInbound ? { lastInboundAt: m.receivedAt } : {}),
+        ...(opts.bumpUnread ? { unreadCount: { increment: 1 } } : {}),
+      },
+      reopenIfResolved: isInbound && !backfill,
+    });
+  }
+
+  /** Depois do `message.created`: a ingestão devolveu a conversa resolvida a "Pendente". */
+  private async publishIfReopened(
+    reopened: boolean,
+    conversationId: string,
+    instanceId: string,
+  ): Promise<void> {
+    if (!reopened) return;
+    await this.events.publish({
+      type: 'conversation.updated',
+      conversationId,
+      instanceId,
+    });
   }
 
   /**

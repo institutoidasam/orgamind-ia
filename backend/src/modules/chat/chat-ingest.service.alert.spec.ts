@@ -9,6 +9,10 @@ import type { ConsentService } from '../consent/consent.service';
 import type { OptInLinkService } from '../consent/optin-link.service';
 import type { InboundChatMessage } from '../whatsapp-providers/ports/message-provider.port';
 
+vi.mock('./conversation-inbound', () =>
+  vi.importActual('./conversation-inbound.test-fixtures'),
+);
+
 // Lote I, T5 (CI4): a ingestão passa ao rastreio a mensagem gravada (id, tipo,
 // texto) para a ciência automática do alerta; o texto nunca vai a log.
 const RECEIVED_AT = new Date('2026-11-10T14:00:00Z');

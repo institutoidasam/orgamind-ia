@@ -3,12 +3,15 @@ import { ArrowLeft, PauseCircle } from 'lucide-react';
 import { useConversation, useConversationMessages, useMarkRead, useResumeBot } from '../api';
 import { MessageBubble } from './message-bubble';
 import { MessageComposer, type ReplyTarget } from './message-composer';
-import { AssignMenu } from './assign-menu';
 import { BotControl } from './bot-control';
+import { ConversationActions } from './conversation-actions';
+import { ConversationHistory } from './conversation-history';
+import { SituationBadge } from './situation-badge';
 import { Button } from '@/components/ui/button';
 import { QueryErrorFallback } from '@/components/query-error-fallback';
 import { initials } from '@/lib/initials';
 import type { ChatMessage, ConversationSummary } from '../schemas';
+import { assigneeLabel, situationOf } from '../situation';
 
 function PausedBotBanner({ conversationId }: { conversationId: string }) {
   const resume = useResumeBot();
@@ -43,11 +46,18 @@ function ThreadAvatar({ conv }: { conv?: ConversationSummary }) {
 
 function ThreadIdentity({ conv }: { conv?: ConversationSummary }) {
   return (
-    <div className="min-w-0 flex-1">
-      <div className="truncate text-sm font-semibold">{conv?.displayName ?? '…'}</div>
-      <div className="text-[11px]" style={{ color: 'var(--foreground-muted)' }}>
+    // Base de 10rem: o nome e a linha "telefone · canal · atendente" nunca ficam
+    // mais estreitos que isso; faltando espaço, quem quebra de linha é o resto do cabeçalho.
+    <div className="min-w-0 flex-[1_1_10rem]">
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 truncate text-sm font-semibold">{conv?.displayName ?? '…'}</span>
+        {conv ? <SituationBadge situation={situationOf(conv)} /> : null}
+      </div>
+      <div className="break-words text-[11px]" style={{ color: 'var(--foreground-muted)' }}>
         {conv?.phoneE164 ?? 'Número desconhecido'} · {conv?.instanceName}
-        {conv?.assignedUserName ? <span data-testid="thread-assignee"> · {conv.assignedUserName}</span> : null}
+        {conv?.assignedUserName ? (
+          <span data-testid="thread-assignee"> · {assigneeLabel(conv.assignedUserName, conv.assignedUserActive)}</span>
+        ) : null}
       </div>
     </div>
   );
@@ -55,7 +65,9 @@ function ThreadIdentity({ conv }: { conv?: ConversationSummary }) {
 
 function ThreadHeader({ conversationId, conv }: { conversationId: string; conv?: ConversationSummary }) {
   return (
-    <div className="flex items-center gap-2.5 px-4 py-2.5" style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
+    // `flex-wrap`: em tela estreita as ações descem para uma linha própria em vez de
+    // empurrar o cartão além da largura (botão cortado, nome espremido).
+    <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2 px-4 py-2.5" style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)' }}>
       <a
         href="/inbox"
         aria-label="Voltar para conversas"
@@ -73,14 +85,20 @@ function ThreadHeader({ conversationId, conv }: { conversationId: string; conv?:
             botName={conv.botName ?? null}
             botPaused={conv.botPaused ?? false}
           />
-          <AssignMenu
-            conversationId={conversationId}
-            assignedUserId={conv.assignedUserId ?? null}
-            assignedUserName={conv.assignedUserName ?? null}
-          />
+          <ConversationActions conv={conv} />
         </>
       ) : null}
     </div>
+  );
+}
+
+/** Cabeçalho e, logo abaixo, o "Histórico da conversa" (recolhido). */
+function ThreadTop({ conversationId, conv }: { conversationId: string; conv?: ConversationSummary }) {
+  return (
+    <>
+      <ThreadHeader conversationId={conversationId} conv={conv} />
+      <ConversationHistory conversationId={conversationId} />
+    </>
   );
 }
 
@@ -165,7 +183,7 @@ export function MessageThread({ conversationId }: { conversationId: string }) {
 
   return (
     <div className="flex h-full flex-col" style={{ background: 'var(--canvas)' }}>
-      <ThreadHeader conversationId={conversationId} conv={conv.data} />
+      <ThreadTop conversationId={conversationId} conv={conv.data} />
       {conv.data?.botName && conv.data.botPaused ? (
         <PausedBotBanner conversationId={conversationId} />
       ) : null}

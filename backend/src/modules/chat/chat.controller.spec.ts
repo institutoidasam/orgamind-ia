@@ -24,18 +24,6 @@ describe('ChatController', () => {
     expect(svc.listConversations).toHaveBeenCalledWith(expect.objectContaining({ filter: 'all' }), 'user-1');
   });
 
-  it('assigns a conversation, passing the actor id', async () => {
-    svc.assignConversation.mockResolvedValue(undefined as never);
-    await ctrl.assign('c1', { userId: 'u9' }, authedReq);
-    expect(svc.assignConversation).toHaveBeenCalledWith('c1', 'u9', 'user-1');
-  });
-
-  it('unassigns a conversation when userId is null', async () => {
-    svc.assignConversation.mockResolvedValue(undefined as never);
-    await ctrl.assign('c1', { userId: null }, authedReq);
-    expect(svc.assignConversation).toHaveBeenCalledWith('c1', null, 'user-1');
-  });
-
   it('lists messages for a conversation', async () => {
     svc.listMessages.mockResolvedValue({ items: [], nextCursor: null } as never);
     expect(await ctrl.messages('c1', { limit: 30 } as never)).toEqual({ items: [], nextCursor: null });

@@ -958,11 +958,43 @@ model Conversation {
   difyConversationId String?
   botPausedAt        DateTime?
 
+  // K1-1: marca de resolução (a situação "Resolvida" é calculada a partir dela);
+  // archivedAt não é reutilizado. Sem @@index novo aqui (DK1/M3: construir
+  // índice em tabela de produção não respeita lock_timeout).
+  resolvedAt DateTime?
+  history    ConversationHistoryEntry[]
+
   @@unique([instanceId, remoteJid])
   @@index([instanceId, archivedAt, lastMessageAt(sort: Desc)])
   @@index([contactId])
   @@index([phoneE164])
   @@index([assignedUserId])
+}
+
+enum ConversationHistoryAction {
+  ASSUMED
+  ASSUMED_ON_REPLY
+  TRANSFERRED
+  UNASSIGNED
+  RESOLVED
+  REOPENED
+  SHIFT_HANDOVER
+}
+
+/// K1-2: histórico da conversa, só de inclusão. actorId nulo = Sistema; os ids de
+/// usuário não têm FK (sobrevivem à exclusão do usuário, como AuditEvent.subjectUserId).
+model ConversationHistoryEntry {
+  id             String                    @id @default(cuid())
+  conversationId String
+  conversation   Conversation              @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  action         ConversationHistoryAction
+  actorId        String?
+  fromUserId     String?
+  toUserId       String?
+  note           String?                   @db.VarChar(200)
+  createdAt      DateTime                  @default(now())
+
+  @@index([conversationId, createdAt])
 }
 
 /// Learned mapping from a WhatsApp LID (privacy id) to the real phone number.

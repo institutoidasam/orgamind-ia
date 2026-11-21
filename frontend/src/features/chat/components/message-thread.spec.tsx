@@ -38,7 +38,7 @@ vi.mock('./message-composer', () => ({
     <div data-testid="composer" data-provider={provider ?? ''} data-window={twilioWindowExpiresAt ?? ''} />
   ),
 }));
-vi.mock('./assign-menu', () => ({ AssignMenu: () => null }));
+vi.mock('./conversation-actions', () => ({ ConversationActions: () => null }));
 vi.mock('./bot-control', () => ({ BotControl: () => null }));
 vi.mock('@/components/query-error-fallback', () => ({ QueryErrorFallback: () => <div data-testid="error-fallback" /> }));
 

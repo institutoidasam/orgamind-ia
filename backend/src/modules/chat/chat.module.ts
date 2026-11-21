@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { WhatsappProvidersModule } from '../whatsapp-providers/whatsapp-providers.module';
 import { ChatController } from './chat.controller';
 import { ChatMediaController } from './chat-media.controller';
+import { ConversationOwnershipController } from './conversation-ownership.controller';
+import { ConversationOwnershipService } from './conversation-ownership.service';
 import { ChatService } from './chat.service';
 import { ChatRepository } from './chat.repository';
 import { ChatEventsService } from './chat-events.service';
@@ -25,8 +27,23 @@ import { TeamTrackingModule } from '../team-whatsapp/tracking/team-tracking.modu
     TeamTrackingModule,
   ],
   // ZernioInboxSyncController fora (R5: sem sync-inbox); o arquivo fica (GC5).
-  controllers: [ChatController, ChatMediaController, ChatSyncController],
-  providers: [ChatService, ChatRepository, ChatEventsService, ChatIngestService, ChatMediaService, ChatHistorySyncService, ZernioInboxSyncService, ZernioSyncRunsService],
+  controllers: [
+    ChatController,
+    ChatMediaController,
+    ChatSyncController,
+    ConversationOwnershipController,
+  ],
+  providers: [
+    ChatService,
+    ConversationOwnershipService,
+    ChatRepository,
+    ChatEventsService,
+    ChatIngestService,
+    ChatMediaService,
+    ChatHistorySyncService,
+    ZernioInboxSyncService,
+    ZernioSyncRunsService,
+  ],
   exports: [ChatService, ChatRepository, ChatIngestService, ChatEventsService, ChatHistorySyncService, ZernioInboxSyncService, ZernioSyncRunsService],
 })
 export class ChatModule {}

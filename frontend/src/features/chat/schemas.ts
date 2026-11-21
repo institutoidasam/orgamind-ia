@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { CHANNEL_PROVIDERS } from '@/features/whatsapp/api';
 
+export const conversationStatusSchema = z.enum(['PENDING', 'IN_PROGRESS', 'RESOLVED']);
+export type ConversationStatus = z.infer<typeof conversationStatusSchema>;
+
 export const conversationSummarySchema = z.object({
   id: z.string(),
   instanceId: z.string(),
@@ -31,6 +34,14 @@ export const conversationSummarySchema = z.object({
   // no passado (janela fechada). Optional para um backend mid-deploy — o
   // composer trata ausente igual a null (janela fechada) em canais TWILIO.
   twilioWindowExpiresAt: z.string().nullable().optional(),
+  // K1 (situação da conversa): tolerantes para um backend mid-deploy. Sem
+  // `status`, a situação sai dos campos (situation.ts); `lastInboundAt` é o
+  // que o "Resolver" devolve ao servidor; `assignedUserActive` é null sem
+  // atendente e false quando ele foi inativado ou perdeu o acesso.
+  status: conversationStatusSchema.nullish(),
+  resolvedAt: z.string().nullish(),
+  lastInboundAt: z.string().nullish(),
+  assignedUserActive: z.boolean().nullish(),
 });
 export type ConversationSummary = z.infer<typeof conversationSummarySchema>;
 
@@ -73,6 +84,31 @@ export const messagesPageSchema = z.object({
 });
 export type MessagesPage = z.infer<typeof messagesPageSchema>;
 
+export const historyActionSchema = z.enum([
+  'ASSUMED', 'ASSUMED_ON_REPLY', 'TRANSFERRED', 'UNASSIGNED', 'RESOLVED', 'REOPENED', 'SHIFT_HANDOVER',
+]);
+export const conversationHistorySchema = z.object({
+  items: z.array(z.object({
+    id: z.string(),
+    action: historyActionSchema,
+    createdAt: z.string(),
+    actorId: z.string().nullable(),
+    actorName: z.string().nullable(),
+    fromUserId: z.string().nullable(),
+    fromUserName: z.string().nullable(),
+    toUserId: z.string().nullable(),
+    toUserName: z.string().nullable(),
+    note: z.string().nullable(),
+  })),
+  // true quando há mais do que as 200 linhas devolvidas.
+  hasMore: z.boolean().nullish(),
+});
+export type ConversationHistory = z.infer<typeof conversationHistorySchema>;
+export type ConversationHistoryItem = ConversationHistory['items'][number];
+
+export const chatAssigneesSchema = z.object({ items: z.array(z.object({ id: z.string(), name: z.string() })) });
+export type ChatAssignees = z.infer<typeof chatAssigneesSchema>;
+
 /**
  * Boundary validation for chat API responses. We `safeParse` so schema drift is
  * surfaced (a console.warn) without crashing the inbox: the global ErrorBoundary
@@ -95,6 +131,10 @@ export const parseMessagesPage = (d: unknown): MessagesPage =>
   boundaryParse(messagesPageSchema, d, 'MessagesPage');
 export const parseChatMessage = (d: unknown): ChatMessage =>
   boundaryParse(chatMessageSchema, d, 'ChatMessage');
+export const parseConversationHistory = (d: unknown): ConversationHistory =>
+  boundaryParse(conversationHistorySchema, d, 'ConversationHistory');
+export const parseChatAssignees = (d: unknown): ChatAssignees =>
+  boundaryParse(chatAssigneesSchema, d, 'ChatAssignees');
 
 export type ChatEvent =
   | { type: 'message.created'; conversationId: string; instanceId: string; messageId?: string }

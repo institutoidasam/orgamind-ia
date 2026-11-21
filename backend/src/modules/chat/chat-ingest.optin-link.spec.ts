@@ -11,6 +11,10 @@ import { ConsentService } from '../consent/consent.service';
 import { OptInLinkService } from '../consent/optin-link.service';
 import type { ChatMediaDownloadJob, BotReplyJob } from '../queue/queue.constants';
 
+vi.mock('./conversation-inbound', () =>
+  vi.importActual('./conversation-inbound.test-fixtures'),
+);
+
 /**
  * C3 — o casamento do inbound com o texto esperado (spec §3.1).
  *

@@ -20,18 +20,18 @@ describe('useAssignConversation', () => {
     post.mockClear();
   });
 
-  it('POSTs the assign endpoint with the userId and invalidates chat queries', async () => {
+  it('POSTs the assign endpoint with the userId, expectedAssigneeId and note and invalidates chat queries', async () => {
     qc.setQueryData(['chat', 'conversations', 'c1'], { id: 'c1' });
     const spy = vi.spyOn(qc, 'invalidateQueries');
     const { result } = renderHook(() => useAssignConversation('c1'), { wrapper: wrapper(qc) });
-    await result.current.mutateAsync({ userId: 'u9' });
-    expect(post).toHaveBeenCalledWith('chat/conversations/c1/assign', { json: { userId: 'u9' } });
+    await result.current.mutateAsync({ userId: 'u9', expectedAssigneeId: 'u1', note: 'passei o turno' });
+    expect(post).toHaveBeenCalledWith('chat/conversations/c1/assign', { json: { userId: 'u9', expectedAssigneeId: 'u1', note: 'passei o turno' } });
     await waitFor(() => expect(spy).toHaveBeenCalled());
   });
 
   it('supports unassigning with userId null', async () => {
     const { result } = renderHook(() => useAssignConversation('c1'), { wrapper: wrapper(qc) });
-    await result.current.mutateAsync({ userId: null });
-    expect(post).toHaveBeenCalledWith('chat/conversations/c1/assign', { json: { userId: null } });
+    await result.current.mutateAsync({ userId: null, expectedAssigneeId: 'u1' });
+    expect(post).toHaveBeenCalledWith('chat/conversations/c1/assign', { json: { userId: null, expectedAssigneeId: 'u1' } });
   });
 });

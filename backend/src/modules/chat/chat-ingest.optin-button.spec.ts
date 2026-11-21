@@ -11,6 +11,10 @@ import { ConsentService } from '../consent/consent.service';
 import { OptInLinkService } from '../consent/optin-link.service';
 import { ZernioCloudAdapter } from '../whatsapp-providers/adapters/zernio-cloud.adapter';
 
+vi.mock('./conversation-inbound', () =>
+  vi.importActual('./conversation-inbound.test-fixtures'),
+);
+
 /**
  * O caminho REAL da campanha de opt-in, ponta a ponta: webhook cru da Zernio →
  * adapter (parse de verdade, não mock) → ChatIngestService → ConsentService.

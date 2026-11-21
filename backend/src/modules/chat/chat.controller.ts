@@ -7,7 +7,6 @@ import { ListConversationsDto } from './dto/list-conversations.dto';
 import { ListMessagesDto } from './dto/list-messages.dto';
 import { SendReplyDto } from './dto/send-reply.dto';
 import { TypingDto } from './dto/typing.dto';
-import { AssignConversationDto } from './dto/assign-conversation.dto';
 
 type AuthedRequest = Request & { user: { sub: string; role: string } };
 
@@ -58,12 +57,6 @@ export class ChatController {
   @HttpCode(202)
   typing(@Param('id') id: string, @Body() body: TypingDto) {
     return this.svc.sendTyping(id, body.state);
-  }
-
-  @Post('conversations/:id/assign')
-  @HttpCode(200)
-  assign(@Param('id') id: string, @Body() body: AssignConversationDto, @Req() req: AuthedRequest) {
-    return this.svc.assignConversation(id, body.userId, req.user.sub);
   }
 
   @Post('conversations/:id/bot/pause')

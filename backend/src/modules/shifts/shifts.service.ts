@@ -8,8 +8,11 @@ import type {
   ShiftUsage,
   UpdateShiftInput,
 } from '../../schemas/contracts/shift.schema';
+import type { AuditChange } from '../../shared/audit/audit-change';
+import { orderChange } from '../../shared/audit/audit-order';
 import { AuditService } from '../../shared/audit/audit.service';
 import { todayIn } from '../staff-schedule/civil-date';
+import { shiftAuditChanges } from './shift-audit';
 import {
   invalidShiftOrder,
   shiftInUse,
@@ -88,17 +91,22 @@ export class ShiftsService {
     await this.assertNameFree(name);
     const sortOrder = (await this.repo.maxSortOrder()) + 1;
     const row = await this.repo
-      .create({
-        name,
-        startTime: input.startTime,
-        endTime: input.endTime,
-        sortOrder,
-      })
+      .createWithAudit(
+        {
+          name,
+          startTime: input.startTime,
+          endTime: input.endTime,
+          sortOrder,
+        },
+        (tx, before, after) =>
+          this.trail(tx, {
+            action: 'shift.create',
+            actorId,
+            entityId: after.id,
+            changes: shiftAuditChanges(before, after),
+          }),
+      )
       .catch(rethrowNameTaken);
-    await this.audit.log('shift.create', 'Shift', row.id, {
-      actorId,
-      shiftId: row.id,
-    });
     return toShiftAdmin(row, []);
   }
 
@@ -114,8 +122,16 @@ export class ShiftsService {
     const inUse = await this.usageOf(id);
     if (data.isActive === false && current.isActive && inUse.length > 0)
       throw shiftInUse(inUse.map((u) => u.kind));
-    const row = await this.repo.update(id, data).catch(rethrowNameTaken);
-    await this.audit.log('shift.update', 'Shift', id, { actorId, shiftId: id });
+    const row = await this.repo
+      .updateWithAudit(id, data, (tx, before, after) =>
+        this.trail(tx, {
+          action: 'shift.update',
+          actorId,
+          entityId: id,
+          changes: shiftAuditChanges(before, after),
+        }),
+      )
+      .catch(rethrowNameTaken);
     return toShiftAdmin(row, inUse);
   }
 
@@ -125,12 +141,28 @@ export class ShiftsService {
   ): Promise<ShiftListResponse> {
     const allIds = (await this.repo.listAll()).map((row) => row.id);
     if (!isSameSet(input.ids, allIds)) throw invalidShiftOrder();
-    await this.repo.setOrder(input.ids);
-    await this.audit.log('shift.reorder', 'Shift', undefined, {
-      actorId,
-      shiftIds: input.ids,
-    });
+    await this.repo.reorderWithAudit(input.ids, (tx, before, after) =>
+      this.trail(tx, {
+        action: 'shift.reorder',
+        actorId,
+        entityId: null,
+        changes: orderChange(before, after),
+      }),
+    );
     return this.list();
+  }
+
+  /** Trilha dentro da transação do turno; sem campo alterado, não grava evento vazio. */
+  private async trail(
+    tx: Prisma.TransactionClient,
+    event: Pick<AuditChange, 'action' | 'actorId' | 'entityId' | 'changes'>,
+  ): Promise<void> {
+    if (event.changes.length === 0) return;
+    await this.audit.recordChange(tx, {
+      ...event,
+      entity: 'Shift',
+      category: 'STRUCTURE',
+    });
   }
 
   private async assertNameFree(name: string, exceptId?: string): Promise<void> {

@@ -1,8 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import type { ShiftUsage } from '../../schemas/contracts/shift.schema';
+import type { OrderTrail } from '../../shared/audit/audit-order';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { type CivilDate, toDbDate } from '../staff-schedule/civil-date';
+import { type ShiftAuditRow, shiftAuditSelect } from './shift-audit';
 
 const shiftSelect = {
   id: true,
@@ -21,6 +23,14 @@ export type ShiftCreateData = Pick<
 export type ShiftUpdateData = Partial<
   Pick<ShiftRow, 'name' | 'startTime' | 'endTime' | 'isActive'>
 >;
+/** Trilha do turno, gravada na transação da escrita; `before` nulo = criação. */
+export type ShiftTrail = (
+  tx: Prisma.TransactionClient,
+  before: ShiftAuditRow | null,
+  after: ShiftAuditRow,
+) => Promise<void>;
+
+const SHIFT_ORDER = [{ sortOrder: 'asc' }, { name: 'asc' }] as const;
 
 // Ordem dos motivos em `inUse` (C1).
 const COUNTED_KINDS = [
@@ -52,7 +62,7 @@ export class ShiftsRepository {
   listAll(): Promise<ShiftRow[]> {
     return this.prisma.shift.findMany({
       select: shiftSelect,
-      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+      orderBy: [...SHIFT_ORDER],
     });
   }
 
@@ -155,5 +165,69 @@ export class ShiftsRepository {
         }),
       ),
     );
+  }
+
+  /** Cria o turno e grava a trilha na mesma transação: falha de uma desfaz a outra. */
+  createWithAudit(data: ShiftCreateData, audit: ShiftTrail): Promise<ShiftRow> {
+    return this.prisma.$transaction(async (tx) => {
+      const row = await tx.shift.create({ data, select: shiftSelect });
+      await audit(tx, null, row);
+      return row;
+    });
+  }
+
+  /**
+   * Edita o turno e grava a trilha (antes lido no tx) na mesma transação. A
+   * linha é travada antes de ler o "antes": sem a trava, duas edições
+   * simultâneas leem o mesmo "antes" e a trilha da segunda registraria, em nome
+   * dela, a troca que a primeira fez.
+   */
+  updateWithAudit(
+    id: string,
+    data: ShiftUpdateData,
+    audit: ShiftTrail,
+  ): Promise<ShiftRow> {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Shift" WHERE id = ${id} FOR NO KEY UPDATE`;
+      const before = await tx.shift.findUniqueOrThrow({
+        where: { id },
+        select: shiftAuditSelect,
+      });
+      const row = await tx.shift.update({
+        where: { id },
+        data,
+        select: shiftSelect,
+      });
+      await audit(tx, before, row);
+      return row;
+    });
+  }
+
+  /**
+   * sortOrder 1..n na ordem recebida, tudo ou nada, com a trilha (nomes antes e
+   * depois) na mesma transação. Todas as linhas são travadas antes de ler a
+   * ordem antiga, pela mesma razão do `updateWithAudit`.
+   */
+  reorderWithAudit(ids: readonly string[], audit: OrderTrail): Promise<void> {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Shift" ORDER BY id FOR NO KEY UPDATE`;
+      const before = await this.namesInOrder(tx);
+      for (const [index, id] of ids.entries()) {
+        await tx.shift.update({
+          where: { id },
+          data: { sortOrder: index + 1 },
+          select: { id: true },
+        });
+      }
+      await audit(tx, before, await this.namesInOrder(tx));
+    });
+  }
+
+  private async namesInOrder(tx: Prisma.TransactionClient): Promise<string[]> {
+    const rows = await tx.shift.findMany({
+      select: { name: true },
+      orderBy: [...SHIFT_ORDER],
+    });
+    return rows.map((row) => row.name);
   }
 }

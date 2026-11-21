@@ -4,22 +4,44 @@ import type {
   LevelAdmin,
   LevelRef,
 } from '../../schemas/contracts/level.schema';
+import type { OrderTrail } from '../../shared/audit/audit-order';
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { type LevelAuditRow, levelAuditSelect } from './level-audit';
+import { type LevelPeople, peopleByLevel } from './level-usage';
 
 const levelSelect = {
   id: true,
   name: true,
   isActive: true,
   sortOrder: true,
-  _count: { select: { users: true } },
 } satisfies Prisma.StaffLevelSelect;
 
 type LevelRow = Prisma.StaffLevelGetPayload<{ select: typeof levelSelect }>;
 export type LevelCreateData = { name: string; sortOrder: number };
 export type LevelUpdateData = { name?: string; isActive?: boolean };
+/** Trilha do nível, gravada na transação da escrita; `before` nulo = criação. */
+export type LevelTrail = (
+  tx: Prisma.TransactionClient,
+  before: LevelAuditRow | null,
+  after: LevelAuditRow,
+) => Promise<void>;
+/** Roda no tx do `updateWithAudit`, com a linha travada e depois do "antes"; lançar desfaz a gravação. */
+export type LevelUpdateGuard = (
+  tx: Prisma.TransactionClient,
+  before: LevelAuditRow,
+  data: LevelUpdateData,
+) => Promise<void>;
 
-function toAdmin({ _count, ...row }: LevelRow): LevelAdmin {
-  return { ...row, userCount: _count.users };
+const NOBODY: LevelPeople = { activePeople: 0, inactivePeople: 0 };
+const LEVEL_ORDER = [{ sortOrder: 'asc' }, { name: 'asc' }] as const;
+
+// `userCount` é o total (ativas e inativas); o bloqueio de desativar olha só as ativas.
+function toAdmin(row: LevelRow, people: LevelPeople = NOBODY): LevelAdmin {
+  return {
+    ...row,
+    userCount: people.activePeople + people.inactivePeople,
+    ...people,
+  };
 }
 
 function nameKey(name: string): string {
@@ -31,11 +53,14 @@ export class LevelsRepository {
   constructor(private readonly prisma: PrismaService) {}
 
   async list(): Promise<LevelAdmin[]> {
-    const rows = await this.prisma.staffLevel.findMany({
-      select: levelSelect,
-      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
-    });
-    return rows.map(toAdmin);
+    const [rows, people] = await Promise.all([
+      this.prisma.staffLevel.findMany({
+        select: levelSelect,
+        orderBy: [...LEVEL_ORDER],
+      }),
+      peopleByLevel(this.prisma),
+    ]);
+    return rows.map((row) => toAdmin(row, people.get(row.id)));
   }
 
   /** Só o necessário para validar um `levelId` (existe? está ativo?). */
@@ -86,13 +111,12 @@ export class LevelsRepository {
   }
 
   async update(id: string, data: LevelUpdateData): Promise<LevelAdmin> {
-    return toAdmin(
-      await this.prisma.staffLevel.update({
-        where: { id },
-        data,
-        select: levelSelect,
-      }),
-    );
+    const row = await this.prisma.staffLevel.update({
+      where: { id },
+      data,
+      select: levelSelect,
+    });
+    return toAdmin(row, (await peopleByLevel(this.prisma, [id])).get(id));
   }
 
   /** sortOrder 1..n na ordem recebida, tudo ou nada. */
@@ -106,5 +130,76 @@ export class LevelsRepository {
         }),
       ),
     );
+  }
+
+  /** Cria o nível e grava a trilha na mesma transação: falha de uma desfaz a outra. */
+  createWithAudit(
+    data: LevelCreateData,
+    audit: LevelTrail,
+  ): Promise<LevelAdmin> {
+    return this.prisma.$transaction(async (tx) => {
+      const row = await tx.staffLevel.create({ data, select: levelSelect });
+      await audit(tx, null, row);
+      return toAdmin(row);
+    });
+  }
+
+  /**
+   * Edita o nível na transação: trava a linha (`FOR NO KEY UPDATE`), lê o
+   * "antes", roda o `guard` (conferência de uso, E3), grava e registra a trilha.
+   * A trava vem antes do "antes": sem ela, duas edições simultâneas leem o
+   * mesmo "antes"; e a contagem de pessoas ativas do guard é decidida com a
+   * linha travada, não numa leitura solta anterior. A criação de pessoa só pega
+   * `FOR KEY SHARE` no nível e passa durante a trava (limite conhecido da spec).
+   */
+  updateWithAudit(
+    id: string,
+    data: LevelUpdateData,
+    audit: LevelTrail,
+    guard?: LevelUpdateGuard,
+  ): Promise<LevelAdmin> {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "StaffLevel" WHERE id = ${id} FOR NO KEY UPDATE`;
+      const before = await tx.staffLevel.findUniqueOrThrow({
+        where: { id },
+        select: levelAuditSelect,
+      });
+      await guard?.(tx, before, data);
+      const row = await tx.staffLevel.update({
+        where: { id },
+        data,
+        select: levelSelect,
+      });
+      await audit(tx, before, row);
+      return toAdmin(row, (await peopleByLevel(tx, [id])).get(id));
+    });
+  }
+
+  /**
+   * sortOrder 1..n na ordem recebida, tudo ou nada, com a trilha (nomes antes e
+   * depois) na mesma transação. Todas as linhas são travadas antes de ler a
+   * ordem antiga, pela mesma razão do `updateWithAudit`.
+   */
+  reorderWithAudit(ids: readonly string[], audit: OrderTrail): Promise<void> {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "StaffLevel" ORDER BY id FOR NO KEY UPDATE`;
+      const before = await this.namesInOrder(tx);
+      for (const [index, id] of ids.entries()) {
+        await tx.staffLevel.update({
+          where: { id },
+          data: { sortOrder: index + 1 },
+        });
+      }
+      const after = await this.namesInOrder(tx);
+      await audit(tx, before, after);
+    });
+  }
+
+  private async namesInOrder(tx: Prisma.TransactionClient): Promise<string[]> {
+    const rows = await tx.staffLevel.findMany({
+      orderBy: [...LEVEL_ORDER],
+      select: { name: true },
+    });
+    return rows.map(({ name }) => name);
   }
 }

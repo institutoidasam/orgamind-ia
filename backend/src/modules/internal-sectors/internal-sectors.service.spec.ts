@@ -25,6 +25,8 @@ const sector = {
   _count: { members: 2 },
 };
 
+const NO_USAGE = { people: 0, exceptions: 0, scheduled: 0, inactivePeople: 0 };
+
 const channelRow = {
   id: 'ch1',
   name: 'Compras Zap',
@@ -85,6 +87,7 @@ function membersHarness(role: Role, change: PermissionChange = {}) {
   const repo = {
     find: vi.fn().mockResolvedValue({ ...sector, members: [] }),
     findMembers: vi.fn().mockResolvedValue(MEMBER_ROWS),
+    usage: vi.fn().mockResolvedValue(NO_USAGE),
     effectivePermissions: vi
       .fn()
       .mockResolvedValue(permissionsWith(role, change)),
@@ -382,6 +385,7 @@ describe('InternalSectorsService — edição e falha de persistência', () => {
       's1',
       { manager: { disconnect: true } },
       expect.any(Function),
+      undefined,
     );
   });
 
@@ -420,6 +424,7 @@ describe('InternalSectorsService — número efetivo do setor (C1)', () => {
       const repo = {
         list: vi.fn().mockResolvedValue([[{ ...sector, channel }], 1]),
         find: vi.fn().mockResolvedValue({ ...sector, channel, members: [] }),
+        usage: vi.fn().mockResolvedValue(NO_USAGE),
         effectivePermissions: vi
           .fn()
           .mockResolvedValue(permissionsWith('ADMIN')),

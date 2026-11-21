@@ -14,6 +14,11 @@ vi.mock('@/lib/internal-unread', () => ({
   useInternalUnreadCount: () => ({ data: { count: 4 } }),
 }));
 
+// O contador de pendências (K2) tem spec próprio (sidebar.pendencies.spec.tsx); aqui o item fica escondido.
+vi.mock('@/features/team-pendencies/api', () => ({
+  usePendencyCount: () => ({ data: undefined }),
+}));
+
 import { useAuthStore } from '@/stores/auth.store';
 import { Sidebar } from './sidebar';
 

@@ -9,9 +9,13 @@ describe("novidade: caixa com situação da conversa e um atendente por vez (Lot
 
   it("aceite 11: entrada K1 no topo, versão maior que 2026.11.21.1, data não futura, itens em /inbox com Assumir conversa, Resolvidas e Histórico da conversa", () => {
     expect(note).toBeDefined();
+    // Acima da entrada do Lote I (a ordem decrescente geral é conferida em
+    // release-notes.spec.ts); `[0]` quebraria na próxima entrada.
     expect(
       RELEASE_NOTES.findIndex((n) => n.version === "2026.11.21.2"),
-    ).toBe(0);
+    ).toBeLessThan(
+      RELEASE_NOTES.findIndex((n) => n.version === "2026.11.21.1"),
+    );
     expect(note?.version > "2026.11.21.1").toBe(true);
     expect(note?.date).toBe("2026-11-21");
     expect(note?.items.every((item) => item.where === "/inbox")).toBe(true);

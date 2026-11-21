@@ -1,6 +1,7 @@
 import { POLL_INTERVAL_MS } from "./api";
 import type {
   AlertAck,
+  AlertClosure,
   AlertGroup,
   AlertMessage,
   AlertPerson,
@@ -116,6 +117,14 @@ export function personDetails({
   }
   const reply = ack ? ackReply : lastReply;
   return reply ? [replyText(reply)] : [];
+}
+
+/** "Tratativa encerrada por Ana: falou por ligação" (K2-2); usuário removido (DK18); sem encerramento, nada. */
+export function closureText(
+  closure: AlertClosure | null | undefined,
+): string | null {
+  if (!closure) return null;
+  return `Tratativa encerrada por ${closure.byName ?? "Usuário removido"}: ${closure.reason}`;
 }
 
 /** "09:05 · Ana · 3 pessoas": um lembrete do alerta (hora em Manaus). */

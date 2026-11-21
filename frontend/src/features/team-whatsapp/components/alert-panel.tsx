@@ -9,6 +9,7 @@ import { alertActionErrorText, useUndoManualAck } from "../alert-actions-api";
 import { useAlertView } from "../alert-api";
 import {
   ackLabel,
+  closureText,
   deadlineText,
   GROUP_LABEL,
   personDetails,
@@ -84,6 +85,10 @@ function PersonItem({
   now,
   actions,
 }: Omit<ViewProps, "toolbar"> & { person: AlertPerson }) {
+  const closure = closureText(person.closure);
+  const lines = closure
+    ? [...personDetails(person), closure]
+    : personDetails(person);
   return (
     <li className="py-1">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -93,7 +98,7 @@ function PersonItem({
         </p>
         {actions && <PersonButtons person={person} actions={actions} />}
       </div>
-      {personDetails(person).map((line, index) => (
+      {lines.map((line, index) => (
         <p
           key={`${index}:${line}`}
           className="whitespace-pre-wrap break-words text-sm text-muted-foreground"

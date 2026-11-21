@@ -43,6 +43,13 @@ const TEAM_ERROR_MESSAGES: Record<string, string> = {
   'team_whatsapp.missing_urgency_reason': 'Informe o motivo da urgência.',
   'team_whatsapp.overtime_without_selection': 'Marque pelo menos uma pessoa para a hora extra.',
   'team_whatsapp.after_activity_start': 'A mensagem precisa sair antes do início da atividade.',
+  // DI14: alerta urgente (ciência manual e lembrete); o 403 sem `equipe.urgencia` vem com o texto do servidor.
+  'team_whatsapp.not_an_alert': 'Este envio não é um alerta urgente.',
+  'team_whatsapp.ack_exists': 'Esta pessoa já tem ciência registrada.',
+  'team_whatsapp.ack_not_manual': 'Só a ciência manual pode ser desfeita.',
+  'team_whatsapp.reminder_empty': 'Nenhuma das pessoas escolhidas está pendente. Atualize a lista.',
+  'team_whatsapp.reminder_limit': 'Este alerta já teve 3 lembretes, o máximo.',
+  'team_whatsapp.reminder_too_soon': 'Espere 5 minutos desde o alerta ou o último lembrete.',
   // DB10: aqui só `equipe.enviar` barra criar, cancelar e repetir; o texto do servidor, quando vem, vale mais.
   'auth.permission_denied': 'Você não tem permissão para enviar WhatsApp à equipe.',
 };
@@ -67,6 +74,8 @@ export const SKIP_REASON_LABEL = {
   LEFT_SECTOR: 'Saiu do setor ou turno',
   PHONE_CHANGED: 'Telefone mudou depois da criação do envio',
   EXPIRED: 'Não enviado: passou da hora',
+  // Lembrete (DI14): quem já confirmou o alerta não recebe de novo.
+  ACKED: 'já confirmou',
 } as const;
 
 /** Motivo de a pessoa estar fora da escala do dia (grupo "De folga"). */

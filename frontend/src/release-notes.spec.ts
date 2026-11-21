@@ -18,10 +18,10 @@ function compareVersions(a: string, b: string): number {
 }
 
 describe('novidade: rastreio do envio do WhatsApp da equipe (Lote H)', () => {
-  it('abre a lista com a entrada 2026.11.20.2 e cobre Quando, conexão conferida, Tentativas e a fila perdida', () => {
+  it('traz a entrada 2026.11.20.2 e cobre Quando, conexão conferida, Tentativas e a fila perdida', () => {
     const note = RELEASE_NOTES.find((n) => n.version === '2026.11.20.2');
     const texts = (note?.items ?? []).map((item) => item.text);
-    expect(RELEASE_NOTES[0]).toBe(note);
+    expect(note).toBeDefined();
     expect(note?.items.every((item) => item.where === '/whatsapp-equipe')).toBe(true);
     expect(texts.some((t) => t.includes('"Quando"'))).toBe(true);
     expect(texts.some((t) => t.includes('"Tentativas"'))).toBe(true);

@@ -56,13 +56,16 @@ afterAll(async () => {
   await postgres?.stop();
 });
 
-/** Volta as 16 células ao padrão (como a migração semeia) e limpa a trilha. */
+/**
+ * Volta as células ao padrão (como a migração semeia) e limpa a trilha.
+ * `updateMany`: chave não semeada (equipe.urgencia) não tem linha e não falha.
+ */
 beforeEach(async () => {
   await prisma.auditEvent.deleteMany();
   for (const role of EDITABLE_ROLES) {
     for (const key of PERMISSION_KEYS) {
-      await prisma.rolePermission.update({
-        where: { role_key: { role, key } },
+      await prisma.rolePermission.updateMany({
+        where: { role, key },
         data: {
           granted: DEFAULT_MATRIX[role].includes(key),
           updatedById: null,

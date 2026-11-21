@@ -1,6 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { useAuthStore } from '@/stores/auth.store';
 import { useSendFilters } from '../use-send-filters';
 import { PurposeFields } from './purpose-fields';
 
@@ -26,7 +27,16 @@ async function pick(user: User, trigger: string, option: string) {
 
 const OFF = 'Incluir quem está de folga';
 
-afterEach(cleanup);
+// A Urgência só aparece com `equipe.urgencia` (a lista dela está em purpose-fields.urgency.spec.tsx).
+beforeEach(() => {
+  useAuthStore.setState({
+    user: { id: 'u1', email: 'o@x.test', name: 'Olga', role: 'OPERATOR', permissions: ['equipe.enviar', 'equipe.urgencia'] },
+  });
+});
+afterEach(() => {
+  cleanup();
+  useAuthStore.setState({ user: null });
+});
 
 describe('PurposeFields: folga por finalidade', () => {
   it('aceite 14: Incluir quem está de folga marcado em Reunião e Palestra, desmarcado em Hora extra e Alinhamento, ausente em Aviso de turno e Urgência', async () => {

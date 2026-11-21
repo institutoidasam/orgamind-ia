@@ -157,7 +157,7 @@ describe('rótulos de envio', () => {
       NO_PHONE: 'sem telefone', SUPPRESSED: 'pediu para não receber (SAIR)', INACTIVE: 'Inativa',
       NOT_AUTHORIZED: 'Contato não autorizado', VACATION: 'Férias', DAY_OFF: 'Folga',
       LEFT_SECTOR: 'Saiu do setor ou turno', PHONE_CHANGED: 'Telefone mudou depois da criação do envio',
-      EXPIRED: 'Não enviado: passou da hora',
+      EXPIRED: 'Não enviado: passou da hora', ACKED: 'já confirmou',
     });
     expect(PACING_HINT).toMatch(/^Os envios saem aos poucos, no ritmo do canal;/);
   });

@@ -39,7 +39,10 @@ describe('pessoas.importar na matriz padrão', () => {
   });
 
   it('a chave entra por último e a recusa tem o texto da spec', () => {
-    expect(PERMISSION_KEYS.at(-1)).toBe('pessoas.importar');
+    expect(PERMISSION_KEYS.slice(-2)).toEqual([
+      'pessoas.importar',
+      'equipe.urgencia',
+    ]);
     expect(PERMISSION_DENIED_TEXT['pessoas.importar']).toBe(
       'Você não tem permissão para importar planilhas de pessoas.',
     );
@@ -93,13 +96,14 @@ describe('resolvePermissions', () => {
     const allFalse = PERMISSION_KEYS.map((key) => ({ key, granted: false }));
     const allTrue = PERMISSION_KEYS.map((key) => ({ key, granted: true }));
 
-    // trilha.consultar revogada pela linha; exportar e importar ausentes caem no padrão (negadas).
+    // trilha.consultar revogada pela linha; exportar, importar e urgencia ausentes caem no padrão (negadas).
     expect(resolvePermissions('SUPERVISOR', supervisorRows)).toEqual(
       PERMISSION_KEYS.filter(
         (key) =>
           key !== 'trilha.consultar' &&
           key !== 'pessoas.exportar' &&
-          key !== 'pessoas.importar',
+          key !== 'pessoas.importar' &&
+          key !== 'equipe.urgencia',
       ),
     );
     expect(resolvePermissions('OPERATOR', [])).toEqual(
@@ -133,7 +137,7 @@ describe('permissionDenied', () => {
     });
   });
 
-  it('PERMISSION_DENIED_TEXT tem texto para cada uma das 10 chaves', () => {
+  it('PERMISSION_DENIED_TEXT tem texto para cada uma das 11 chaves', () => {
     expect(Object.keys(PERMISSION_DENIED_TEXT).sort()).toEqual(
       [...PERMISSION_KEYS].sort(),
     );

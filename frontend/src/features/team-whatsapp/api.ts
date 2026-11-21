@@ -27,7 +27,7 @@ export type { DispatchListFilters, SendTarget } from './schemas';
 
 /** Depois disso, um envio ainda `QUEUED` deixa de ser consultado (evita polling infinito). */
 export const POLL_WINDOW_MS = 60 * 60_000;
-const POLL_INTERVAL_MS = 10_000;
+export const POLL_INTERVAL_MS = 10_000;
 
 /** Prefixo da chave das consultas de prévia: quem as invalida (ex.: o envio recusado por público mudado) usa este. */
 export const AUDIENCE_PREVIEW_KEY = ['team-whatsapp', 'preview'] as const;
@@ -184,7 +184,7 @@ export function useCancelDispatch() {
   });
 }
 
-const dispatchKey = (id: string) => ['team-whatsapp', 'dispatch', id] as const;
+export const dispatchKey = (id: string) => ['team-whatsapp', 'dispatch', id] as const;
 /** Instante (ms) do último Repetir bem-sucedido do envio; só serve para reabrir a janela do poll. */
 const retriedAtKey = (id: string) => [...dispatchKey(id), 'retriedAt'] as const;
 

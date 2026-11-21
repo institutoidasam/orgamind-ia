@@ -10,6 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { formatDayMonth } from '@/lib/civil-date';
 import { useAuthStore } from '@/stores/auth.store';
 import { AUDIENCE_PREVIEW_KEY, useCreateTeamDispatch, useTeamPersonRoute, useTeamRoster } from '../api';
+import { finalTextLength } from '../alert-text';
 import { buildChannelGroups, type ChannelGroupsResult } from '../channel-groups';
 import { apiErrorCode, apiErrorText, PACING_HINT, SKIP_REASON_LABEL, teamErrorMessage } from '../error-messages';
 import { manausDateTime } from '../labels';
@@ -20,6 +21,7 @@ import type {
   CreateDispatchInput, DispatchResult, SendTarget, TeamActivity, TeamAudiencePreview, TeamPurpose,
 } from '../schemas';
 import { momentIncomplete, NOW_MOMENT, type Moment } from '../use-send-filters';
+import { AlertConfirmLine, AlertDeadlineNote } from './alert-confirm-line';
 import { ChannelGroups, NoSectorNotice, UnverifiedNotice } from './channel-groups';
 import { ExcludedGroups } from './excluded-groups';
 import { RulePanel } from './rule-panel';
@@ -89,6 +91,7 @@ function AudienceReview({ preview }: { preview: TeamAudiencePreview }) {
   return (
     <div className="space-y-3">
       <RulePanel rule={rule} includedCount={included.length} excludedCount={excluded.length} />
+      {rule.purpose === 'urgency' && <AlertDeadlineNote />}
       <PeopleList title={`Vão receber (${included.length})`} lines={included.map((p) => p.name)} />
       <div className="max-h-60 overflow-y-auto">
         <ExcludedGroups excluded={excluded} title="Ficam de fora" />
@@ -108,8 +111,8 @@ const TEXT_TOO_LONG: Block = { code: 'text_too_long', message: `A mensagem passa
 /**
  * Travas perto do botão, na ordem do servidor (CF4). A prévia vai com `text: ''` (DF11): a trava do texto sai da
  * lista dela e é conferida aqui, com o mesmo texto e na mesma posição (a primeira). Também só aqui: o texto preenchido
- * com dados que mudaram (G2) e o texto que passou do limite (o cabeçalho conta); "Data e hora" sem data ou sem
- * hora também trava aqui: a prévia ainda é a de agora e nada a diria.
+ * com dados que mudaram (G2) e o texto que passou do limite (o cabeçalho conta e, na Urgência, a linha fixa também);
+ * "Data e hora" sem data ou sem hora também trava aqui: a prévia ainda é a de agora e nada a diria.
  */
 function sendBlocks(preview: TeamAudiencePreview, draft: Pick<MessageDraft, 'text' | 'stale'>, moment: Moment): Block[] {
   const { text, stale } = draft;
@@ -118,7 +121,7 @@ function sendBlocks(preview: TeamAudiencePreview, draft: Pick<MessageDraft, 'tex
   return [
     ...emptyText,
     ...(stale ? [DRAFT_STALE] : []),
-    ...(text.length > MAX_TEXT ? [TEXT_TOO_LONG] : []),
+    ...(finalTextLength(text, preview.rule.purpose) > MAX_TEXT ? [TEXT_TOO_LONG] : []),
     ...(momentIncomplete(moment) ? [MOMENT_INCOMPLETE] : []),
     ...fromServer,
   ];
@@ -456,7 +459,8 @@ export function SendWhatsappDialog({ open, onOpenChange, target, audience, momen
             <Label htmlFor="team-whatsapp-text">Mensagem</Label>
             <DraftControls draft={form.draft} purpose={purpose} />
             <Textarea id="team-whatsapp-text" rows={5} maxLength={MAX_TEXT} value={form.text} onChange={(e) => form.setText(e.target.value)} />
-            <p className="text-right text-xs text-muted-foreground">{form.text.length}/{MAX_TEXT}</p>
+            {purpose === 'urgency' && <AlertConfirmLine />}
+            <p className="text-right text-xs text-muted-foreground">{finalTextLength(form.text, purpose)}/{MAX_TEXT}</p>
           </div>
           {options.length > 1 && (
             <SendMoment value={moment.value} onChange={moment.onChange} options={options} today={moment.today} />

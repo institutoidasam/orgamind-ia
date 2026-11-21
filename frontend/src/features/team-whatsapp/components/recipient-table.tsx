@@ -52,10 +52,18 @@ function ChannelCell({ channel, channelCheckedAt }: Pick<DispatchRecipient, 'cha
   );
 }
 
-type RowProps = { item: DispatchRecipient; busy: boolean; onRetry: (item: DispatchRecipient) => void };
+/** `ackLabels` só vem no alerta urgente (I6): a linha ganha a célula "Ciência" depois de "Quando". */
+type AckLabels = ReadonlyMap<string, string>;
+
+type RowProps = {
+  item: DispatchRecipient;
+  busy: boolean;
+  onRetry: (item: DispatchRecipient) => void;
+  ackLabels?: AckLabels;
+};
 
 /** Repetir é ação de envio (DB6): sem `equipe.enviar` a linha só informa. */
-function RecipientRow({ item, busy, onRetry }: RowProps) {
+function RecipientRow({ item, busy, onRetry, ackLabels }: RowProps) {
   const canRetry = usePermission('equipe.enviar');
   return (
     <TableRow>
@@ -63,6 +71,7 @@ function RecipientRow({ item, busy, onRetry }: RowProps) {
       <TableCell>{item.phone ?? '—'}</TableCell>
       <TableCell>{statusText(item)}</TableCell>
       <TableCell>{recipientWhenText(item)}</TableCell>
+      {ackLabels && <TableCell>{ackLabels.get(item.id) ?? '—'}</TableCell>}
       <TableCell><ChannelCell channel={item.channel} channelCheckedAt={item.channelCheckedAt} /></TableCell>
       <TableCell>{attemptsText(item.attempts, item.manualRetries)}</TableCell>
       <TableCell className="text-sm">{reasonText(item)}</TableCell>
@@ -105,10 +114,10 @@ function useRetryAction(dispatchId: string) {
 }
 
 /** `query` = busca por nome da tela (já com debounce): o servidor filtra pelo nome exibido (DG13). */
-type Props = { dispatchId: string; failedCount: number; query?: string };
+type Props = { dispatchId: string; failedCount: number; query?: string; ackLabels?: AckLabels };
 
 /** Destinatários do envio, por nome, com filtro de situação, busca, paginação e `Repetir` nas falhas certas. */
-export function RecipientTable({ dispatchId, failedCount, query }: Props) {
+export function RecipientTable({ dispatchId, failedCount, query, ackLabels }: Props) {
   const [status, setStatus] = useState<RecipientStatus | undefined>(undefined);
   const [page, setPage] = useState(1);
   const [seenQuery, setSeenQuery] = useState(query);
@@ -140,6 +149,7 @@ export function RecipientTable({ dispatchId, failedCount, query }: Props) {
           items={data.items}
           busy={busy}
           searching={(query ?? '').trim() !== ''}
+          ackLabels={ackLabels}
           onRetry={(item) => run({ recipientIds: [item.id] })}
           paging={{ page, pageSize: data.pageSize, total: data.total, onPageChange: setPage }}
         />
@@ -153,10 +163,11 @@ type RowsProps = {
   busy: boolean;
   searching: boolean;
   onRetry: (item: DispatchRecipient) => void;
+  ackLabels?: AckLabels;
   paging: { page: number; pageSize: number; total: number; onPageChange: (page: number) => void };
 };
 
-function RecipientRows({ items, busy, searching, onRetry, paging }: RowsProps) {
+function RecipientRows({ items, busy, searching, onRetry, ackLabels, paging }: RowsProps) {
   if (items.length === 0) {
     const emptyText = searching ? NO_NAME_MATCH_TEXT : 'Nenhum destinatário nesta situação.';
     return <p className="text-sm text-muted-foreground">{emptyText}</p>;
@@ -168,13 +179,17 @@ function RecipientRows({ items, busy, searching, onRetry, paging }: RowsProps) {
           <TableHeader>
             <TableRow>
               <TableHead>Nome</TableHead><TableHead>Telefone usado</TableHead><TableHead>Situação</TableHead>
-              <TableHead>Quando</TableHead><TableHead>Número</TableHead><TableHead>Tentativas</TableHead>
+              <TableHead>Quando</TableHead>
+              {ackLabels && <TableHead>Ciência</TableHead>}
+              <TableHead>Número</TableHead><TableHead>Tentativas</TableHead>
               <TableHead>Motivo</TableHead>
               <TableHead><span className="sr-only">Ações</span></TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {items.map((item) => <RecipientRow key={item.id} item={item} busy={busy} onRetry={onRetry} />)}
+            {items.map((item) => (
+              <RecipientRow key={item.id} item={item} busy={busy} onRetry={onRetry} ackLabels={ackLabels} />
+            ))}
           </TableBody>
         </Table>
       </div>

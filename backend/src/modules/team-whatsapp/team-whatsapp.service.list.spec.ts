@@ -131,6 +131,8 @@ const row = (over: Partial<TeamDispatchRow> = {}): TeamDispatchRow => ({
   activityTime: null,
   activityPlace: null,
   urgencyReason: null,
+  ackDeadlineMinutes: null,
+  parentDispatch: null,
   author: { id: 'm', name: 'Gestor', email: 'gestor@idasam.org' },
   sectors: [{ sectorId: 's1', sectorName: 'Financeiro' }],
   ...over,
@@ -220,6 +222,9 @@ const FIRST_ITEM = {
   base: null,
   activity: null,
   urgencyReason: null,
+  ackDeadlineMinutes: null,
+  ackDeadlineAt: null,
+  reminderOf: null,
 };
 
 // Dois envios (d1 setor, d2 pessoa sem autor); contagens e números só do d1.

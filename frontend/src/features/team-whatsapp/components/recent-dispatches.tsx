@@ -11,6 +11,7 @@ import { Pagination } from '@/features/internal-communications/components/pagina
 import { formatDatePtBr } from '@/lib/format-date-ptbr';
 import { useTeamDispatches } from '../api';
 import { activityText } from '../activity-text';
+import { deadlineNote, reminderOfText } from '../alert-labels';
 import { channelLabel, countParts } from '../error-messages';
 import {
   BASE_LABEL, DISPATCH_STATE_LABEL, dispatchSituation, LEGACY_BASE_LABEL, PURPOSE_LABEL,
@@ -60,6 +61,8 @@ function PurposeCell({ item }: { item: Item }) {
       <p className="font-medium">{item.purpose ? PURPOSE_LABEL[item.purpose] : '—'}</p>
       <p className="text-muted-foreground">{item.base ? BASE_LABEL[item.base] : LEGACY_BASE_LABEL}</p>
       {activity && <p>{activity}</p>}
+      {item.reminderOf && <p>{reminderOfText(item.reminderOf)}</p>}
+      {item.ackDeadlineMinutes != null && <p>{deadlineNote(item.ackDeadlineMinutes)}</p>}
     </>
   );
 }

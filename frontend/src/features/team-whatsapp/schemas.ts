@@ -172,7 +172,7 @@ export const dispatchResultSchema = z.object({
     .object({
       userId: z.string(),
       name: z.string(),
-      reason: z.enum(['NO_PHONE', 'SUPPRESSED', 'INACTIVE', 'NOT_AUTHORIZED']),
+      reason: z.enum(['NO_PHONE', 'SUPPRESSED', 'INACTIVE', 'NOT_AUTHORIZED', 'ACKED']),
     })
     .array(),
 });
@@ -203,6 +203,20 @@ const pageMetaShape = {
   total: count,
   page: z.number().int().positive(),
   pageSize: z.number().int().positive(),
+};
+
+/** O alerta de que um envio é lembrete (DI12): id e hora de criação (ISO). */
+const reminderOfSchema = z.object({ dispatchId: z.string(), createdAt: z.string() });
+
+/**
+ * Campos do alerta urgente na lista e no detalhe (DI12, CI10): prazo de ciência em minutos, o instante em que vence
+ * (ISO) e o alerta de origem do lembrete. Nulos ou ausentes = outra finalidade, lembrete ou urgência anterior ao
+ * alerta (I8); o servidor antigo não manda as chaves.
+ */
+const alertFieldsShape = {
+  ackDeadlineMinutes: z.number().int().nullish(),
+  ackDeadlineAt: z.string().nullish(),
+  reminderOf: reminderOfSchema.nullish(),
 };
 
 export const dispatchListSchema = z.object({
@@ -239,6 +253,7 @@ export const dispatchListSchema = z.object({
       base: teamAudienceBaseSchema.nullable(),
       activity: teamActivitySchema.nullable(),
       urgencyReason: z.string().nullable(),
+      ...alertFieldsShape,
     })
     .array(),
   ...pageMetaShape,
@@ -280,6 +295,7 @@ export const dispatchDetailSchema = z.object({
   base: teamAudienceBaseSchema.nullable(),
   rule: teamAudienceRuleViewSchema.nullable(),
   excluded: teamExcludedPersonSchema.array().default([]),
+  ...alertFieldsShape,
   // Reconferência do disparo (G3): `at` = hora (ISO), `skipped` = pulados na reconferência, `lateJoined` = quem entrou
   // no público depois do agendamento e não recebeu (sem telefone). Nulo/ausente = envio não reconferido (imediato,
   // antigo, cancelado, vencido ou ainda agendado): o servidor antigo não manda a chave.
@@ -299,7 +315,7 @@ export const dispatchRecipientPageSchema = z.object({
       shiftName: z.string().nullable(),
       status: recipientStatusSchema,
       // `skipReason ?? errorCode`: 'NO_PHONE' | 'SUPPRESSED' | 'INACTIVE' | 'NOT_AUTHORIZED' | 'VACATION' | 'DAY_OFF' |
-      // 'LEFT_SECTOR' | 'PHONE_CHANGED' | 'EXPIRED' ou o código da falha.
+      // 'LEFT_SECTOR' | 'PHONE_CHANGED' | 'EXPIRED' | 'ACKED' (lembrete: já confirmou) ou o código da falha.
       reason: z.string().nullable(),
       // Telefone gravado na criação, conforme `telefone.ver_completo`; nulo/ausente = não gravado (envio antigo).
       phone: z.string().nullish(),

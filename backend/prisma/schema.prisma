@@ -1738,6 +1738,7 @@ enum TeamWhatsappRecipientStatus {
 // Reconferência do agendado (Lote G): VACATION = de férias no dia; DAY_OFF = de
 // folga no dia; LEFT_SECTOR = saiu do setor do envio; PHONE_CHANGED = o telefone
 // mudou desde a criação; EXPIRED = o horário do envio passou sem disparo.
+// Lote I (alerta urgente): ACKED = o lembrete não foi enviado porque a pessoa já deu ciência.
 enum TeamWhatsappSkipReason {
   NO_PHONE
   SUPPRESSED
@@ -1748,6 +1749,14 @@ enum TeamWhatsappSkipReason {
   LEFT_SECTOR
   PHONE_CHANGED
   EXPIRED
+  ACKED
+}
+
+// Como a ciência do alerta foi dada (Lote I, I4): KEYWORD = resposta com palavra
+// de ciência; MANUAL = registrada por quem vê o envio.
+enum TeamAlertAckKind {
+  KEYWORD
+  MANUAL
 }
 
 // Finalidade do envio à equipe (Lote F, CF8). Dispatch sem finalidade
@@ -1836,12 +1845,23 @@ model TeamWhatsappDispatch {
   recheckedAt        DateTime?
   // "Entraram depois" do agendado reconferido (id, nome, setor, turno e nível; sem telefone); [] = ninguém; null = não reconferido ou envio antigo.
   audienceLateJoined Json?
+  // Alerta urgente (Lote I, I3): prazo de ciência em minutos; null = não é alerta
+  // (outra finalidade, urgência anterior a esta versão e lembrete).
+  ackDeadlineMinutes Int?
+  // Lembrete → alerta de origem (I7); SetNull: apagar o alerta não apaga o lembrete.
+  parentDispatchId   String?
+  parentDispatch     TeamWhatsappDispatch?  @relation("AlertReminders", fields: [parentDispatchId], references: [id], onDelete: SetNull)
+  reminders          TeamWhatsappDispatch[] @relation("AlertReminders")
+  // Lembretes já enviados deste alerta e hora do último; 0 / null = nenhum.
+  reminderCount      Int                    @default(0)
+  lastReminderAt     DateTime?
 
   @@index([createdAt])
   @@index([authorId, createdAt])
   @@index([state, scheduledFor])
   @@index([state, createdAt])
   @@index([purpose, createdAt])
+  @@index([parentDispatchId])
 }
 
 /// Setor de um envio da equipe (C6/D5). `sectorId` sem FK, como `targetId`: o
@@ -1898,6 +1918,23 @@ model TeamWhatsappRecipient {
   // Hora da conferência de conexão (estado `open`) que liberou a mensagem (H1); null = anterior a esta
   // versão, pulado/falho antes da conferência ou sem `open`.
   channelCheckedAt DateTime?
+  // Ciência do alerta (Lote I, I4); tudo nulo = pendente.
+  ackAt              DateTime?
+  ackKind            TeamAlertAckKind?
+  // Quem registrou a ciência manual (sem FK, como o histórico do envio); null = por palavra.
+  ackByUserId        String?
+  // Observação da ciência manual (até 200); null = por palavra ou sem observação.
+  ackNote            String?                     @db.VarChar(200)
+  // Primeira mensagem recebida com palavra de ciência e a hora de recebimento dela
+  // (o desfazer usa a hora; DI7).
+  ackMessageId       String?
+  ackMessageAt       DateTime?
+  // Última resposta da pessoa ligada ao alerta.
+  lastReplyMessageId String?
+  // Destinatário de lembrete → destinatário do alerta (I7); SetNull como o envio.
+  parentRecipientId  String?
+  parentRecipient    TeamWhatsappRecipient?      @relation("ReminderRecipients", fields: [parentRecipientId], references: [id], onDelete: SetNull)
+  reminderRecipients TeamWhatsappRecipient[]     @relation("ReminderRecipients")
   createdAt  DateTime                    @default(now())
   updatedAt  DateTime                    @updatedAt
 
@@ -1906,6 +1943,7 @@ model TeamWhatsappRecipient {
   @@index([channelId, contactId, acceptedAt])
   // Verificador de presos (H2).
   @@index([status, updatedAt])
+  @@index([parentRecipientId])
 }
 
 enum StaffScheduleTemplate {

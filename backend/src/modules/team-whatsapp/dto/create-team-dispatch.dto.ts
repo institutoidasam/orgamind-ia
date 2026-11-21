@@ -7,6 +7,7 @@ import {
   teamPurposeSchema,
   teamWhenSchema,
 } from '../../../schemas/contracts/team-whatsapp.schema';
+import { ALERT_CONFIRM_SUFFIX } from '../team-alert.rules';
 
 const MAX_SECTORS = 100;
 const MAX_LEVELS = 50;
@@ -134,6 +135,26 @@ function atRules(
 }
 
 /**
+ * Alerta urgente (I2/DI3): o servidor acrescenta a linha fixa ao texto gravado,
+ * e o limite de 2000 vale para o texto final; na Urgência o do usuário vai até
+ * 1959 (400 no caminho `text`). A prévia não muda: não cobre o texto.
+ */
+function alertTextRule(
+  b: { purpose?: string; text: string },
+  ctx: z.RefinementCtx,
+): void {
+  if (
+    b.purpose === 'urgency' &&
+    b.text.length + ALERT_CONFIRM_SUFFIX.length > MAX_TEXT
+  )
+    issue(
+      ctx,
+      'text',
+      `Com a linha de confirmação, o texto passa de ${MAX_TEXT} caracteres`,
+    );
+}
+
+/**
  * Corpo do POST /internal/team-whatsapp/dispatches/preview (C4). Só alvo
  * setor (alvo pessoa → 400) e sempre com finalidade. Aceita texto vazio e
  * seleção vazia (as travas voltam como lista); `audienceKey` é ignorada (só o
@@ -186,7 +207,8 @@ function sendRules(b: z.output<typeof sendBodySchema>, ctx: z.RefinementCtx) {
 export const createTeamDispatchSchema = sendBodySchema
   .superRefine(sendRules)
   .refine(shiftStartAllowed, shiftStartIssue)
-  .superRefine(atRules);
+  .superRefine(atRules)
+  .superRefine(alertTextRule);
 
 export class CreateTeamDispatchDto extends createZodDto(
   createTeamDispatchSchema,

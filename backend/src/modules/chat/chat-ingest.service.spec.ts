@@ -15,6 +15,11 @@ const inbound = (over: Partial<InboundChatMessage> = {}): InboundChatMessage => 
 });
 
 const TRACK_RECEIVED_AT = new Date('2026-11-10T14:00:00Z');
+/** Final do argumento de applyReply no inbound ao vivo (hora e mensagem gravada). */
+const TRACK_REPLY_TAIL = {
+  receivedAt: TRACK_RECEIVED_AT,
+  message: { id: 'msg1', kind: 'TEXT', text: 'Olá' },
+} as const;
 // @lid ainda sem telefone mapeado: sem contato, a ingestão não rastreia.
 const TRACK_LID = inbound({
   remoteJid: '1051@lid',
@@ -82,7 +87,7 @@ describe('ChatIngestService', () => {
       expect(tracking.applyReply).toHaveBeenCalledWith({
         channelId: 'i1',
         contactIds: ['ct-a', 'ct-b'],
-        receivedAt: TRACK_RECEIVED_AT,
+        ...TRACK_REPLY_TAIL,
       });
     });
 

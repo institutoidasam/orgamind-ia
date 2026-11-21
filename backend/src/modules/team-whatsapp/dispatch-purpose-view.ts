@@ -17,6 +17,7 @@ import {
 } from '../../schemas/contracts/team-whatsapp.schema';
 import { nameView } from '../../shared/authz/phone-visibility';
 import { fromDbDate } from '../staff-schedule/civil-date';
+import { alertDeadlineAt } from './team-alert.rules';
 import { sortByViewedName } from './team-whatsapp.name-view';
 import {
   fromDbBase,
@@ -45,14 +46,30 @@ export type DetailPurposeRow = PurposeRow & {
   schedulePolicy: DbSchedulePolicy | null;
 };
 
-export type DispatchPurposeView = {
+/** Colunas do alerta que a lista e o detalhe leem (CI10); `parentDispatch` = o alerta do lembrete. */
+export type AlertRow = {
+  createdAt: Date;
+  ackDeadlineMinutes: number | null;
+  parentDispatch: { id: string; createdAt: Date } | null;
+};
+
+/** Prazo do alerta e ligação do lembrete (CI10); urgência antiga: as três nulas (I8). */
+export type DispatchAlertView = {
+  ackDeadlineMinutes: number | null;
+  ackDeadlineAt: string | null;
+  reminderOf: { dispatchId: string; createdAt: string } | null;
+};
+
+type PurposeFields = {
   purpose: TeamPurpose | null;
   base: TeamAudienceBase | null;
   activity: TeamActivity | null;
   urgencyReason: string | null;
 };
 
-export type DispatchPurposeDetail = {
+export type DispatchPurposeView = PurposeFields & DispatchAlertView;
+
+export type DispatchPurposeDetail = DispatchAlertView & {
   purpose: TeamPurpose | null;
   base: TeamAudienceBase | null;
   rule: TeamAudienceRuleView | null;
@@ -80,17 +97,44 @@ function activityOf(row: PurposeRow): TeamActivity | null {
   };
 }
 
-/**
- * Finalidade, base e atividade como saem na lista e no detalhe. Envio sem
- * finalidade (regra antiga, GF13): as quatro chaves presentes e nulas.
- */
-export function purposeView(row: PurposeRow): DispatchPurposeView {
+function purposeFields(row: PurposeRow): PurposeFields {
   return {
     purpose: fromDbPurpose(row.purpose),
     base: fromDbBase(row.audienceBase),
     activity: activityOf(row),
     urgencyReason: row.urgencyReason,
   };
+}
+
+/**
+ * Prazo de ciência (createdAt + minutos gravados, I3) e `reminderOf` do
+ * `parentDispatch` (I7). Alerta = prazo gravado; lembrete = tem o alerta de
+ * origem; envio anterior ao Lote I (I8): os três nulos, a tela de hoje.
+ */
+export function alertView(row: AlertRow): DispatchAlertView {
+  const { ackDeadlineMinutes: minutes, parentDispatch } = row;
+  return {
+    ackDeadlineMinutes: minutes,
+    ackDeadlineAt:
+      minutes === null
+        ? null
+        : alertDeadlineAt(row.createdAt, minutes).toISOString(),
+    reminderOf: parentDispatch
+      ? {
+          dispatchId: parentDispatch.id,
+          createdAt: parentDispatch.createdAt.toISOString(),
+        }
+      : null,
+  };
+}
+
+/**
+ * Finalidade, base e atividade como saem na lista e no detalhe, mais o prazo e
+ * o lembrete (CI10). Envio sem finalidade (regra antiga, GF13): as chaves da
+ * finalidade presentes e nulas; sem alerta nem lembrete (I8), as três do alerta.
+ */
+export function purposeView(row: PurposeRow & AlertRow): DispatchPurposeView {
+  return { ...purposeFields(row), ...alertView(row) };
 }
 
 /**
@@ -120,7 +164,7 @@ export function ruleView(
   row: DetailPurposeRow,
   sectors: readonly SectorRef[],
 ): TeamAudienceRuleView | null {
-  const view = purposeView(row);
+  const view = purposeFields(row);
   if (!view.purpose || !view.base || !row.rosterDate) return null;
   const rule = readSnapshot(audienceRuleSnapshotSchema, row, 'audienceRule');
   if (!rule) return null;
@@ -194,17 +238,18 @@ export function lateJoinedView(
   );
 }
 
-/** Campos de finalidade do detalhe (CF3): sempre presentes, nulos/[] no envio antigo. */
+/** Campos de finalidade e de alerta do detalhe (CF3, CI10): sempre presentes, nulos/[] no envio antigo. */
 export function purposeDetail(
-  row: DetailPurposeRow,
+  row: DetailPurposeRow & AlertRow,
   sectors: readonly SectorRef[],
   full: boolean,
 ): DispatchPurposeDetail {
-  const { purpose, base } = purposeView(row);
+  const { purpose, base } = purposeFields(row);
   return {
     purpose,
     base,
     rule: ruleView(row, sectors),
     excluded: excludedView(row, full),
+    ...alertView(row),
   };
 }

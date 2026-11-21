@@ -43,6 +43,7 @@ vi.mock('@/features/team-whatsapp/components/send-whatsapp-dialog', () => ({
   ),
 }));
 
+import { DEFAULT_PERMISSIONS } from '@/features/permissions/keys';
 import { RULE_VIEW } from '@/features/team-whatsapp/audience-preview.test-fixtures';
 import type { TeamAudiencePreview, TeamAudienceRequest } from '@/features/team-whatsapp/schemas';
 import { useAuthStore, type AuthUser } from '@/stores/auth.store';
@@ -238,6 +239,7 @@ describe('WhatsApp da equipe: finalidade', () => {
     useTeamTargets.mockReturnValue({
       data: { ...targets, today: '2026-10-22', inProgress: emAndamento }, isLoading: false, isError: false,
     });
+    useAuthStore.setState({ user: { ...OPERATOR, permissions: [...DEFAULT_PERMISSIONS.OPERATOR, 'equipe.urgencia'] } });
     const user = userEvent.setup();
     render(<Page />);
     await pickPurpose(user, 'Reunião');

@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { AuditService } from '../../shared/audit/audit.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
-import { requireViewable } from './team-alert-access';
 import {
   isRecipientOf,
   markManualAck,
@@ -10,6 +9,7 @@ import {
 import { ackExists, ackNotManual } from './team-alert.errors';
 import { requireUrgencyKey } from './team-alert.policy';
 import { loadAlertHeader } from './team-alert.repository';
+import { requireAckVisible } from './team-pendency-ack-access';
 import { dispatchNotFound, teamForbidden } from './team-whatsapp.errors';
 import { isTeamSender, type TeamActor } from './team-whatsapp.policy';
 import { TeamWhatsappRepository } from './team-whatsapp.repository';
@@ -17,8 +17,9 @@ import { TeamWhatsappRepository } from './team-whatsapp.repository';
 /**
  * Ciência manual do alerta e o desfazer (I5, CI6). Recusas, nesta ordem (I5,
  * GI4): 403 remetente → 403 chave `equipe.urgencia` (antes de ler o envio,
- * inclusive alerta invisível) → 404 envio invisível ou destinatário de outro
- * envio → 422 `not_an_alert` → 422 `ack_exists`/`ack_not_manual`. As trilhas
+ * inclusive alerta invisível) → 404 envio invisível (não vê o envio nem tem a
+ * pendência no alcance, K2-7) ou destinatário de outro envio → 422
+ * `not_an_alert` → 422 `ack_exists`/`ack_not_manual`. As trilhas
  * levam só ids (e o resultado do desfazer): nunca observação, nome ou telefone.
  */
 @Injectable()
@@ -88,8 +89,12 @@ export class TeamAlertAckService {
     const actor = await this.repo.findActor(actorId);
     if (!actor || !isTeamSender(actor)) throw teamForbidden();
     requireUrgencyKey(actor);
-    await requireViewable(this.repo, actor, dispatchId);
     const ref = { dispatchId, recipientId };
+    await requireAckVisible(
+      { prisma: this.prisma, repo: this.repo },
+      actor,
+      ref,
+    );
     if (!(await isRecipientOf(this.prisma, ref))) throw dispatchNotFound();
     await loadAlertHeader(this.prisma, dispatchId);
     return actor;

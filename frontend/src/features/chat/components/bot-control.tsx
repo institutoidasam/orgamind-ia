@@ -26,7 +26,7 @@ export function BotControl({ conversationId, botName, botPaused }: Props) {
   };
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex max-w-full flex-wrap items-center gap-2">
       <Badge variant={botPaused ? 'secondary' : 'default'} className="gap-1">
         <BotIcon className="size-3" /> {botName} {botPaused ? '(pausado)' : '(ativo)'}
       </Badge>

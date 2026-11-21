@@ -31,6 +31,33 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.11.21.2',
+    date: '2026-11-21',
+    title: 'Caixa: situação da conversa e um atendente por vez',
+    items: [
+      {
+        text: 'Cada conversa mostra a situação: Pendente, Em atendimento ou Resolvida. A lista abre com as abertas (pendentes e em atendimento); o seletor "Abertas/Resolvidas" mostra as resolvidas.',
+        where: '/inbox',
+      },
+      {
+        text: 'Resolver encerra a conversa e Reabrir a traz de volta. Uma conversa resolvida volta sozinha às abertas quando a pessoa escreve de novo.',
+        where: '/inbox',
+      },
+      {
+        text: 'Só quem está atendendo responde. Conversas já atribuídas passam a exigir "Assumir conversa" de quem não é o atendente, inclusive do administrador. Responder numa conversa sem atendente já assume a conversa.',
+        where: '/inbox',
+      },
+      {
+        text: 'Transferir passa a conversa a outro atendente ativo, e a lista traz só quem pode recebê-la. Remover atendente devolve a conversa para Pendente.',
+        where: '/inbox',
+      },
+      {
+        text: 'Histórico da conversa mostra quem resolveu, assumiu, transferiu ou reabriu, com a data e a observação, quando houver.',
+        where: '/inbox',
+      },
+    ],
+  },
+  {
     version: '2026.11.21.1',
     date: '2026-11-21',
     title: 'Panorama da fábrica e cuidados ao inativar setor e nível',

@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { useConversations } from '../api';
+import { useConversationList } from '../api';
 import { ConversationRow } from './conversation-row';
 import { QueryErrorFallback } from '@/components/query-error-fallback';
 import { InboxTabs } from './inbox-tabs';
 import { AssigneeTabs, type AssigneeFilter } from './assignee-tabs';
+import { ConversationStatusFilter } from './conversation-status-filter';
+import { assigneeForStatus, type ConversationStatusFilterValue } from './conversation-status';
 import { useInstances } from '@/features/whatsapp/api';
 import { useAuthStore } from '@/stores/auth.store';
 
@@ -41,6 +43,7 @@ function readStoredAssignee(userId?: string): AssigneeFilter {
 export function ConversationsList({ activeId }: { activeId?: string }) {
   const userId = useAuthStore((s) => s.user?.id);
   const [filter, setFilter] = useState<'all' | 'unread' | 'awaiting'>('all');
+  const [status, setStatus] = useState<ConversationStatusFilterValue>('open');
   const [search, setSearch] = useState('');
   // Debounce so a burst of keystrokes fires one request instead of one/key.
   const debouncedSearch = useDebounced(search);
@@ -74,12 +77,10 @@ export function ConversationsList({ activeId }: { activeId?: string }) {
     // channelsKey is a stable signal for the visible-channel-id set.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channelsKey, instanceId]);
-  const { data, isLoading, isError, error, refetch, fetchNextPage, hasNextPage, isFetchingNextPage } = useConversations(
-    filter,
-    debouncedSearch,
-    instanceId ?? undefined,
-    assignee ?? undefined,
-  );
+  const { data, isLoading, isError, error, refetch, fetchNextPage, hasNextPage, isFetchingNextPage } = useConversationList({
+    filter, search: debouncedSearch, status,
+    instanceId: instanceId ?? undefined, assignee: assigneeForStatus(status, assignee),
+  });
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
@@ -153,7 +154,8 @@ export function ConversationsList({ activeId }: { activeId?: string }) {
             Aguardando resposta
           </button>
         </div>
-        <AssigneeTabs value={assignee} onChange={selectAssignee} />
+        <ConversationStatusFilter value={status} onChange={setStatus} />
+        {status === 'open' && <AssigneeTabs value={assignee} onChange={selectAssignee} />}
         <InboxTabs instances={channels} value={instanceId} onChange={setInstanceId} />
       </div>
       {/* `min-h-0`: um filho flex tem `min-height: auto`, que o proíbe de

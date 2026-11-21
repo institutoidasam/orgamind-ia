@@ -1,10 +1,16 @@
-import { useInfiniteQuery, useQuery, infiniteQueryOptions, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import {
+  useInfiniteQuery, useQuery, infiniteQueryOptions, useMutation, useIsMutating, useQueryClient, type QueryClient,
+} from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { api } from '@/lib/api-client';
 import { extractApiError } from '@/lib/api-error';
 import { useAuthStore } from '@/stores/auth.store';
-import { parseConversationsPage, parseMessagesPage, parseConversationSummary, parseChatMessage } from './schemas';
+import {
+  parseConversationsPage, parseMessagesPage, parseConversationSummary, parseChatMessage,
+  parseConversationHistory, parseChatAssignees,
+} from './schemas';
 import type { ConversationSummary } from './schemas';
+import { CHAT_ASSIGNED_TO_OTHER, chatActionFailure } from './chat-errors';
 import type { ChannelProvider } from '@/features/whatsapp/api';
 
 const baseURL = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
@@ -53,47 +59,63 @@ export function dedupeById(items: ConversationSummary[]): ConversationSummary[] 
   return out;
 }
 
-export const chatQueries = {
-  // `provider` (F4b — inbox provider filter): applied server-side, same as
-  // instanceId/assignee, so it narrows the DB query BEFORE the page cut
-  // instead of filtering an already-paginated page client-side (which could
-  // hide matches sitting beyond the first page for a low-volume provider).
-  conversations: (filter: 'all' | 'unread' | 'awaiting', search: string, instanceId?: string, assignee?: string, provider?: ChannelProvider) =>
-    infiniteQueryOptions({
-      queryKey: [
-        'chat',
-        'conversations',
-        {
-          filter,
-          search,
-          ...(instanceId ? { instanceId } : {}),
-          ...(assignee ? { assignee } : {}),
-          ...(provider ? { provider } : {}),
-        },
-      ] as const,
-      queryFn: ({ pageParam }) => {
-        const params = new URLSearchParams({
-          filter,
-          page: String(pageParam),
-          pageSize: String(CONVERSATIONS_PAGE_SIZE),
-        });
-        if (search) params.set('search', search);
-        if (instanceId) params.set('instanceId', instanceId);
-        if (assignee) params.set('assignee', assignee);
-        if (provider) params.set('provider', provider);
-        return api.get(`chat/conversations?${params.toString()}`).json<unknown>().then(parseConversationsPage);
-      },
-      initialPageParam: 1,
-      // O backend pagina por page/pageSize e devolve o total: há próxima
-      // página enquanto o que já veio não cobre o total.
-      getNextPageParam: (last) =>
-        last.page * last.pageSize < last.total ? last.page + 1 : undefined,
-    }),
+export type ConversationListParams = {
+  filter: 'all' | 'unread' | 'awaiting';
+  search: string;
+  /** K1-10: "Abertas" (pendentes e em atendimento) ou "Resolvidas". */
+  status: 'open' | 'resolved';
+  instanceId?: string;
+  assignee?: string;
+  provider?: ChannelProvider;
 };
 
-export function useConversations(filter: 'all' | 'unread' | 'awaiting', search: string, instanceId?: string, assignee?: string, provider?: ChannelProvider) {
+// `provider` (F4b — inbox provider filter): applied server-side, same as
+// instanceId/assignee, so it narrows the DB query BEFORE the page cut
+// instead of filtering an already-paginated page client-side (which could
+// hide matches sitting beyond the first page for a low-volume provider).
+// `status` (K1): idem, o servidor separa abertas de resolvidas antes do corte.
+function conversationListQuery({ filter, search, status, instanceId, assignee, provider }: ConversationListParams) {
+  return infiniteQueryOptions({
+    queryKey: [
+      'chat',
+      'conversations',
+      {
+        filter,
+        search,
+        status,
+        ...(instanceId ? { instanceId } : {}),
+        ...(assignee ? { assignee } : {}),
+        ...(provider ? { provider } : {}),
+      },
+    ] as const,
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams({
+        filter,
+        status,
+        page: String(pageParam),
+        pageSize: String(CONVERSATIONS_PAGE_SIZE),
+      });
+      if (search) params.set('search', search);
+      if (instanceId) params.set('instanceId', instanceId);
+      if (assignee) params.set('assignee', assignee);
+      if (provider) params.set('provider', provider);
+      return api.get(`chat/conversations?${params.toString()}`).json<unknown>().then(parseConversationsPage);
+    },
+    initialPageParam: 1,
+    // O backend pagina por page/pageSize e devolve o total: há próxima
+    // página enquanto o que já veio não cobre o total.
+    getNextPageParam: (last) =>
+      last.page * last.pageSize < last.total ? last.page + 1 : undefined,
+  });
+}
+
+export const chatQueries = {
+  conversationList: conversationListQuery,
+};
+
+export function useConversationList(params: ConversationListParams) {
   return useInfiniteQuery({
-    ...chatQueries.conversations(filter, search, instanceId, assignee, provider),
+    ...chatQueries.conversationList(params),
     refetchInterval: 15_000,
     refetchIntervalInBackground: false,
     placeholderData: (prev) => prev,
@@ -110,6 +132,25 @@ export function useConversation(id: string) {
   return useQuery({
     queryKey: ['chat', 'conversations', id] as const,
     queryFn: () => api.get(`chat/conversations/${id}`).json<unknown>().then(parseConversationSummary),
+  });
+}
+
+/** Histórico da conversa (K1-2): só consulta quando a seção está aberta. */
+export function useConversationHistory(conversationId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['chat', 'conversations', conversationId, 'history'] as const,
+    queryFn: () => api.get(`chat/conversations/${conversationId}/history`).json<unknown>().then(parseConversationHistory),
+    enabled,
+  });
+}
+
+/** Destinos de transferência (K1-7). Fora do prefixo `chat`: o stream não a recarrega a cada evento. */
+export function useChatAssignees(enabled: boolean) {
+  return useQuery({
+    queryKey: ['chat-assignees'] as const,
+    queryFn: () => api.get('chat/assignees').json<unknown>().then(parseChatAssignees),
+    enabled,
+    staleTime: 60_000,
   });
 }
 
@@ -191,6 +232,10 @@ export function useSendReply(conversationId: string) {
       if (apiErr.code === 'chat.twilio_window_closed') {
         toast.error(apiErr.message);
         invalidateChat(qc, conversationId);
+      } else if (apiErr.code === CHAT_ASSIGNED_TO_OTHER) {
+        // K1-6: outro atendente assumiu — recarrega a conversa; o compositor
+        // mostra o aviso (sem toast).
+        invalidateChat(qc, conversationId);
       }
     },
   });
@@ -206,6 +251,9 @@ export function useSendMedia(conversationId: string) {
       return api.post(`chat/conversations/${conversationId}/media`, { body: form, timeout: 60_000 }).json<unknown>().then(parseChatMessage);
     },
     onSuccess: () => invalidateChat(qc, conversationId),
+    onError: async (err) => {
+      if ((await extractApiError(err)).code === CHAT_ASSIGNED_TO_OTHER) invalidateChat(qc, conversationId);
+    },
   });
 }
 
@@ -240,16 +288,53 @@ export function useResumeBot() {
   });
 }
 
-export function useAssignConversation(conversationId: string) {
+export type AssignConversationInput = { userId: string | null; expectedAssigneeId: string | null; note?: string };
+export type ResolveConversationInput = {
+  expectedAssigneeId: string | null;
+  expectedLastInboundAt: string | null;
+  note?: string;
+};
+export type ReopenConversationInput = { note?: string };
+
+/**
+ * Ação de situação da conversa (K1): o corpo carrega o que a tela viu e o
+ * servidor decide. Não lê o corpo da resposta (a tela recarrega pela
+ * invalidação). Erro: toast pelo `code` (DK16) e, em 403/409, recarrega a
+ * conversa, a lista e o histórico.
+ */
+function useConversationAction<Input>(conversationId: string, action: 'assign' | 'resolve' | 'reopen') {
   const qc = useQueryClient();
   return useMutation({
-    // The endpoint returns 200 with no body — don't call .json() (it throws on
-    // an empty response, which would fire a false error toast on a successful
-    // assign). ky still rejects on a non-2xx status, so real failures (e.g.
-    // user-not-found) still reach onError.
-    mutationFn: (input: { userId: string | null }) =>
-      api.post(`chat/conversations/${conversationId}/assign`, { json: input }),
+    mutationKey: ['chat', action, conversationId],
+    mutationFn: (input: Input) => api.post(`chat/conversations/${conversationId}/${action}`, { json: input }),
     onSuccess: () => invalidateChat(qc, conversationId),
-    onError: () => toast.error('Falha ao atribuir a conversa'),
+    onError: async (err) => {
+      const { text, reload } = await chatActionFailure(err);
+      toast.error(text);
+      if (reload) invalidateChat(qc, conversationId);
+      // Destino recusado (inativo, sem acesso): a lista de destinos recarrega para ele sair.
+      if ((await extractApiError(err)).code === 'user.not_found') {
+        void qc.invalidateQueries({ queryKey: ['chat-assignees'] });
+      }
+    },
   });
+}
+
+/**
+ * "Assumir conversa" existe no cabeçalho e no aviso do compositor, cada um com
+ * a sua instância: `isPending` vale para qualquer atribuição desta conversa em
+ * voo, senão o segundo clique sai com o `expectedAssigneeId` velho e volta 409.
+ */
+export function useAssignConversation(conversationId: string) {
+  const mutation = useConversationAction<AssignConversationInput>(conversationId, 'assign');
+  const inFlight = useIsMutating({ mutationKey: ['chat', 'assign', conversationId] }) > 0;
+  return { ...mutation, isPending: mutation.isPending || inFlight };
+}
+
+export function useResolveConversation(conversationId: string) {
+  return useConversationAction<ResolveConversationInput>(conversationId, 'resolve');
+}
+
+export function useReopenConversation(conversationId: string) {
+  return useConversationAction<ReopenConversationInput>(conversationId, 'reopen');
 }

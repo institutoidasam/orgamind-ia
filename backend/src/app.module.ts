@@ -10,6 +10,7 @@ import { ConfigService } from '@nestjs/config';
 import { ZodValidationPipe } from 'nestjs-zod';
 import { JwtAuthGuard } from './modules/auth/jwt-auth.guard';
 import { RolesGuard } from './modules/auth/roles.guard';
+import { PermissionsGuard } from './modules/auth/permissions.guard';
 import { BullBoardModule } from '@bull-board/nestjs';
 import { ExpressAdapter } from '@bull-board/express';
 import { BullMQAdapter } from '@bull-board/api/bullMQAdapter';
@@ -27,6 +28,7 @@ import { AuditModule } from './shared/audit/audit.module';
 import { AuditContextInterceptor } from './shared/audit/audit-context.interceptor';
 import { AuditTrailModule } from './modules/audit-trail/audit-trail.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { PermissionsModule } from './modules/permissions/permissions.module';
 import { UsersModule } from './modules/users/users.module';
 import { ContactsModule } from './modules/contacts/contacts.module';
 import { ExcelImportModule } from './modules/excel-import/excel-import.module';
@@ -104,6 +106,7 @@ export const LOG_REDACT_PATHS = [
     PrismaModule,
     HealthModule,
     AuthModule,
+    PermissionsModule, // @Global — leitura das permissões por ação (PermissionsGuard)
     UsersModule,
     InternalSectorsModule,
     ShiftsModule,
@@ -178,12 +181,14 @@ export const LOG_REDACT_PATHS = [
     // Global validation pipe + auth/authorization guards live at the root so
     // they cannot silently vanish if AuthModule is refactored/made lazy.
     // Guards execute in registration order: JwtAuthGuard populates `req.user`
-    // first, then RolesGuard authorizes, then UserThrottlerGuard rate-limits
-    // by user (it also self-decodes the JWT, so it is correct even if the
-    // order ever changes).
+    // first, then RolesGuard authorizes by role, then PermissionsGuard authorizes
+    // the routes marked with @RequirePermission (RolesGuard lets those through),
+    // then UserThrottlerGuard rate-limits by user (it also self-decodes the JWT,
+    // so it is correct even if the order ever changes).
     { provide: APP_PIPE, useClass: ZodValidationPipe },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_GUARD, useClass: PermissionsGuard },
     { provide: APP_GUARD, useClass: UserThrottlerGuard },
     { provide: APP_INTERCEPTOR, useClass: AuditContextInterceptor },
   ],

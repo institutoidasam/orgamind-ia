@@ -45,7 +45,11 @@ export const teamTargetsSchema = z.object({
 });
 
 export const rosterMemberSchema = personSchema.extend({
+  // CB5/DB8: `phoneE164` só vem com `telefone.ver_completo`; `hasPhone` e `phoneMasked` ("•••• 1234") vêm sempre.
+  // Quem decide se a pessoa tem telefone é `hasPhone`, nunca `phoneE164`.
   phoneE164: z.string().nullable(),
+  hasPhone: z.boolean(),
+  phoneMasked: z.string().nullable(),
   isActive: z.boolean(),
   jobTitle: z.string().nullable(),
   fromOtherSector: z.boolean(),

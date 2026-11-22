@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma, Role } from '@prisma/client';
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { findEffectivePermissions } from '../permissions/permissions.query';
 import { SECTOR_CHANNEL_SELECT } from '../team-whatsapp/sector-channel';
 import { sectorAuditSelect, type SectorAuditRow } from './sector-audit';
 
@@ -122,6 +123,10 @@ export class InternalSectorsRepository {
       },
       orderBy: { email: 'asc' },
     });
+  }
+  /** Permissões efetivas do papel lidas agora, sem cache (GB3); fonte única em `findEffectivePermissions`. */
+  effectivePermissions(role: Role) {
+    return findEffectivePermissions(this.prisma, role);
   }
   findValidManager(id: string) {
     return this.prisma.user.findFirst({

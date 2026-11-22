@@ -7,10 +7,21 @@ import type {
   TeamDispatchRecipientPage,
   TeamRosterPerson,
 } from '../../schemas/contracts/team-whatsapp.schema';
+import { nameView } from '../../shared/authz/phone-visibility';
 import type { DispatchRecipientsQuery } from './dto/dispatch-recipients-query.dto';
 import { dispatchNotFound, teamForbidden } from './team-whatsapp.errors';
+import {
+  authorView,
+  sectorRank,
+  seesFullPhone,
+  sortByViewedName,
+} from './team-whatsapp.name-view';
 import { isRepeatable } from './team-whatsapp.outcome';
-import { canViewDispatch, isTeamSender } from './team-whatsapp.policy';
+import {
+  canViewDispatch,
+  isTeamSender,
+  type TeamActor,
+} from './team-whatsapp.policy';
 import {
   TeamWhatsappRepository,
   type DispatchRecipientRow,
@@ -84,14 +95,44 @@ function withSnapshot(p: TeamRosterPerson) {
   };
 }
 
+/**
+ * Pessoa da foto no detalhe, com o nome pela regra da chave. A foto lista um
+ * setor por vez na ordem do nome real; sem a chave, cada setor passa a sair
+ * pelo nome exibido (o gravado não muda).
+ */
+function viewedPeople(people: readonly TeamRosterPerson[], full: boolean) {
+  const viewed = people.map((p) => ({
+    ...withSnapshot(p),
+    name: nameView(p.name, { full }),
+  }));
+  const rank = sectorRank(viewed, full);
+  return sortByViewedName(viewed, full, (p) => ({
+    group: rank(p),
+    name: p.name,
+    id: p.userId ?? shownKey(p),
+  }));
+}
+
+/**
+ * Desempate da foto antiga, sem `userId`: só o que o leitor já vê (o setor já
+ * é o `group`), nunca o nome real.
+ */
+const shownKey = (p: {
+  jobTitle: string | null;
+  shiftName: string | null;
+  levelName: string | null;
+  reason: string | null;
+}): string => [p.jobTitle, p.shiftName, p.levelName, p.reason].join('\u0000');
+
 const iso = (date: Date | null) => date?.toISOString() ?? null;
 
 function toRecipientItem(
   r: DispatchRecipientRow,
+  full: boolean,
 ): TeamDispatchRecipientPage['items'][number] {
   return {
     id: r.id,
-    userName: r.userName,
+    userName: nameView(r.userName, { full }),
     sectorName: r.sectorName,
     levelName: r.levelName,
     shiftName: r.shiftName,
@@ -121,24 +162,24 @@ export class TeamWhatsappResultsService {
     actorId: string,
     dispatchId: string,
   ): Promise<TeamDispatchDetail> {
-    await this.requireVisible(actorId, dispatchId);
+    const full = seesFullPhone(await this.requireVisible(actorId, dispatchId));
     const row = await this.repo.findDispatchDetail(dispatchId);
     if (!row) throw dispatchNotFound();
     const ids = [dispatchId];
     const [statuses, channels, leftOut] = await Promise.all([
       this.repo.countByStatus(ids),
       this.repo.channelsByDispatch(ids),
-      this.leftOut(dispatchId, row.roster),
+      this.leftOut(dispatchId, row.roster, full),
     ]);
     return {
       id: row.id,
-      targetLabel: row.targetLabel,
+      targetLabel: nameView(row.targetLabel, { full }),
       text: row.text,
       state: row.state,
       createdAt: row.createdAt.toISOString(),
       scheduledFor: iso(row.scheduledFor),
       firedAt: iso(row.firedAt),
-      author: row.author,
+      author: authorView(row.author, full),
       sectors: row.sectors
         .map((s) => ({ id: s.sectorId, name: s.sectorName }))
         .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')),
@@ -153,13 +194,14 @@ export class TeamWhatsappResultsService {
     dispatchId: string,
     query: DispatchRecipientsQuery,
   ): Promise<TeamDispatchRecipientPage> {
-    await this.requireVisible(actorId, dispatchId);
+    const actor = await this.requireVisible(actorId, dispatchId);
     const { rows, total } = await this.repo.listDispatchRecipients(
       dispatchId,
       query,
     );
+    const full = seesFullPhone(actor);
     return {
-      items: rows.map(toRecipientItem),
+      items: rows.map((r) => toRecipientItem(r, full)),
       total,
       page: query.page,
       pageSize: query.pageSize,
@@ -170,19 +212,21 @@ export class TeamWhatsappResultsService {
   private async requireVisible(
     actorId: string,
     dispatchId: string,
-  ): Promise<void> {
+  ): Promise<TeamActor> {
     const actor = await this.repo.findActor(actorId);
     if (!actor || !isTeamSender(actor)) throw teamForbidden();
     const dispatch = await this.repo.findDispatchForActor(dispatchId);
     if (!dispatch || !canViewDispatch(actor, dispatch)) {
       throw dispatchNotFound();
     }
+    return actor;
   }
 
   /** Da foto da escala: escalados no filtro e de folga que não são destinatários. */
   private async leftOut(
     dispatchId: string,
     roster: unknown,
+    full: boolean,
   ): Promise<TeamDispatchDetail['leftOut']> {
     const snapshot = parseRosterSnapshot(roster);
     const photoIds = snapshot
@@ -195,8 +239,8 @@ export class TeamWhatsappResultsService {
     );
     const { unselected, off } = rosterGroups(snapshot, recipientIds);
     return {
-      unselected: unselected.map(withSnapshot),
-      off: off.map(withSnapshot),
+      unselected: viewedPeople(unselected, full),
+      off: viewedPeople(off, full),
     };
   }
 }

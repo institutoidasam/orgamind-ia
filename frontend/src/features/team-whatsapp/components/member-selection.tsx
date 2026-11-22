@@ -46,7 +46,7 @@ function subtitle(member: RosterMember, shiftNames: ShiftNames): string {
     member.jobTitle,
     situationLabel(member, shiftNames),
     member.fromOtherSector ? 'de outro setor' : null,
-    member.phoneE164 ? formatPhoneBR(member.phoneE164) : null,
+    member.phoneE164 ? formatPhoneBR(member.phoneE164) : member.phoneMasked,
   ].filter(Boolean).join(' · ');
 }
 
@@ -149,7 +149,7 @@ function SectorMembers({ group, multi, shiftNames, includeOff, selected, onToggl
           />
         ))}
       </ul>
-      <InfoGroup title="Sem telefone" label={named('Sem telefone')} people={visible.filter((m) => !m.phoneE164)} shiftNames={shiftNames} />
+      <InfoGroup title="Sem telefone" label={named('Sem telefone')} people={visible.filter((m) => !m.hasPhone)} shiftNames={shiftNames} />
       <InfoGroup title="Contato não autorizado" label={named('Contato não autorizado')} people={visible.filter(isNotAuthorized)} shiftNames={shiftNames} />
       {!includeOff && <InfoGroup title="De folga" label={named('De folga')} people={off} shiftNames={shiftNames} />}
     </div>

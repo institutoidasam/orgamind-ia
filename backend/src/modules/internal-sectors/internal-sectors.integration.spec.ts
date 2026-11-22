@@ -67,6 +67,7 @@ async function createComprasWithManager() {
       isActive: true,
     },
     ACTOR,
+    'ADMIN',
   );
   return { manager, created };
 }
@@ -126,8 +127,9 @@ describe('Setores BDD — ficha do setor (Postgres exclusivo)', () => {
         description: 'Suprimentos e contratos',
       },
       ACTOR,
+      'ADMIN',
     );
-    const detail = await sectors.get(created.id);
+    const detail = await sectors.get(created.id, 'ADMIN');
 
     expect(updated).toMatchObject({
       name: 'Compras estratégicas',
@@ -147,16 +149,22 @@ describe('Setores BDD — ficha do setor (Postgres exclusivo)', () => {
   });
 });
 
-describe('Setores BDD — nomes duplicados, listagem e membros', () => {
+describe('Setores BDD — nomes duplicados', () => {
   it('rejeita nome e sigla duplicados, inclusive nome normalizado', async () => {
     await expect(
-      sectors.create({ name: 'compras estratégicas', code: 'OUT' }, ACTOR),
+      sectors.create(
+        { name: 'compras estratégicas', code: 'OUT' },
+        ACTOR,
+        'ADMIN',
+      ),
     ).rejects.toMatchObject({ status: 409, code: 'sector.conflict' });
     await expect(
-      sectors.create({ name: 'Outros', code: 'COM' }, ACTOR),
+      sectors.create({ name: 'Outros', code: 'COM' }, ACTOR, 'ADMIN'),
     ).rejects.toMatchObject({ status: 409, code: 'sector.conflict' });
   });
+});
 
+describe('Setores BDD — listagem e membros', () => {
   it('lista ativos somente quando activeOnly é verdadeiro e mantém inativos no histórico administrativo', async () => {
     const inactive = await sectors.create(
       {
@@ -165,6 +173,7 @@ describe('Setores BDD — nomes duplicados, listagem e membros', () => {
         isActive: false,
       },
       ACTOR,
+      'ADMIN',
     );
 
     const activeOnly = await sectors.list(1, 100, true);
@@ -179,8 +188,8 @@ describe('Setores BDD — nomes duplicados, listagem e membros', () => {
       where: { code: 'COM' },
     });
 
-    const eligible = await sectors.members(sector.id, true);
-    const everyoneActive = await sectors.members(sector.id, false);
+    const eligible = await sectors.members(sector.id, true, 'ADMIN');
+    const everyoneActive = await sectors.members(sector.id, false, 'ADMIN');
 
     expect(eligible.items).toHaveLength(1);
     expect(eligible.items[0]).toMatchObject({
@@ -203,7 +212,9 @@ describe('Setores BDD — setor ou gestor inválido', () => {
       where: { email: 'leitor@test.local' },
     });
 
-    await expect(sectors.get('setor-inexistente')).rejects.toMatchObject({
+    await expect(
+      sectors.get('setor-inexistente', 'ADMIN'),
+    ).rejects.toMatchObject({
       status: 404,
       code: 'sector.not_found',
     });
@@ -215,6 +226,7 @@ describe('Setores BDD — setor ou gestor inválido', () => {
           managerId: 'ausente',
         },
         ACTOR,
+        'ADMIN',
       ),
     ).rejects.toMatchObject({ status: 409, code: 'sector.manager_invalid' });
     await expect(
@@ -225,6 +237,7 @@ describe('Setores BDD — setor ou gestor inválido', () => {
           managerId: inactive.id,
         },
         ACTOR,
+        'ADMIN',
       ),
     ).rejects.toMatchObject({ status: 409, code: 'sector.manager_invalid' });
     await expect(
@@ -235,6 +248,7 @@ describe('Setores BDD — setor ou gestor inválido', () => {
           managerId: viewer.id,
         },
         ACTOR,
+        'ADMIN',
       ),
     ).rejects.toMatchObject({ status: 409, code: 'sector.manager_invalid' });
   });
@@ -251,7 +265,7 @@ describe('Setores BDD — canal do setor', () => {
       where: { id: channelId },
       data: { isActive: false },
     });
-    await expect(sectors.get(sector.id)).resolves.toMatchObject({
+    await expect(sectors.get(sector.id, 'ADMIN')).resolves.toMatchObject({
       channel: null,
     });
 

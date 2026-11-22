@@ -195,6 +195,12 @@ O plano entregue à GBR em 03/11/2026 (`reports/plano-gbr/`) tem 24 itens. O lot
 - **Estrutura (R3):** se existem unidade e equipe/célula na operação real.
 - **Vigência (R4):** troca com data futura e correção retroativa.
 - **Decisões minhas:** motivo obrigatório em toda edição da ficha; telefone e e-mail mascarados na trilha; exclusão física só sem histórico; matrícula opcional e única; responsável por demanda de comunicado conta como histórico; escolher o gestor do setor fica só com o administrador, mesmo para quem pode manter a estrutura.
+- **Decisões minhas no Lote B (19/11):**
+  - Pessoa criada de contato sem nome tem o número como nome. Para quem não tem "ver telefone completo", esse nome sai mascarado (`•••• 1234`) em todas as telas (setor, envio, escala, trilha), as listas são ordenadas pelo nome exibido e a busca por dígitos não procura no nome. O que está gravado não muda.
+  - O disparo amplo é conferido só na criação do envio; repetir um envio e executar um agendado não conferem de novo.
+  - Perder a disputa de gravação da matriz responde conflito (409) com pedido para recarregar.
+  - O papel VIEWER aparece como "Leitura".
+  - Limitação conhecida: as telas legadas de Contatos e de Inbox ainda mostram o telefone completo ao Operador, mesmo sem a permissão. A GBR decide se entram na regra.
 
 ## Aceite
 

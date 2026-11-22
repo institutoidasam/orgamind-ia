@@ -10,7 +10,7 @@ import {
   type DispatchFilter,
   type LevelFilter,
 } from './team-whatsapp.roster';
-import { dayPerson } from './team-whatsapp.test-fixtures';
+import { PHONE, dayPerson } from './team-whatsapp.test-fixtures';
 
 type LabelInput = Parameters<typeof sectorTargetLabel>[0];
 
@@ -24,14 +24,68 @@ const label = (over: Partial<LabelInput>): string =>
     ...over,
   });
 
+describe('toRosterMember — telefone por permissão (CB5)', () => {
+  const LINKED = '+5592988887777';
+  const rosterOf = (over: Partial<DayMember>, fullPhone: boolean) =>
+    toRosterMember(
+      {
+        ...dayPerson(),
+        fromOtherSector: false,
+        situation: { kind: 'NONE' },
+        ...over,
+      },
+      { fullPhone },
+    );
+
+  it('com a chave: telefone completo como hoje, o do contato ligado vence o do usuário', () => {
+    expect(rosterOf({}, true)).toMatchObject({
+      phoneE164: PHONE,
+      hasPhone: true,
+      phoneMasked: '•••• 4567',
+    });
+    expect(rosterOf({ contact: { phoneE164: LINKED } }, true)).toMatchObject({
+      phoneE164: LINKED,
+      hasPhone: true,
+      phoneMasked: '•••• 7777',
+    });
+  });
+
+  it('sem a chave: só a máscara, nunca o número; hasPhone continua verdadeiro', () => {
+    expect(rosterOf({}, false)).toMatchObject({
+      phoneE164: null,
+      hasPhone: true,
+      phoneMasked: '•••• 4567',
+    });
+    expect(rosterOf({ contact: { phoneE164: LINKED } }, false)).toMatchObject({
+      phoneE164: null,
+      hasPhone: true,
+      phoneMasked: '•••• 7777',
+    });
+  });
+
+  it.each([true, false])(
+    'sem telefone (fullPhone %s): hasPhone false, sem máscara',
+    (fullPhone) => {
+      expect(rosterOf({ phoneE164: null }, fullPhone)).toMatchObject({
+        phoneE164: null,
+        hasPhone: false,
+        phoneMasked: null,
+      });
+    },
+  );
+});
+
 describe('toRosterMember — autorização de contato (C8)', () => {
   const rosterOf = (over: Partial<DayMember>) =>
-    toRosterMember({
-      ...dayPerson(),
-      fromOtherSector: false,
-      situation: { kind: 'OFF', reason: 'DAY_OFF', source: 'CYCLE' },
-      ...over,
-    });
+    toRosterMember(
+      {
+        ...dayPerson(),
+        fromOtherSector: false,
+        situation: { kind: 'OFF', reason: 'DAY_OFF', source: 'CYCLE' },
+        ...over,
+      },
+      { fullPhone: true },
+    );
 
   it.each<[string, Partial<DayMember>, string, boolean]>([
     [

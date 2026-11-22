@@ -14,9 +14,31 @@ vi.mock('@/lib/internal-unread', () => ({
   useInternalUnreadCount: () => ({ data: { count: 4 } }),
 }));
 
+import { useAuthStore } from '@/stores/auth.store';
 import { Sidebar } from './sidebar';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  useAuthStore.setState({ user: null });
+});
+
+describe('Sidebar: itens por permissão', () => {
+  const operator = { id: 'u1', email: 'bia@orgamind.com', name: 'Bia', role: 'OPERATOR' } as const;
+
+  it('OPERATOR com estrutura.manter vê Turnos e Níveis; sem a chave (padrão do papel), não', () => {
+    currentPath = '/dashboard';
+    useAuthStore.setState({ user: { ...operator, permissions: ['estrutura.manter'] } });
+    const { unmount } = render(<Sidebar collapsed={false} user={operator} />);
+    expect(screen.getByRole('link', { name: 'Turnos' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Níveis' })).toBeInTheDocument();
+    unmount();
+
+    useAuthStore.setState({ user: operator });
+    render(<Sidebar collapsed={false} user={operator} />);
+    expect(screen.queryByRole('link', { name: 'Turnos' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Níveis' })).not.toBeInTheDocument();
+  });
+});
 
 describe('Sidebar', () => {
   it('marca a rota atual para navegação assistiva', () => {

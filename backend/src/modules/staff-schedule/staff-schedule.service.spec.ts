@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StaffScheduleBoard } from '../../schemas/contracts/staff-schedule.schema';
 import type { TeamActor } from '../team-whatsapp/team-whatsapp.policy';
+import { actorWith } from '../../shared/authz/actor.test-fixtures';
 import type { BoardPersonRow, ScheduleData } from './staff-schedule.repository';
 import { StaffScheduleService } from './staff-schedule.service';
 
@@ -22,10 +23,7 @@ const NIGHT = {
 
 function actor(role: TeamActor['role'], managed: string[] = []): TeamActor {
   return {
-    id: `actor-${role}`,
-    role,
-    isActive: true,
-    hasAccess: true,
+    ...actorWith(role, { id: `actor-${role}` }),
     managedSectorIds: managed,
   };
 }
@@ -99,6 +97,134 @@ beforeEach(() => {
   vi.setSystemTime(new Date('2026-10-22T01:00:00Z'));
 });
 afterEach(() => vi.useRealTimers());
+
+const HOME_ANA = person('ana', { name: 'Ana' });
+const GUEST_BIA = person('bia', { name: 'Bia', sectorId: LOG.id });
+const swap = (userId: string, note: string) => ({
+  id: `ex-${userId}`,
+  userId,
+  kind: 'SHIFT_SWAP' as const,
+  startDate: '2026-10-21',
+  endDate: '2026-10-21',
+  shiftId: NIGHT.id,
+  sectorId: null,
+  note,
+});
+
+const PHONE_A = '+5592911112222';
+const PHONE_B = '+5592922221111';
+
+describe('StaffScheduleService.board — nome que é telefone (D11)', () => {
+  const members = [
+    person('p1', { name: PHONE_A }),
+    person('p2', { name: PHONE_B }),
+    HOME_ANA,
+  ];
+
+  it('sem telefone.ver_completo: o nome-telefone sai mascarado, o número não aparece na resposta e a ordem é a da máscara exibida', async () => {
+    const who: TeamActor = {
+      ...actorWith('OPERATOR', { revoke: ['telefone.ver_completo'] }),
+      managedSectorIds: [PROD.id],
+    };
+    const { service } = harness({ actor: who, members });
+
+    const board = await service.board(who.id, WEEK);
+
+    expect(board.rows.map((row) => [row.userId, row.name])).toEqual([
+      ['p2', '•••• 1111'],
+      ['p1', '•••• 2222'],
+      ['ana', 'Ana'],
+    ]);
+    expect(JSON.stringify(board)).not.toMatch(/9111|9222/);
+  });
+
+  it.each([
+    ['ADMIN', ADMIN],
+    ['SUPERVISOR gestor', BOSS_PROD],
+    ['OPERATOR gestor', actor('OPERATOR', [PROD.id])],
+  ] as const)('matriz inicial: nome como gravado (%s)', async (_l, who) => {
+    const { service } = harness({ actor: who, members });
+
+    const board = await service.board(who.id, WEEK);
+
+    expect(board.rows.map((row) => row.name)).toEqual([
+      PHONE_A,
+      PHONE_B,
+      'Ana',
+    ]);
+  });
+});
+
+describe('StaffScheduleService.board — ordem do nome-telefone sem a chave (D11)', () => {
+  it.each([
+    ['+5592911112222', ['p1', 'p3']],
+    ['+5592966662222', ['p3', 'p1']],
+  ] as const)(
+    'sem a chave: mesmos 4 últimos dígitos não revelam o número (%s): a posição não muda (desempate por id)',
+    async (number, dbOrder) => {
+      const who: TeamActor = {
+        ...actorWith('OPERATOR', { revoke: ['telefone.ver_completo'] }),
+        managedSectorIds: [PROD.id],
+      };
+      const names = { p1: number, p3: '+5592955552222' };
+      const { service } = harness({
+        actor: who,
+        members: dbOrder.map((id) => person(id, { name: names[id] })),
+      });
+
+      const board = await service.board(who.id, WEEK);
+
+      expect(board.rows.map((row) => row.userId)).toEqual(['p1', 'p3']);
+    },
+  );
+});
+
+describe('StaffScheduleService.board — canEdit com a matriz inicial (DB7)', () => {
+  it.each([
+    ['ADMIN', ADMIN, [true, true]],
+    ['SUPERVISOR gestor do setor', BOSS_PROD, [true, false]],
+    ['OPERATOR gestor do setor', actor('OPERATOR', [PROD.id]), [true, false]],
+  ] as const)(
+    'matriz inicial: canEdit igual a hoje (%s)',
+    async (_l, who, edit) => {
+      const { service } = harness({
+        actor: who,
+        members: [HOME_ANA],
+        visitors: [GUEST_BIA],
+      });
+
+      const board = await service.board(who.id, WEEK);
+
+      expect(board.rows.map((row) => row.canEdit)).toEqual(edit);
+    },
+  );
+});
+
+describe('StaffScheduleService.board — sem escala.alterar (DB7)', () => {
+  it('OPERATOR gestor sem escala.alterar: canEdit false e a nota da exceção da pessoa do setor dele continua visível', async () => {
+    const who: TeamActor = {
+      ...actorWith('OPERATOR', { revoke: ['escala.alterar'] }),
+      managedSectorIds: [PROD.id],
+    };
+    const { service } = harness({
+      actor: who,
+      members: [HOME_ANA],
+      visitors: [GUEST_BIA],
+      data: {
+        ana: { exceptions: [swap('ana', 'Cobrir férias')] },
+        bia: { exceptions: [swap('bia', 'Troca combinada')] },
+      },
+    });
+
+    const board = await service.board(who.id, WEEK);
+
+    expect(board.rows.map((row) => row.canEdit)).toEqual([false, false]);
+    expect(board.exceptions.map((ex) => [ex.userId, ex.note])).toEqual([
+      ['ana', 'Cobrir férias'],
+      ['bia', null],
+    ]);
+  });
+});
 
 describe('StaffScheduleService.options', () => {
   it.each([

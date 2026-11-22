@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Post,
@@ -117,6 +118,17 @@ export class AuthController {
     }
     clearRefreshCookie(res);
     return { ok: true };
+  }
+
+  // DB13: sessão atual com as permissões efetivas; aberta aos quatro papéis
+  // (sem `@Roles` valeria só ADMIN/OPERATOR) e nunca `@Public`.
+  @Roles('ADMIN', 'OPERATOR', 'SUPERVISOR', 'VIEWER')
+  @ApiOperation({
+    summary: 'Current session user with effective permissions (from the DB)',
+  })
+  @Get('me')
+  me(@Req() req: Request & { user: JwtPayload }) {
+    return this.auth.me(req.user.sub);
   }
 
   @Throttle({ default: { ttl: 60000, limit: 5 } })

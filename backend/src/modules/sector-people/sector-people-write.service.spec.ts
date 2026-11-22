@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { actorWith } from '../../shared/authz/actor.test-fixtures';
 import type { AuditService } from '../../shared/audit/audit.service';
 import { canEditContactAuthorization } from '../../shared/authz/person-actions.policy';
 import {
@@ -30,25 +31,17 @@ vi.mock('../../shared/authz/person-actions.policy', async (importOriginal) => {
   };
 });
 
-const ADMIN: PeopleActor = {
-  id: 'user_admin',
-  role: 'ADMIN',
-  isActive: true,
-  hasAccess: true,
-};
-const MANAGER: PeopleActor = {
-  id: 'user_manager',
-  role: 'SUPERVISOR',
-  isActive: true,
-  hasAccess: true,
-};
+const ADMIN: PeopleActor = actorWith('ADMIN', { id: 'user_admin' });
+const MANAGER: PeopleActor = actorWith('SUPERVISOR', { id: 'user_manager' });
 // OPERATOR que gerencia um setor: passa o pré-gate, mas não inativa ninguém.
-const OPERATOR_MANAGER: PeopleActor = {
+const OPERATOR_MANAGER: PeopleActor = actorWith('OPERATOR', {
   id: 'user_op_manager',
-  role: 'OPERATOR',
-  isActive: true,
-  hasAccess: true,
-};
+});
+// Gerencia um setor, mas sem a chave do telefone completo (B3).
+const NO_KEY: PeopleActor = actorWith('SUPERVISOR', {
+  id: 'user_no_key',
+  revoke: ['telefone.ver_completo'],
+});
 const sector = (id: string, managerId: string | null) => ({
   id,
   name: id,
@@ -61,17 +54,17 @@ const OPERATION = sector('sector_operation', MANAGER.id);
 const IT = sector('sector_it', 'user_other');
 const HR = sector('sector_hr', null);
 const FIELD = sector('sector_field', OPERATOR_MANAGER.id);
-const SECTORS = [OPERATION, IT, HR, FIELD];
+const NO_KEY_SECTOR = sector('sector_no_key', NO_KEY.id);
+const SECTORS = [OPERATION, IT, HR, FIELD, NO_KEY_SECTOR];
 
-const person = (
-  id: string,
-  over: Partial<PeoplePerson> = {},
-): PeoplePerson & { name: string } => ({
+type PersonLine = PeoplePerson & { name: string; hasPhone: boolean };
+const person = (id: string, over: Partial<PersonLine> = {}): PersonLine => ({
   id,
   name: id,
   sectorId: null,
   hasAccess: false,
   isActive: true,
+  hasPhone: false,
   ...over,
 });
 const PEOPLE = [
@@ -138,7 +131,7 @@ function personRow(id: string): SectorPersonRow {
 function harness() {
   const repo = {
     findActor: vi.fn((id: string) =>
-      find([ADMIN, MANAGER, OPERATOR_MANAGER], id),
+      find([ADMIN, MANAGER, OPERATOR_MANAGER, NO_KEY], id),
     ),
     findSector: vi.fn((id: string) => find(SECTORS, id)),
     findPerson: vi.fn((id: string) => find(PEOPLE, id)),
@@ -218,6 +211,143 @@ function statusHarness() {
   ) => service.setStatus(actor.id, inSector.id, userId, body);
   return { users, set };
 }
+
+const KEY_ERROR = { status: 403, code: 'auth.permission_denied' };
+const PHONE_PATCH = { phone: '92991110009', reason: 'Telefone novo' };
+const MASKED = { phoneE164: null, hasPhone: true, phoneMasked: '•••• 0001' };
+const inNoKeySector = (hasPhone: boolean) =>
+  person('user_carla', { sectorId: NO_KEY_SECTOR.id, hasPhone });
+
+// D11: o contato sem nome (contact_0004) vira pessoa com o número como nome.
+const NUMBER_AS_NAME = '+5592991110004';
+const storedWithNumberAsName = (ids: string[]) =>
+  Promise.resolve(
+    ids.map((id) => ({
+      ...personRow(id),
+      name: NUMBER_AS_NAME,
+      phoneE164: NUMBER_AS_NAME,
+    })),
+  );
+const MASKED_0004 = {
+  phoneE164: null,
+  hasPhone: true,
+  phoneMasked: '•••• 0004',
+};
+const FROM_UNNAMED = { contactIds: ['contact_0004'], ...BATCH };
+
+describe('SectorPeopleWriteService — nome que é telefone (D11)', () => {
+  it('dos contatos sem a chave: grava o número como nome, mas a resposta não traz o número', async () => {
+    const { service, repo, users, audit } = harness();
+    repo.findPersonRows.mockImplementation(storedWithNumberAsName);
+
+    const { created } = await service.addFromContacts(
+      NO_KEY.id,
+      NO_KEY_SECTOR.id,
+      FROM_UNNAMED,
+    );
+
+    expect(users.createPersonWithoutAccess).toHaveBeenCalledWith(
+      NO_KEY.id,
+      expect.objectContaining({ name: NUMBER_AS_NAME, phone: NUMBER_AS_NAME }),
+    );
+    expect(created[0]).toMatchObject({ name: '•••• 0004', ...MASKED_0004 });
+    expect(JSON.stringify(created)).not.toContain('991110004');
+    expect(JSON.stringify(audit.log.mock.calls)).not.toContain('991110004');
+  });
+
+  it('dos contatos com a chave: o nome sai como gravado', async () => {
+    const { service, repo } = harness();
+    repo.findPersonRows.mockImplementation(storedWithNumberAsName);
+
+    const { created } = await service.addFromContacts(
+      MANAGER.id,
+      OPERATION.id,
+      FROM_UNNAMED,
+    );
+
+    expect(created[0]).toMatchObject({
+      name: NUMBER_AS_NAME,
+      phoneE164: NUMBER_AS_NAME,
+    });
+  });
+});
+
+describe('SectorPeopleWriteService — telefone por permissão', () => {
+  it('update sem a chave trocando telefone gravado → 403 auth.permission_denied', async () => {
+    const { service, repo, users } = harness();
+    repo.findPerson.mockResolvedValue(inNoKeySector(true));
+
+    await expect(
+      service.update(NO_KEY.id, NO_KEY_SECTOR.id, 'user_carla', PHONE_PATCH),
+    ).rejects.toMatchObject(KEY_ERROR);
+    expect(users.updateUser).not.toHaveBeenCalled();
+  });
+
+  it('update sem a chave dando telefone a quem não tinha passa e responde mascarado', async () => {
+    const { service, repo, users } = harness();
+    repo.findPerson.mockResolvedValue(inNoKeySector(false));
+
+    const result = await service.update(
+      NO_KEY.id,
+      NO_KEY_SECTOR.id,
+      'user_carla',
+      PHONE_PATCH,
+    );
+
+    expect(users.updateUser).toHaveBeenCalledWith(
+      'user_carla',
+      { phone: PHONE_PATCH.phone },
+      NO_KEY.id,
+      { reason: PHONE_PATCH.reason },
+    );
+    expect(result).toMatchObject(MASKED);
+  });
+
+  it('matriz inicial: com a chave o gestor ainda troca o telefone gravado', async () => {
+    const { service, repo, users } = harness();
+    repo.findPerson.mockResolvedValue(
+      person('user_ana', { sectorId: OPERATION.id, hasPhone: true }),
+    );
+
+    await service.update(MANAGER.id, OPERATION.id, 'user_ana', PHONE_PATCH);
+
+    expect(users.updateUser).toHaveBeenCalledOnce();
+  });
+});
+
+describe('SectorPeopleWriteService — telefone por permissão, criação', () => {
+  it('create sem a chave aceita telefone e responde mascarado', async () => {
+    const { service, users } = harness();
+
+    const result = await service.create(
+      NO_KEY.id,
+      NO_KEY_SECTOR.id,
+      NEW_PERSON,
+    );
+
+    expect(users.createPersonWithoutAccess).toHaveBeenCalledWith(NO_KEY.id, {
+      ...NEW_PERSON,
+      sectorId: NO_KEY_SECTOR.id,
+    });
+    expect(result).toMatchObject(MASKED);
+  });
+
+  it('dos contatos sem a chave grava o número do contato e responde mascarado', async () => {
+    const { service, users } = harness();
+
+    const { created } = await service.addFromContacts(
+      NO_KEY.id,
+      NO_KEY_SECTOR.id,
+      { contactIds: ['contact_0001'], ...BATCH },
+    );
+
+    expect(users.createPersonWithoutAccess).toHaveBeenCalledWith(
+      NO_KEY.id,
+      expect.objectContaining({ phone: '+5592991110001' }),
+    );
+    expect(created[0]).toMatchObject(MASKED);
+  });
+});
 
 describe('SectorPeopleWriteService — status no setor, quem decide', () => {
   it('SUPERVISOR gestor inativa pessoa sem login do setor; updateUser recebe { isActive:false } e o motivo', async () => {

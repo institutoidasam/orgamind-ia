@@ -25,6 +25,8 @@ import {
   type TeamShiftSnapshot,
   type TeamTargetsResponse,
 } from '../../schemas/contracts/team-whatsapp.schema';
+import { hasPermission } from '../../shared/authz/permissions';
+import { nameView } from '../../shared/authz/phone-visibility';
 import type { ShiftRef } from '../../schemas/contracts/shift.schema';
 import {
   fromDbDate,
@@ -37,13 +39,16 @@ import { ChannelLiveStateService } from '../whatsapp-providers/channel-live-stat
 import type { CreateTeamDispatchInput } from './dto/create-team-dispatch.dto';
 import type { PageQuery } from './dto/page-query.dto';
 import {
+  canBroadSend,
   canSendToSector,
   canSendToUser,
+  isBroadSend,
   isTeamProvider,
   isTeamSender,
   type TeamActor,
 } from './team-whatsapp.policy';
 import {
+  broadSendDenied,
   invalidLevel,
   invalidSelection,
   invalidShift,
@@ -52,6 +57,11 @@ import {
   scheduleInPast,
   teamForbidden,
 } from './team-whatsapp.errors';
+import {
+  authorView,
+  seesFullPhone,
+  sortByViewedName,
+} from './team-whatsapp.name-view';
 import { overnightInProgress, selectMembers } from './team-whatsapp.selection';
 import {
   distinctLiveChannels,
@@ -71,7 +81,7 @@ import {
   sectorTargetLabel,
   shiftsLabel,
   shiftStarts,
-  toRosterMember,
+  toRosterMembers,
   type LevelFilter,
   type RosterSnapshot,
   type SectorDay,
@@ -216,6 +226,7 @@ export class TeamWhatsappService {
   ): Promise<CreateTeamDispatchResponse> {
     const actor = await this.requireSender(actorId);
     const target = await this.resolveTarget(actor, input.target);
+    await this.requireBroadSendAllowed(actor, target);
     const numbers = await this.requireNumbers(target);
     const scheduledFor =
       input.when === 'shift_start' ? shiftStartOf(target, new Date()) : null;
@@ -243,7 +254,7 @@ export class TeamWhatsappService {
       channelIds,
       target,
       created,
-      skipped: recipients.filter(isSkipped).map(toSkipped),
+      skipped: skippedOf(recipients, seesFullPhone(actor)),
     };
     return scheduledFor
       ? this.scheduled(done, scheduledFor)
@@ -351,11 +362,14 @@ export class TeamWhatsappService {
       this.sectorDays(sectors, date),
       this.channelsOf(sectors.map((s) => s.id)),
     ]);
+    const viewer = {
+      fullPhone: hasPermission(actor, 'telefone.ver_completo'),
+    };
     const rows = days.map((d) => ({
       sectorId: d.sectorId,
       name: d.sectorName,
       channel: channels.get(d.sectorId) ?? null,
-      members: d.members.map(toRosterMember),
+      members: toRosterMembers(d.members, viewer),
     }));
     return {
       date,
@@ -408,9 +422,10 @@ export class TeamWhatsappService {
     ]);
     const counts = countsByDispatch(statuses);
     const channelsOf = channelsByDispatch(channels);
+    const full = seesFullPhone(actor);
     return {
       items: rows.map((row) =>
-        toListItem(row, counts.get(row.id), channelsOf.get(row.id) ?? []),
+        toListItem(row, counts.get(row.id), channelsOf.get(row.id) ?? [], full),
       ),
       total,
       ...page,
@@ -421,6 +436,23 @@ export class TeamWhatsappService {
     const actor = await this.repo.findActor(actorId);
     if (!actor || !isTeamSender(actor)) throw teamForbidden();
     return actor;
+  }
+
+  /**
+   * Disparo amplo (B4/DB9): conferido sobre os setores que o alvo realmente
+   * alcança (já resolvidos e dentro do alcance do ator), antes de qualquer
+   * gravação; vale igual para o envio imediato e o agendado. Quem tem
+   * `equipe.disparo_amplo` não precisa nem da lista de setores ativos.
+   */
+  private async requireBroadSendAllowed(
+    actor: TeamActor,
+    target: ResolvedTarget,
+  ): Promise<void> {
+    if (target.targetType !== 'SECTOR' || canBroadSend(actor)) return;
+    const reached = target.sectors.map((s) => s.sectorId);
+    if (isBroadSend(reached, await this.repo.listActiveSectorIds())) {
+      throw broadSendDenied();
+    }
   }
 
   private resolveTarget(
@@ -825,8 +857,25 @@ function isSkipped<R extends NewTeamRecipient>(
 
 function toSkipped(
   r: NewTeamRecipient & { skipReason: SkippedRecipient['reason'] },
+  full: boolean,
 ) {
-  return { userId: r.userId, name: r.userName, reason: r.skipReason };
+  return {
+    userId: r.userId,
+    name: nameView(r.userName, { full }),
+    reason: r.skipReason,
+  };
+}
+
+/** `skipped` da resposta do POST; o gravado (`userName`) segue com o nome real. */
+function skippedOf(
+  recipients: readonly NewTeamRecipient[],
+  full: boolean,
+): SkippedRecipient[] {
+  return sortByViewedName(
+    recipients.filter(isSkipped).map((r) => toSkipped(r, full)),
+    full,
+    (s) => ({ group: 0, name: s.name, id: s.userId ?? '' }),
+  );
 }
 
 /** Estado fora do enum (ex.: `qrcode`) ou ausente vira null: o front não adivinha. */
@@ -865,15 +914,16 @@ function toListItem(
   row: TeamDispatchRow,
   counts: TeamDispatchCounts | undefined,
   channels: TeamDispatchChannels,
+  full: boolean,
 ): TeamDispatchListResponse['items'][number] {
   return {
     id: row.id,
     createdAt: row.createdAt.toISOString(),
-    author: row.author,
+    author: authorView(row.author, full),
     target: {
       type: row.targetType === 'USER' ? 'user' : 'sector',
       id: row.targetId,
-      label: row.targetLabel,
+      label: nameView(row.targetLabel, { full }),
       shift: shiftSnapshotOf(row),
     },
     sectors: sectorsOf(row),

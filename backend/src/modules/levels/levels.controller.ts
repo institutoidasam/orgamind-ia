@@ -9,7 +9,7 @@ import {
   Req,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { RequirePermission } from '../auth/decorators/require-permission.decorator';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { CreateLevelDto } from './dto/create-level.dto';
 import { ReorderLevelsDto } from './dto/reorder-levels.dto';
@@ -18,9 +18,9 @@ import { LevelsService } from './levels.service';
 
 type AuthRequest = { user: JwtPayload };
 
-/** Cadastro de níveis: todas as rotas só ADMIN (papel no controller, sem override por rota). Sem DELETE. */
+/** Cadastro de níveis: todas as rotas pela permissão estrutura.manter (na classe, sem override por rota). Sem DELETE. */
 @ApiTags('levels')
-@Roles('ADMIN')
+@RequirePermission('estrutura.manter')
 @Controller('internal/levels')
 export class LevelsController {
   constructor(private readonly levels: LevelsService) {}

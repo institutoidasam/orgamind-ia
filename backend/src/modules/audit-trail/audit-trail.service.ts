@@ -12,6 +12,8 @@ import {
   canViewPersonHistory,
   personHistoryCategories,
 } from '../../shared/authz/person-actions.policy';
+import { hasPermission } from '../../shared/authz/permissions';
+import { nameView } from '../../shared/authz/phone-visibility';
 import { addDays, zonedStart } from '../staff-schedule/civil-date';
 import { viewableSectorIds } from '../staff-schedule/staff-schedule.policy';
 import type { TeamActor } from '../team-whatsapp/team-whatsapp.policy';
@@ -52,7 +54,7 @@ export class AuditTrailService {
         in: await this.repo.findSubjectIdsByQuery(query.q, MAX_SUBJECT_MATCHES),
       };
     }
-    return this.page(where, query.page, query.pageSize);
+    return this.page(where, query.page, query.pageSize, actor);
   }
 
   /**
@@ -85,19 +87,23 @@ export class AuditTrailService {
       },
       query.page,
       query.pageSize,
+      actor,
     );
   }
 
+  /** Nomes que são telefone (D11) só saem inteiros a quem tem `telefone.ver_completo`. */
   private async page(
     where: Prisma.AuditEventWhereInput,
     page: number,
     pageSize: number,
+    actor: TeamActor,
   ): Promise<AuditTrailPage> {
+    const view = { full: hasPermission(actor, 'telefone.ver_completo') };
     const { rows, total } = await this.repo.findPage(where, page, pageSize);
     const people = await this.repo.findPeopleByIds(personIds(rows));
     const byId = new Map(people.map((person) => [person.id, person]));
     return {
-      items: rows.map((row) => toEntry(row, byId)),
+      items: rows.map((row) => toEntry(row, byId, view)),
       total,
       page,
       pageSize,
@@ -134,42 +140,64 @@ function personIds(rows: readonly AuditTrailRow[]): string[] {
 }
 
 type People = ReadonlyMap<string, AuditTrailPerson>;
+type NameView = { full: boolean };
+type Change = NonNullable<AuditTrailEntry['changes']>[number];
 
-function toActor(id: string | null, people: People): AuditTrailEntry['actor'] {
-  return id ? { id, name: people.get(id)?.name ?? null } : null;
+function toActor(
+  id: string | null,
+  people: People,
+  view: NameView,
+): AuditTrailEntry['actor'] {
+  return id ? { id, name: nameView(people.get(id)?.name ?? null, view) } : null;
 }
 
 /** Pessoa apagada mantém o id, com nome e matrícula nulos. */
 function toSubject(
   id: string | null,
   people: People,
+  view: NameView,
 ): AuditTrailEntry['subject'] {
   if (!id) return null;
   const person = people.get(id);
   return {
     id,
-    name: person?.name ?? null,
+    name: nameView(person?.name ?? null, view),
     registration: person?.registration ?? null,
   };
+}
+
+/** O campo `name` da pessoa guarda o nome real (D11); a máscara é só da saída. */
+function viewChange(change: Change, view: NameView): Change {
+  if (change.field !== 'name') return change;
+  const show = (value: Change['before']): Change['before'] =>
+    typeof value === 'string' ? nameView(value, view) : value;
+  return { ...change, before: show(change.before), after: show(change.after) };
 }
 
 /** Registro antigo (sem `changes`) ou fora do formato sai com `null`. */
 function toChanges(
   value: AuditTrailRow['changes'],
+  view: NameView,
 ): AuditTrailEntry['changes'] {
   const parsed = changesSchema.safeParse(value);
-  return parsed.success ? parsed.data : null;
+  return parsed.success
+    ? parsed.data.map((change) => viewChange(change, view))
+    : null;
 }
 
-function toEntry(row: AuditTrailRow, people: People): AuditTrailEntry {
+function toEntry(
+  row: AuditTrailRow,
+  people: People,
+  view: NameView,
+): AuditTrailEntry {
   return {
     id: row.id,
     createdAt: row.createdAt.toISOString(),
     action: row.action,
     category: row.category,
-    actor: toActor(row.actorId, people),
-    subject: toSubject(row.subjectUserId, people),
+    actor: toActor(row.actorId, people, view),
+    subject: toSubject(row.subjectUserId, people, view),
     reason: row.reason,
-    changes: toChanges(row.changes),
+    changes: toChanges(row.changes, view),
   };
 }

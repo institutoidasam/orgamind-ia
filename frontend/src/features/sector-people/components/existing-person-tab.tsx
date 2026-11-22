@@ -3,6 +3,7 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
+import { usePermission } from '@/features/permissions/use-permission';
 import { useAuthStore } from '@/stores/auth.store';
 import { useMoveSectorPeople, useSectorPersonCandidates } from '../api';
 import { addedPeopleMessage, toastSectorPeopleError } from '../error-messages';
@@ -69,6 +70,8 @@ function useMoveSelection(sectorId: string, onDone: () => void) {
 /** Pessoa que já existe (sem setor, ou de outro setor para o ADMIN) muda para este setor. */
 export function ExistingPersonTab({ sectorId, onDone }: Props) {
   const isAdmin = useAuthStore((state) => state.user?.role === 'ADMIN');
+  // B3: sem `telefone.ver_completo` a busca é por nome e matrícula.
+  const searchLabel = usePermission('telefone.ver_completo') ? 'Buscar pessoa por nome' : 'Buscar por nome ou matrícula';
   const search = useDebouncedSearch();
   const candidates = useSectorPersonCandidates(sectorId, search.q);
   const move = useMoveSelection(sectorId, onDone);
@@ -77,7 +80,7 @@ export function ExistingPersonTab({ sectorId, onDone }: Props) {
   return (
     <div className="space-y-4">
       {!isAdmin && <p className="text-xs text-muted-foreground">Você vê só quem está sem setor.</p>}
-      <SearchField label="Buscar pessoa por nome" value={search.text} onChange={search.setText} />
+      <SearchField label={searchLabel} value={search.text} onChange={search.setText} />
       <SearchFallback isError={candidates.isError} isPending={candidates.isPending} count={items.length} emptyText="Nenhuma pessoa encontrada." />
       {items.length > 0 && (
         <ul className="max-h-64 divide-y overflow-y-auto">

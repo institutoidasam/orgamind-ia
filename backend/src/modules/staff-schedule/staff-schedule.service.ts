@@ -1,7 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import type {
   BoardQuery,
-  BoardRow,
   StaffException,
   StaffScheduleBoard,
   StaffScheduleOptions,
@@ -10,7 +9,11 @@ import type { TeamActor } from '../team-whatsapp/team-whatsapp.policy';
 import { buildBoardRows, citedRefs, type BoardPersonInput } from './board';
 import { addDays, diffDays, todayIn, type CivilDate } from './civil-date';
 import { invalidPeriod, scheduleForbidden } from './staff-schedule.errors';
-import { canViewSchedule, viewableSectorIds } from './staff-schedule.policy';
+import {
+  canEditPerson,
+  canViewSchedule,
+  viewableSectorIds,
+} from './staff-schedule.policy';
 import {
   StaffScheduleRepository,
   type ScheduleData,
@@ -34,14 +37,18 @@ function periodDates(from: CivilDate, to: CivilDate): CivilDate[] {
 }
 
 /**
- * Exceções do quadro; a nota só vai para quem edita a pessoa (ADMIN ou gestor
- * do setor principal): o gestor do destino vê o visitante sem a nota.
+ * Exceções do quadro; a nota só vai para quem tem alcance sobre a pessoa (ADMIN
+ * ou gestor do setor principal): o gestor do destino vê o visitante sem a nota.
+ * A chave `escala.alterar` não entra aqui: sem ela a pessoa perde a edição, não
+ * a leitura que já tinha (DB7).
  */
 function visibleExceptions(
-  rows: readonly BoardRow[],
+  actor: TeamActor,
   people: readonly BoardPersonInput[],
 ): StaffException[] {
-  const hidden = new Set(rows.filter((r) => !r.canEdit).map((r) => r.userId));
+  const hidden = new Set(
+    people.filter((p) => !canEditPerson(actor, p)).map((p) => p.id),
+  );
   return people
     .flatMap((person) => person.exceptions)
     .map((ex) => (hidden.has(ex.userId) ? { ...ex, note: null } : ex));
@@ -76,7 +83,7 @@ export class StaffScheduleService {
       dates,
       people,
     });
-    const exceptions = visibleExceptions(rows, people);
+    const exceptions = visibleExceptions(actor, people);
     const refs = citedRefs(rows, exceptions);
     const [sectors, shifts] = await Promise.all([
       this.repo.findSectorsByIds(refs.sectorIds),

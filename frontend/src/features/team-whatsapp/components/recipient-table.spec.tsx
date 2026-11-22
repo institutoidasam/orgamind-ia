@@ -17,6 +17,7 @@ vi.mock('@/features/team-whatsapp/api', () => ({
 }));
 vi.mock('sonner', () => ({ toast: { success: mocks.success, info: mocks.info, error: mocks.error } }));
 
+import { useAuthStore, type AuthUser } from '@/stores/auth.store';
 import type { DispatchRecipient } from '../schemas';
 import { RecipientTable } from './recipient-table';
 
@@ -52,10 +53,31 @@ function loaded(items: DispatchRecipient[], total = items.length) {
 
 const rowOf = (name: string) => screen.getByRole('row', { name: new RegExp(name) });
 
+const OPERATOR: AuthUser = { id: 'u1', email: 'o@x.test', name: 'Olga', role: 'OPERATOR' };
+
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.retry.mockResolvedValue({ requeued: 1 });
   loaded([ana, bia, caio, duda, eva]);
+  useAuthStore.setState({ user: OPERATOR });
+});
+
+describe('RecipientTable: permissão (DB6, DB10)', () => {
+  it('sem equipe.enviar some o Repetir da linha e o Repetir todas, e a falha continua visível', () => {
+    useAuthStore.setState({ user: { ...OPERATOR, permissions: ['trilha.consultar'] } });
+    render(<RecipientTable dispatchId="d1" failedCount={2} />);
+    expect(rowOf('Bia')).toHaveTextContent('Falhou: Número desconectado');
+    expect(screen.queryByRole('button', { name: 'Repetir' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Repetir todas/ })).not.toBeInTheDocument();
+  });
+
+  it('403 auth.permission_denied mostra o detail do servidor no toast', async () => {
+    const body = JSON.stringify({ code: 'auth.permission_denied', detail: 'Texto do servidor.' });
+    mocks.retry.mockRejectedValue(new HTTPError(new Response(body, { status: 403 }), new Request('https://x'), {} as never));
+    render(<RecipientTable dispatchId="d1" failedCount={2} />);
+    await userEvent.click(within(rowOf('Bia')).getByRole('button', { name: 'Repetir' }));
+    await waitFor(() => expect(mocks.error).toHaveBeenCalledWith('Texto do servidor.'));
+  });
 });
 
 describe('RecipientTable: colunas', () => {

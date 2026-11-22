@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { actorWith } from '../../shared/authz/actor.test-fixtures';
 import {
   canEditPerson,
   canManageSector,
@@ -10,18 +11,8 @@ import {
   type PersonField,
 } from './sector-people.policy';
 
-const ADMIN: PeopleActor = {
-  id: 'user_admin',
-  role: 'ADMIN',
-  isActive: true,
-  hasAccess: true,
-};
-const MANAGER: PeopleActor = {
-  id: 'user_manager',
-  role: 'SUPERVISOR',
-  isActive: true,
-  hasAccess: true,
-};
+const ADMIN: PeopleActor = actorWith('ADMIN', { id: 'user_admin' });
+const MANAGER: PeopleActor = actorWith('SUPERVISOR', { id: 'user_manager' });
 
 const OPERATION: PeopleSector = {
   id: 'sector_operation',

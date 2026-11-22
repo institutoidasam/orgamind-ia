@@ -1868,3 +1868,18 @@ model StaffScheduleException {
   @@index([sectorId, startDate])
   @@index([shiftId, endDate])
 }
+
+// Permissões por papel (B1/DB1). Só SUPERVISOR e OPERATOR têm linha (CHECK no
+// SQL da migração, que o Prisma não modela); ADMIN e VIEWER são fixos em
+// código. Linha ausente vale o padrão da matriz inicial. A chave é texto
+// validado em código (DB2); `updatedById` sem FK, como AuditEvent.actorId,
+// nulo = migração.
+model RolePermission {
+  role        Role
+  key         String   @db.VarChar(64)
+  granted     Boolean
+  updatedAt   DateTime @default(now()) @updatedAt
+  updatedById String?
+
+  @@id([role, key])
+}

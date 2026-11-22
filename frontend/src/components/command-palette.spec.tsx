@@ -18,8 +18,10 @@ vi.mock('@/lib/api-client', () => ({
 }));
 
 let activeRole = 'ADMIN';
+let activePermissions: string[] | undefined;
 vi.mock('@/stores/auth.store', () => ({
-  useAuthStore: (select: (state: { user: { role: string } }) => unknown) => select({ user: { role: activeRole } }),
+  useAuthStore: (select: (state: { user: { role: string; permissions?: string[] } }) => unknown) =>
+    select({ user: { role: activeRole, permissions: activePermissions } }),
 }));
 
 import { CommandPalette } from './command-palette';
@@ -28,6 +30,7 @@ afterEach(() => {
   cleanup();
   vi.clearAllMocks();
   activeRole = 'ADMIN';
+  activePermissions = undefined;
 });
 
 function PaletteHarness() {
@@ -42,6 +45,21 @@ function PaletteHarness() {
     </>
   );
 }
+
+describe('CommandPalette: entradas por permissão', () => {
+  it('OPERATOR com estrutura.manter vê Turnos e Níveis; sem a chave, não', () => {
+    activeRole = 'OPERATOR';
+    activePermissions = ['estrutura.manter'];
+    const { rerender } = render(<CommandPalette open onOpenChange={() => {}} />);
+    expect(screen.getByText('Ir para Turnos')).toBeInTheDocument();
+    expect(screen.getByText('Ir para Níveis')).toBeInTheDocument();
+
+    activePermissions = undefined;
+    rerender(<CommandPalette open onOpenChange={() => {}} />);
+    expect(screen.queryByText('Ir para Turnos')).not.toBeInTheDocument();
+    expect(screen.queryByText('Ir para Níveis')).not.toBeInTheDocument();
+  });
+});
 
 describe('CommandPalette navigation entries', () => {
   it('renders an "Ir para" command for every manifest route', () => {

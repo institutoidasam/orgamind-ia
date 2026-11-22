@@ -18,7 +18,7 @@ afterEach(() => vi.restoreAllMocks());
 
 // Ficha no contrato estrito: todos os campos vêm da API.
 const listedPerson = {
-  id: 'u2', name: 'Bia', phoneE164: '+5592988887777', hasAccess: false, role: null,
+  id: 'u2', name: 'Bia', phoneE164: '+5592988887777', hasPhone: true, phoneMasked: '•••• 7777', hasAccess: false, role: null,
   level: null, jobTitle: null, shift: { id: 'sh1', name: 'Dia' }, editable: 'full',
   registration: null,
   isActive: true,
@@ -86,6 +86,21 @@ describe('listagem do setor', () => {
     const ctx = setup({ ...listResponse, people: [{ ...listedPerson, isActive: undefined, contactAuthorization: undefined }] });
     const { result } = renderHook(() => useSectorPeople('s1'), { wrapper: ctx.wrapper });
     await waitFor(() => expect(result.current.isError).toBe(true));
+  });
+});
+
+describe('telefone no contrato (CB5)', () => {
+  it('ficha no formato anterior, sem hasPhone e phoneMasked, falha no contrato estrito', async () => {
+    const ctx = setup({ ...listResponse, people: [{ ...listedPerson, hasPhone: undefined, phoneMasked: undefined }] });
+    const { result } = renderHook(() => useSectorPeople('s1'), { wrapper: ctx.wrapper });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+  });
+
+  it('contato sem telefone completo (phoneE164 nulo) traz só a máscara', async () => {
+    const items = [{ contactId: 'c1', name: null, phoneE164: null, phoneMasked: '•••• 7777', person: null }];
+    const { wrapper } = setup({ items });
+    const { result } = renderHook(() => useSectorContactCandidates('s1', ''), { wrapper });
+    await waitFor(() => expect(result.current.data).toEqual({ items }));
   });
 });
 

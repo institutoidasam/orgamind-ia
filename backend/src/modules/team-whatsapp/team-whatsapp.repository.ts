@@ -379,6 +379,15 @@ export class TeamWhatsappRepository {
     });
   }
 
+  /** Ids dos setores ativos da organização inteira, não só os do ator (disparo amplo, DB9). */
+  async listActiveSectorIds(): Promise<string[]> {
+    const sectors = await this.prisma.sector.findMany({
+      where: { isActive: true },
+      select: { id: true },
+    });
+    return sectors.map((s) => s.id);
+  }
+
   /** Turnos ativos por sortOrder (C6); o filtro do envio é validado contra eles. */
   async listActiveShifts(): Promise<ShiftRef[]> {
     return this.prisma.shift.findMany({

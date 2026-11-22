@@ -7,6 +7,8 @@ import { PersonHistoryDialog } from '@/features/audit-trail/components/person-hi
 import { AuthorizationBadge } from '@/features/people-record/components/authorization-badge';
 import { PersonStatusDialog } from '@/features/people-record/components/person-status-dialog';
 import { canChangePersonStatusUi, canViewPersonHistoryUi } from '@/features/people-record/ui-policy';
+import type { PermissionKey } from '@/features/permissions/keys';
+import { usePermissions } from '@/features/permissions/use-permission';
 import { NO_SHIFT_LABEL } from '@/features/shifts/labels';
 import type { UserRole } from '@/features/users/role';
 import { useAuthStore } from '@/stores/auth.store';
@@ -44,23 +46,27 @@ function useRemovePerson(sectorId: string) {
   };
 }
 
-/** Os botões vêm de `ui-policy.ts` (GC5), só para esconder; a API decide de verdade. */
-function PersonActions({ person, role, actions }: { person: SectorPerson; role: UserRole | undefined; actions: RowActions }) {
-  const canStatus = role !== undefined && canChangePersonStatusUi(role, person);
-  const canHistory = role !== undefined && canViewPersonHistoryUi(role);
+type Viewer = { role: UserRole | undefined; permissions: readonly PermissionKey[] };
+
+/** Os botões vêm das permissões (GC5), só para esconder; a API decide de verdade. Editar e Tirar do setor pedem `pessoas.editar`. */
+function PersonActions({ person, viewer, actions }: { person: SectorPerson; viewer: Viewer; actions: RowActions }) {
+  const { role, permissions } = viewer;
+  const canEdit = permissions.includes('pessoas.editar');
+  const canStatus = role !== undefined && canChangePersonStatusUi(role, person, permissions);
+  const canHistory = role !== undefined && canViewPersonHistoryUi(role, permissions);
   return (
     <div className="flex flex-wrap justify-end gap-1">
-      <Button size="sm" variant="ghost" onClick={() => actions.onEdit(person)}>Editar</Button>
+      {canEdit && <Button size="sm" variant="ghost" onClick={() => actions.onEdit(person)}>Editar</Button>}
       {canHistory && <Button size="sm" variant="ghost" onClick={() => actions.onHistory(person)}>Histórico</Button>}
       {canStatus && (
         <Button size="sm" variant="ghost" onClick={() => actions.onStatus(person)}>{person.isActive ? 'Inativar' : 'Reativar'}</Button>
       )}
-      {!person.hasAccess && <Button size="sm" variant="ghost" onClick={() => actions.onRemove(person)}>Tirar do setor</Button>}
+      {canEdit && !person.hasAccess && <Button size="sm" variant="ghost" onClick={() => actions.onRemove(person)}>Tirar do setor</Button>}
     </div>
   );
 }
 
-type RowProps = { person: SectorPerson; role: UserRole | undefined; actions: RowActions };
+type RowProps = { person: SectorPerson; viewer: Viewer; actions: RowActions };
 
 function NameCell({ person }: { person: SectorPerson }) {
   return (
@@ -82,7 +88,7 @@ function AccessCell({ hasAccess }: { hasAccess: boolean }) {
   );
 }
 
-function PersonRow({ person, role, actions }: RowProps) {
+function PersonRow({ person, viewer, actions }: RowProps) {
   return (
     <TableRow className={person.isActive ? undefined : 'text-muted-foreground'}>
       <NameCell person={person} />
@@ -92,7 +98,7 @@ function PersonRow({ person, role, actions }: RowProps) {
       <TableCell>{person.shift?.name ?? NO_SHIFT_LABEL}</TableCell>
       <AccessCell hasAccess={person.hasAccess} />
       <TableCell>
-        <PersonActions person={person} role={role} actions={actions} />
+        <PersonActions person={person} viewer={viewer} actions={actions} />
       </TableCell>
     </TableRow>
   );
@@ -120,6 +126,7 @@ function PersonDialogs({ sectorId, dialog, onClose }: DialogsProps) {
 
 export function PeopleTable({ sectorId, people, onEdit }: Props) {
   const role = useAuthStore((state) => state.user?.role);
+  const permissions = usePermissions();
   const onRemove = useRemovePerson(sectorId);
   const [dialog, setDialog] = useState<RowDialog | null>(null);
   const actions: RowActions = {
@@ -145,7 +152,7 @@ export function PeopleTable({ sectorId, people, onEdit }: Props) {
           </TableHeader>
           <TableBody>
             {people.map((person) => (
-              <PersonRow key={person.id} person={person} role={role} actions={actions} />
+              <PersonRow key={person.id} person={person} viewer={{ role, permissions }} actions={actions} />
             ))}
           </TableBody>
         </Table>

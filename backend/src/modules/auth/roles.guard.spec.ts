@@ -1,9 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import type { Role } from '@prisma/client';
 import { RolesGuard } from './roles.guard';
 import { ForbiddenError } from '../../shared/errors/domain.error';
-import { IS_PUBLIC_KEY } from './decorators/public.decorator';
+import { ROLES_KEY, Roles } from './decorators/roles.decorator';
+import { RequirePermission } from './decorators/require-permission.decorator';
 
 function makeContext(user: { role?: string } | undefined): ExecutionContext {
   return {
@@ -17,9 +19,82 @@ function makeContext(user: { role?: string } | undefined): ExecutionContext {
 
 function mockRoles(reflector: Reflector, roles: string[] | undefined): void {
   vi.spyOn(reflector, 'getAllAndOverride').mockImplementation((key) =>
-    key === IS_PUBLIC_KEY ? undefined : roles,
+    key === ROLES_KEY ? roles : undefined,
   );
 }
+
+@Roles('ADMIN')
+class RolesOnClass {
+  @RequirePermission('pessoas.editar')
+  withPermission() {}
+}
+
+@RequirePermission('pessoas.editar')
+class PermissionOnClass {
+  plain() {}
+  @Roles('ADMIN')
+  withRoles() {}
+}
+
+class Bare {
+  plain() {}
+}
+
+/** Rota real (classe e handler decorados), para o Reflector ler os metadados de verdade. */
+function routeContext(
+  controller: new () => object,
+  handler: string,
+  role: Role,
+): ExecutionContext {
+  const proto = controller.prototype as Record<string, () => void>;
+  return {
+    getClass: () => controller,
+    getHandler: () => proto[handler],
+    switchToHttp: () => ({ getRequest: () => ({ user: { role } }) }),
+  } as unknown as ExecutionContext;
+}
+
+describe('RolesGuard com @RequirePermission (DB3)', () => {
+  const guard = new RolesGuard(new Reflector());
+
+  it('@RequirePermission no handler passa mesmo com @Roles na classe', () => {
+    const ctx = routeContext(RolesOnClass, 'withPermission', 'SUPERVISOR');
+    expect(guard.canActivate(ctx)).toBe(true);
+  });
+
+  it('@RequirePermission na classe e handler sem @Roles passa para SUPERVISOR', () => {
+    const ctx = routeContext(PermissionOnClass, 'plain', 'SUPERVISOR');
+    expect(guard.canActivate(ctx)).toBe(true);
+  });
+
+  it('@RequirePermission na classe e @Roles(ADMIN) no handler: o @Roles do handler vale e SUPERVISOR recebe 403', () => {
+    const supervisor = routeContext(
+      PermissionOnClass,
+      'withRoles',
+      'SUPERVISOR',
+    );
+    const admin = routeContext(PermissionOnClass, 'withRoles', 'ADMIN');
+
+    expect(() => guard.canActivate(supervisor)).toThrow(ForbiddenError);
+    expect(guard.canActivate(admin)).toBe(true);
+  });
+});
+
+describe('RolesGuard sem @RequirePermission (DB3)', () => {
+  const guard = new RolesGuard(new Reflector());
+
+  it('rota sem nada continua só ADMIN e OPERATOR', () => {
+    const allowed = (['ADMIN', 'OPERATOR'] as Role[]).map((role) =>
+      guard.canActivate(routeContext(Bare, 'plain', role)),
+    );
+    const denied = (['SUPERVISOR', 'VIEWER'] as Role[]).map(
+      (role) => () => guard.canActivate(routeContext(Bare, 'plain', role)),
+    );
+
+    expect(allowed).toEqual([true, true]);
+    for (const attempt of denied) expect(attempt).toThrow(ForbiddenError);
+  });
+});
 
 describe('RolesGuard', () => {
   let reflector: Reflector;

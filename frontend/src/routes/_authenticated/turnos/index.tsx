@@ -8,6 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { QueryErrorFallback } from '@/components/query-error-fallback';
 import { useAuthStore } from '@/stores/auth.store';
+import { hasPermission } from '@/features/permissions/access';
 import { useReorderShifts, useShifts, useUpdateShift } from '@/features/shifts/api';
 import { ShiftFormDialog } from '@/features/shifts/components/shift-form-dialog';
 import { describeShiftError } from '@/features/shifts/error-messages';
@@ -18,7 +19,7 @@ import type { ShiftAdmin } from '@/features/shifts/schemas';
 const route = createFileRoute('/_authenticated/turnos/')({
   beforeLoad: () => {
     const { user } = useAuthStore.getState();
-    if (user?.role !== 'ADMIN') {
+    if (!hasPermission(user, 'estrutura.manter')) {
       throw redirect({ to: '/dashboard' });
     }
   },

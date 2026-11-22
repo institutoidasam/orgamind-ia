@@ -1,9 +1,34 @@
 import { HTTPError } from 'ky';
 import { describe, expect, it } from 'vitest';
 import {
-  apiErrorCode, cancelErrorMessage, channelLabel, countParts, failureReasonLabel, PACING_HINT, recipientStatusLabel,
+  apiErrorCode, apiErrorText, cancelErrorMessage, channelLabel, countParts, failureReasonLabel, PACING_HINT, recipientStatusLabel,
   retryErrorMessage, SKIP_REASON_LABEL, teamErrorMessage,
 } from './error-messages';
+
+const httpError = (status: number, body: object) =>
+  new HTTPError(new Response(JSON.stringify(body), { status }), new Request('https://x'), {} as never);
+
+describe('recusas por permissão (DB10, B4)', () => {
+  it('broad_send_denied mostra o texto da spec', () => {
+    expect(teamErrorMessage('team_whatsapp.broad_send_denied')).toBe(
+      'Você não tem permissão para enviar a todos os setores de uma vez. Desmarque um setor ou peça ao administrador.',
+    );
+  });
+
+  it('auth.permission_denied mostra o detail do servidor; sem detail, o texto do envio', async () => {
+    const denied = { code: 'auth.permission_denied', title: 'Ação não permitida' };
+    expect(await apiErrorText(httpError(403, { ...denied, detail: 'Texto do servidor.' }), cancelErrorMessage))
+      .toBe('Texto do servidor.');
+    expect(await apiErrorText(httpError(403, denied), cancelErrorMessage))
+      .toBe('Você não tem permissão para enviar WhatsApp à equipe.');
+  });
+
+  it('outro código usa o mapa de quem chamou, e erro sem corpo usa o texto genérico dele', async () => {
+    expect(await apiErrorText(httpError(409, { code: 'team_whatsapp.not_cancellable' }), cancelErrorMessage))
+      .toBe('Este envio já saiu ou foi cancelado.');
+    expect(await apiErrorText(new Error('rede'), retryErrorMessage)).toBe('Não foi possível repetir o envio. Tente de novo.');
+  });
+});
 
 describe('motivo NOT_AUTHORIZED', () => {
   it.each([

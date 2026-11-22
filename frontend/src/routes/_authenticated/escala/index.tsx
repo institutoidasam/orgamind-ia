@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { usePermission } from '@/features/permissions/use-permission';
 import { useScheduleBoard, useScheduleOptions } from '@/features/staff-schedule/api';
 import { ExceptionDialog, type ExceptionTarget } from '@/features/staff-schedule/components/exception-dialog';
 import { ScheduleBoardTable } from '@/features/staff-schedule/components/schedule-board';
@@ -26,6 +27,8 @@ const NO_SECTORS_TEXT = 'Nenhum setor disponível para a escala.';
 const PICK_SECTOR_TEXT = 'Escolha o setor para ver a escala.';
 const NO_PEOPLE_TEXT = 'Nenhuma pessoa ativa neste setor.';
 const TRUNCATED_TEXT = 'Mostrando as primeiras 500 pessoas deste setor.';
+const HELP_TEXT = 'Quem trabalha em cada turno, dia a dia.';
+const HELP_EDIT_TEXT = 'Clique em um dia para marcar folga, férias, troca de turno ou outro setor.';
 
 function SchedulePage() {
   const options = useScheduleOptions();
@@ -34,15 +37,18 @@ function SchedulePage() {
       <header>
         <p className="ds-eyebrow">pessoas · equipe</p>
         <h1 className="text-2xl font-bold">Escala</h1>
-        <p className="text-sm text-muted-foreground">
-          Quem trabalha em cada turno, dia a dia. Clique em um dia para marcar folga, férias, troca de turno ou outro setor.
-        </p>
+        <ScheduleHelp />
       </header>
       {options.isLoading && <Skeleton className="h-40 w-full" />}
       {options.isError && <ScheduleError error={options.error} onRetry={options.refetch} />}
       {options.data && <ScheduleContent options={options.data} />}
     </div>
   );
+}
+
+function ScheduleHelp() {
+  const canChange = usePermission('escala.alterar');
+  return <p className="text-sm text-muted-foreground">{canChange ? `${HELP_TEXT} ${HELP_EDIT_TEXT}` : HELP_TEXT}</p>;
 }
 
 function ScheduleError({ error, onRetry }: { error: unknown; onRetry: () => void }) {

@@ -1,8 +1,14 @@
 import type { ExecutionContext } from '@nestjs/common';
 import { HTTP_CODE_METADATA } from '@nestjs/common/constants';
 import { Reflector } from '@nestjs/core';
+import type { Role } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 import { RolesGuard } from '../auth/roles.guard';
+import { PermissionsGuard } from '../auth/permissions.guard';
+import { PERMISSION_KEY } from '../auth/decorators/require-permission.decorator';
+import type { PermissionsService } from '../permissions/permissions.service';
+import { PERMISSION_DENIED_TEXT } from '../../shared/authz/permissions';
+import { permissionsWith } from '../../shared/authz/actor.test-fixtures';
 import { TeamWhatsappController } from './team-whatsapp.controller';
 import type { TeamWhatsappService } from './team-whatsapp.service';
 import type { TeamWhatsappResultsService } from './team-whatsapp-results.service';
@@ -24,6 +30,11 @@ const HANDLERS = [
   'retry',
 ] as const;
 type Handler = (typeof HANDLERS)[number];
+/** Escritas do envio: portão por permissão (DB6); as demais seguem por papel. */
+const WRITE_HANDLERS = ['createDispatch', 'cancel', 'retry'] as const;
+const READ_HANDLERS = HANDLERS.filter(
+  (name) => !(WRITE_HANDLERS as readonly Handler[]).includes(name),
+);
 // Lido como dado (metadados), não chamado: evita o falso positivo de unbound-method.
 const handlerOf = (name: Handler): object =>
   (TeamWhatsappController.prototype as unknown as Record<Handler, object>)[
@@ -71,18 +82,70 @@ const req = { user: { sub: 'actor-1' } } as Parameters<
   TeamWhatsappController['targets']
 >[0];
 
-describe('TeamWhatsappController — metadados', () => {
-  it.each(HANDLERS)('%s exige ADMIN, SUPERVISOR ou OPERATOR', (handler) => {
-    expect(Reflect.getMetadata('roles', handlerOf(handler))).toEqual([
-      'ADMIN',
-      'SUPERVISOR',
-      'OPERATOR',
-    ]);
+/** `RolesGuard` e depois `PermissionsGuard`, como no `APP_GUARD`; a matriz é a inicial menos o que `revoke` tira. */
+async function passesGuards(method: Handler, role: Role, revoke = false) {
+  const permissions = {
+    effectiveFor: (r: Role) =>
+      Promise.resolve(
+        permissionsWith(r, revoke ? { revoke: ['equipe.enviar'] } : undefined),
+      ),
+  } as unknown as PermissionsService;
+  const reflector = new Reflector();
+  const ctx = context(method, role);
+  return (
+    new RolesGuard(reflector).canActivate(ctx) &&
+    (await new PermissionsGuard(reflector, permissions).canActivate(ctx))
+  );
+}
+
+describe('TeamWhatsappController — escritas por permissão', () => {
+  it.each(WRITE_HANDLERS)('%s exige equipe.enviar, sem @Roles', (name) => {
+    expect(Reflect.getMetadata(PERMISSION_KEY, handlerOf(name))).toBe(
+      'equipe.enviar',
+    );
+    expect(Reflect.getMetadata('roles', handlerOf(name))).toBeUndefined();
   });
 
-  it('o guard real barra VIEWER em todas as rotas', () => {
+  it.each(WRITE_HANDLERS)(
+    '%s: com a matriz inicial passam A, S e O',
+    async (name) => {
+      for (const role of ['ADMIN', 'SUPERVISOR', 'OPERATOR'] as const) {
+        await expect(passesGuards(name, role)).resolves.toBe(true);
+      }
+    },
+  );
+
+  it.each(WRITE_HANDLERS)(
+    '%s: VIEWER e quem perdeu a chave levam 403 auth.permission_denied',
+    async (name) => {
+      const denied = {
+        status: 403,
+        code: 'auth.permission_denied',
+        detail: PERMISSION_DENIED_TEXT['equipe.enviar'],
+      };
+      await expect(passesGuards(name, 'VIEWER')).rejects.toMatchObject(denied);
+      await expect(passesGuards(name, 'OPERATOR', true)).rejects.toMatchObject(
+        denied,
+      );
+    },
+  );
+});
+
+describe('TeamWhatsappController — metadados', () => {
+  it.each(READ_HANDLERS)(
+    '%s exige ADMIN, SUPERVISOR ou OPERATOR',
+    (handler) => {
+      expect(Reflect.getMetadata('roles', handlerOf(handler))).toEqual([
+        'ADMIN',
+        'SUPERVISOR',
+        'OPERATOR',
+      ]);
+    },
+  );
+
+  it('o guard real barra VIEWER em todas as leituras', () => {
     const guard = new RolesGuard(new Reflector());
-    for (const handler of HANDLERS) {
+    for (const handler of READ_HANDLERS) {
       expect(() => guard.canActivate(context(handler, 'VIEWER'))).toThrow(
         expect.objectContaining({
           status: 403,

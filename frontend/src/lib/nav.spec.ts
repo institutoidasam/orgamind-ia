@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { DEFAULT_PERMISSIONS } from "@/features/permissions/keys";
 import {
   NAV,
   canAccessPath,
@@ -25,6 +26,65 @@ const KNOWN_ROUTES = [
   "/users",
   "/trilha",
 ];
+
+describe("NAV por permissão: padrão do papel", () => {
+  const ADMIN_LABELS = [
+    "Setores",
+    "Turnos",
+    "Níveis",
+    "Usuários",
+    "Conexões",
+    "Trilha de alterações",
+  ];
+
+  it.each([
+    ["ADMIN", ADMIN_LABELS],
+    ["SUPERVISOR", ["Setores"]],
+    ["OPERATOR", ["Setores"]],
+    ["VIEWER", []],
+  ] as const)(
+    "padrão do papel: menu igual a hoje para %s",
+    (role, adminLabels) => {
+      const defaults = DEFAULT_PERMISSIONS[role];
+      expect(navSection("admin", role).map((i) => i.label)).toEqual(adminLabels);
+      expect(navSection("admin", role, defaults)).toEqual(
+        navSection("admin", role),
+      );
+      expect(navItemsForRole(role, defaults)).toEqual(navItemsForRole(role));
+      expect(canAccessPath("/turnos", role)).toBe(role === "ADMIN");
+      expect(canAccessPath("/niveis", role)).toBe(role === "ADMIN");
+    },
+  );
+});
+
+describe("NAV por permissão: estrutura.manter", () => {
+  const WITH_KEY = ["estrutura.manter"] as const;
+
+  it("OPERATOR com estrutura.manter vê Turnos e Níveis", () => {
+    const admin = navSection("admin", "OPERATOR", WITH_KEY);
+    expect(admin.map((i) => i.label)).toEqual(["Setores", "Turnos", "Níveis"]);
+    expect(navItemsForRole("OPERATOR", WITH_KEY).map((i) => i.to)).toEqual(
+      expect.arrayContaining(["/turnos", "/niveis"]),
+    );
+    expect(canAccessPath("/turnos", "OPERATOR", WITH_KEY)).toBe(true);
+    expect(canAccessPath("/niveis", "OPERATOR", WITH_KEY)).toBe(true);
+  });
+
+  it("SUPERVISOR sem a chave não acessa /turnos", () => {
+    expect(canAccessPath("/turnos", "SUPERVISOR", [])).toBe(false);
+    expect(canAccessPath("/niveis", "SUPERVISOR", ["pessoas.editar"])).toBe(
+      false,
+    );
+    expect(navSection("admin", "SUPERVISOR", []).map((i) => i.label)).toEqual([
+      "Setores",
+    ]);
+  });
+
+  it("a chave não basta: o papel também precisa estar no item (VIEWER)", () => {
+    expect(navSection("admin", "VIEWER", WITH_KEY)).toEqual([]);
+    expect(canAccessPath("/turnos", "VIEWER", WITH_KEY)).toBe(false);
+  });
+});
 
 describe("NAV manifest", () => {
   it("covers every known authenticated route exactly once", () => {
@@ -199,7 +259,6 @@ describe("NAV Turnos", () => {
   it("Turnos só para ADMIN, na seção admin logo após Setores", () => {
     const admin = navSection("admin", "ADMIN").map((item) => item.label);
     expect(admin.indexOf("Turnos")).toBe(admin.indexOf("Setores") + 1);
-    expect(NAV.find((n) => n.to === "/turnos")?.roles).toEqual(["ADMIN"]);
     expect(navSection("admin", "SUPERVISOR").map((item) => item.label)).toEqual(
       ["Setores"],
     );
@@ -212,7 +271,6 @@ describe("NAV Níveis", () => {
   it("Níveis só para ADMIN, na seção admin logo após Turnos", () => {
     const admin = navSection("admin", "ADMIN").map((item) => item.label);
     expect(admin.indexOf("Níveis")).toBe(admin.indexOf("Turnos") + 1);
-    expect(NAV.find((n) => n.to === "/niveis")?.roles).toEqual(["ADMIN"]);
     expect(canAccessPath("/niveis", "SUPERVISOR")).toBe(false);
     expect(navLabelFor("/niveis")).toBe("Níveis");
   });

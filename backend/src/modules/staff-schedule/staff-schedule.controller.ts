@@ -11,6 +11,7 @@ import {
   Req,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { RequirePermission } from '../auth/decorators/require-permission.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { BoardQueryDto } from './dto/board-query.dto';
@@ -22,11 +23,12 @@ import { StaffScheduleService } from './staff-schedule.service';
 type AuthRequest = { user: JwtPayload };
 
 /**
- * Escala da equipe. VIEWER é barrado pelo RolesGuard; entre os demais papéis,
- * quem decide é a política do serviço (ADMIN ou gestor de setor, senão 403).
+ * Escala da equipe. As leituras seguem por papel (VIEWER é barrado pelo
+ * RolesGuard); as escritas pedem a permissão `escala.alterar` (PermissionsGuard).
+ * Em ambas, quem decide o alcance é a política do serviço (ADMIN ou gestor do
+ * setor, senão 403).
  */
 @ApiTags('staff-schedule')
-@Roles('ADMIN', 'SUPERVISOR', 'OPERATOR')
 @Controller('internal/staff-schedule')
 export class StaffScheduleController {
   constructor(
@@ -35,12 +37,14 @@ export class StaffScheduleController {
   ) {}
 
   @Get('options')
+  @Roles('ADMIN', 'SUPERVISOR', 'OPERATOR')
   @ApiOperation({ summary: 'Hoje, setores alcançados e turnos ativos' })
   options(@Req() req: AuthRequest) {
     return this.schedule.options(req.user.sub);
   }
 
   @Get('board')
+  @Roles('ADMIN', 'SUPERVISOR', 'OPERATOR')
   @ApiOperation({
     summary: 'Quadro da escala do setor no período (até 42 dias)',
   })
@@ -49,6 +53,7 @@ export class StaffScheduleController {
   }
 
   @Put('users/:userId/schedule')
+  @RequirePermission('escala.alterar')
   @ApiOperation({ summary: 'Grava o ciclo da pessoa (um item por dia)' })
   putSchedule(
     @Param('userId') userId: string,
@@ -59,6 +64,7 @@ export class StaffScheduleController {
   }
 
   @Delete('users/:userId/schedule')
+  @RequirePermission('escala.alterar')
   @HttpCode(204)
   @ApiOperation({
     summary: 'Apaga o ciclo; a pessoa volta ao turno do cadastro',
@@ -68,6 +74,7 @@ export class StaffScheduleController {
   }
 
   @Post('users/:userId/exceptions')
+  @RequirePermission('escala.alterar')
   @ApiOperation({
     summary: 'Cria exceção, recortando as anteriores nos dias em comum',
   })
@@ -80,6 +87,7 @@ export class StaffScheduleController {
   }
 
   @Delete('exceptions/:exceptionId')
+  @RequirePermission('escala.alterar')
   @HttpCode(204)
   @ApiOperation({ summary: 'Remove a exceção inteira' })
   deleteException(

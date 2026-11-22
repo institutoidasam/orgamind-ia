@@ -25,7 +25,15 @@ const TEAM_ERROR_MESSAGES: Record<string, string> = {
   'team_whatsapp.not_cancellable': 'Este envio já saiu ou foi cancelado.',
   'team_whatsapp.dispatch_not_found': 'Envio não encontrado. Atualize a página.',
   'team_whatsapp.too_many_people': 'Os setores escolhidos têm mais de 2000 pessoas. Escolha menos setores.',
+  // B4: o servidor recusa o envio a todos os setores ativos sem `equipe.disparo_amplo`.
+  'team_whatsapp.broad_send_denied':
+    'Você não tem permissão para enviar a todos os setores de uma vez. Desmarque um setor ou peça ao administrador.',
+  // DB10: aqui só `equipe.enviar` barra criar, cancelar e repetir; o texto do servidor, quando vem, vale mais.
+  'auth.permission_denied': 'Você não tem permissão para enviar WhatsApp à equipe.',
 };
+
+/** O texto vem do servidor porque diz qual ação não é permitida (DB10). */
+const SERVER_TEXT_CODES = new Set(['auth.permission_denied']);
 
 export const SKIP_REASON_LABEL = {
   NO_PHONE: 'sem telefone',
@@ -55,6 +63,19 @@ export function retryErrorMessage(code?: string): string {
 /** `code` do corpo de erro da API (ex.: 'team_whatsapp.not_cancellable'), se houver. */
 export async function apiErrorCode(err: unknown): Promise<string | undefined> {
   return (await readApiErrorBody(err))?.code;
+}
+
+/**
+ * Texto do erro de uma ação da equipe: o `detail` do servidor nos códigos de `SERVER_TEXT_CODES`, senão
+ * o de `messageFor` (`teamErrorMessage`, `cancelErrorMessage` ou `retryErrorMessage`) para o código.
+ */
+export async function apiErrorText(
+  err: unknown,
+  messageFor: (code?: string) => string,
+): Promise<string> {
+  const body = await readApiErrorBody(err);
+  if (body?.code && SERVER_TEXT_CODES.has(body.code) && body.detail) return body.detail;
+  return messageFor(body?.code);
 }
 
 const DISCONNECTED_CODES = new Set([

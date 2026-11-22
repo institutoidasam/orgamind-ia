@@ -1,8 +1,11 @@
-import { extractApiError } from '@/lib/api-error';
+import { readApiErrorBody } from '@/lib/api-error';
 
 const FALLBACK_MESSAGE = 'Não foi possível salvar a escala.';
 
 export const SCHEDULE_FORBIDDEN_CODE = 'staff_schedule.forbidden';
+
+/** 403 da permissão por ação: o texto vem do servidor porque diz qual ação não é permitida (DB10). */
+const PERMISSION_DENIED_CODE = 'auth.permission_denied';
 
 const SCHEDULE_ERROR_MESSAGES: Record<string, string> = {
   [SCHEDULE_FORBIDDEN_CODE]: 'Você não pode editar a escala desta pessoa.',
@@ -22,6 +25,8 @@ export async function describeScheduleError(
   error: unknown,
   fallback?: string,
 ): Promise<{ code?: string; message: string }> {
-  const { code } = await extractApiError(error);
+  const body = await readApiErrorBody(error);
+  const code = body?.code;
+  if (code === PERMISSION_DENIED_CODE && body?.detail) return { code, message: body.detail };
   return { code, message: scheduleErrorMessage(code, fallback) };
 }

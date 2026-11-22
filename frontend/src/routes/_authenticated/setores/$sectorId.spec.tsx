@@ -6,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   role: 'ADMIN' as string,
+  permissions: undefined as string[] | undefined,
+  useSector: vi.fn(),
   people: vi.fn(),
   remove: vi.fn(),
   setStatus: vi.fn(),
@@ -20,7 +22,7 @@ vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => vi.fn(),
 }));
 vi.mock('@/stores/auth.store', () => ({
-  useAuthStore: (select: (s: { user: { role: string } }) => unknown) => select({ user: { role: mocks.role } }),
+  useAuthStore: (select: (s: { user: { role: string } }) => unknown) => select({ user: { role: mocks.role, permissions: mocks.permissions } }),
 }));
 vi.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries: mocks.invalidate }) }));
 vi.mock('@/features/sector-people/api', () => ({
@@ -45,7 +47,10 @@ vi.mock('@/features/audit-trail/components/person-history-dialog', () => ({
     open ? <div role="dialog">{`Histórico de ${person.name} (${person.id})`}</div> : null,
 }));
 vi.mock('@/features/internal-admin/api', () => ({
-  useSector: () => ({ data: { id: 's1', name: 'Produção', isActive: true, description: null, channel: null } }),
+  useSector: (id: string | undefined) => {
+    mocks.useSector(id);
+    return { data: { id: 's1', name: 'Produção', code: 'PRD', isActive: true, description: null, manager: { id: 'm1', name: 'Marta', email: null }, channel: null } };
+  },
   useUpdateSector: () => ({ isPending: false, mutateAsync: vi.fn() }),
 }));
 vi.mock('@/features/internal-admin/components/sector-form', () => ({ SectorForm: () => <button>Salvar setor</button> }));
@@ -78,9 +83,66 @@ function forbidden() {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.role = 'ADMIN';
+  mocks.permissions = undefined;
   mocks.remove.mockResolvedValue(undefined);
   mocks.setStatus.mockResolvedValue(undefined);
   loaded([ana, bia]);
+});
+
+describe('/setores/$sectorId: estrutura por estrutura.manter', () => {
+  beforeEach(() => {
+    mocks.role = 'SUPERVISOR';
+    mocks.permissions = ['estrutura.manter', 'pessoas.editar'];
+  });
+
+  it('SUPERVISOR com a chave vê o painel do setor que gerencia, com o formulário', () => {
+    render(<route.component />);
+    expect(screen.getByText('Editar setor')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Salvar setor' })).toBeInTheDocument();
+    expect(screen.getByText('Ana')).toBeInTheDocument();
+  });
+
+  it('em setor que não gerencia (pessoas 403) vê cabeçalho, edita o setor e vê o aviso no lugar da lista', () => {
+    mocks.people.mockReturnValue({ data: undefined, isError: true, error: forbidden() });
+    render(<route.component />);
+    expect(screen.getByRole('heading', { name: 'Produção.' })).toBeInTheDocument();
+    expect(screen.getByText('Gestor: Marta')).toBeInTheDocument();
+    expect(screen.getByText('Editar setor')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Você não gerencia este setor.');
+    expect(screen.queryByText(/Número:/)).toBeNull();
+    expect(screen.queryByText('Pessoas (2)')).toBeNull();
+  });
+
+  it('sem a chave a página fica como hoje: sem painel, sem consultar o setor, 403 só com o aviso', () => {
+    mocks.permissions = ['pessoas.editar'];
+    const { unmount } = render(<route.component />);
+    expect(screen.queryByText('Editar setor')).toBeNull();
+    expect(screen.getByText('Gestor: Marta')).toBeInTheDocument();
+    unmount();
+    mocks.people.mockReturnValue({ data: undefined, isError: true, error: forbidden() });
+    render(<route.component />);
+    expect(screen.getByText('Você não gerencia este setor.')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Produção.' })).toBeNull();
+    expect(screen.queryByText('Editar setor')).toBeNull();
+    expect(mocks.useSector).not.toHaveBeenCalledWith('s1');
+  });
+});
+
+describe('/setores/$sectorId: adicionar pessoas só com pessoas.editar', () => {
+  beforeEach(() => {
+    mocks.role = 'SUPERVISOR';
+    mocks.permissions = ['trilha.consultar'];
+  });
+
+  it.each([
+    ['com pessoas', () => loaded([ana, bia])],
+    ['vazio', () => loaded([])],
+  ])('sem a chave não há "Adicionar pessoas" (setor %s)', (_label, load) => {
+    load();
+    render(<route.component />);
+    expect(screen.queryByRole('button', { name: 'Adicionar pessoas' })).toBeNull();
+    expect(screen.getByText(/Pessoas \(|Ninguém neste setor ainda\./)).toBeInTheDocument();
+  });
 });
 
 describe('/setores/$sectorId: matrícula, selo, busca e filtros', () => {

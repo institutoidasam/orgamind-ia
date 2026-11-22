@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -20,6 +20,10 @@ vi.mock('@/features/organization/api', async (orig) => ({
     mutateAsync: updateMutateAsync,
     isPending: false,
   }),
+}));
+
+vi.mock('@/features/permissions/components/permissions-matrix', () => ({
+  PermissionsMatrix: () => <div>matriz de permissões</div>,
 }));
 
 import { Route } from './configuracoes';
@@ -45,6 +49,20 @@ function wrap(ui: React.ReactElement) {
     </QueryClientProvider>,
   );
 }
+
+describe('/configuracoes — card Permissões', () => {
+  it('aparece abaixo de Organização, com o texto de apoio e a matriz', () => {
+    useOrganizationMock.mockReturnValue({ data: ORG, isLoading: false, isError: false });
+    wrap(<ConfiguracoesPage />);
+
+    const titles = screen.getAllByText(/^(Organização|Permissões)$/).map((node) => node.textContent);
+    expect(titles).toEqual(['Organização', 'Permissões']);
+    expect(document.body.textContent).toContain(
+      'Defina o que Supervisor e Operador podem fazer. Administrador tem todas as permissões e Leitura nenhuma; essas colunas não mudam.',
+    );
+    expect(within(screen.getByTestId('permissions-card')).getByText('matriz de permissões')).toBeInTheDocument();
+  });
+});
 
 describe('/configuracoes — identidade da organização', () => {
   beforeEach(() => {

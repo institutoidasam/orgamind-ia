@@ -12,6 +12,11 @@ import {
 } from './team-whatsapp.repository';
 import { StaffScheduleRepository } from '../staff-schedule/staff-schedule.repository';
 import { dayMembers } from './team-whatsapp.roster';
+import { defaultPermissionsFor } from '../../shared/authz/permissions';
+import {
+  actorWith,
+  permissionsWith,
+} from '../../shared/authz/actor.test-fixtures';
 import {
   NO_CHANNEL,
   NO_SECTOR,
@@ -70,6 +75,43 @@ async function criarAlvoEmSetorDesativado() {
   return { off, user };
 }
 
+describe('setores ativos da organização', () => {
+  it('listActiveSectorIds traz os ativos de qualquer gestor e ignora o setor inativo', async () => {
+    const ativo = await prisma.sector.create({
+      data: { name: 'Ativo amplo', code: 'AMP1' },
+    });
+    const inativo = await prisma.sector.create({
+      data: { name: 'Inativo amplo', code: 'AMP2', isActive: false },
+    });
+    const ids = await repo.listActiveSectorIds();
+    expect(ids).toContain(ativo.id);
+    expect(ids).not.toContain(inativo.id);
+  }, 60_000);
+});
+
+describe('ator com permissões', () => {
+  it('findActor traz as permissões efetivas lidas a cada chamada', async () => {
+    const op = await prisma.user.create({
+      data: { email: 'perm@test.local', password: 'x', role: 'OPERATOR' },
+    });
+    const where = {
+      role_key: { role: 'OPERATOR' as const, key: 'equipe.disparo_amplo' },
+    };
+    await expect(repo.findActor(op.id)).resolves.toMatchObject({
+      permissions: defaultPermissionsFor('OPERATOR'),
+    });
+    await prisma.rolePermission.update({ where, data: { granted: false } });
+    try {
+      const actor = await repo.findActor(op.id);
+      expect(actor?.permissions).toEqual(
+        permissionsWith('OPERATOR', { revoke: ['equipe.disparo_amplo'] }),
+      );
+    } finally {
+      await prisma.rolePermission.update({ where, data: { granted: true } });
+    }
+  }, 60_000);
+});
+
 describe('TeamWhatsappRepository — ator e alvo (Postgres real)', () => {
   it('findActor ignora setor desativado em managedSectorIds', async () => {
     const boss = await prisma.user.create({
@@ -87,10 +129,7 @@ describe('TeamWhatsappRepository — ator e alvo (Postgres real)', () => {
       },
     });
     await expect(repo.findActor(boss.id)).resolves.toEqual({
-      id: boss.id,
-      role: 'OPERATOR',
-      isActive: true,
-      hasAccess: true,
+      ...actorWith('OPERATOR', { id: boss.id }),
       managedSectorIds: [s1.id],
     });
     await expect(repo.findActor('missing')).resolves.toBeNull();

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildSectorTarget, eligibleMembers, filterByLevel, leftOutPeople, noScheduleCount, offMembers, unverifiedCount,
+  buildSectorTarget, canReceive, eligibleMembers, filterByLevel, isNotAuthorized, leftOutPeople, noScheduleCount,
+  offMembers, unverifiedCount,
 } from './member-filter';
 import type { RosterMember } from './schemas';
 
@@ -12,8 +13,8 @@ const NONE: Situation = { kind: 'NONE' };
 
 function member(id: string, situation: Situation, extra: Partial<RosterMember> = {}): RosterMember {
   return {
-    id, name: id, email: `${id}@x.test`, phoneE164: `+55929${id.length}`, isActive: true,
-    jobTitle: null, fromOtherSector: false, situation, level: null, ...extra,
+    id, name: id, email: `${id}@x.test`, phoneE164: `+55929${id.length}`, hasPhone: true, phoneMasked: '•••• 0000',
+    isActive: true, jobTitle: null, fromOtherSector: false, situation, level: null, ...extra,
   };
 }
 
@@ -26,6 +27,27 @@ const members = [
   member('lia', work('noite'), { isActive: false }),
 ];
 const ids = (list: RosterMember[]) => list.map((m) => m.id);
+const SEM_TELEFONE = { phoneE164: null, hasPhone: false, phoneMasked: null };
+
+describe('telefone pelo hasPhone (DB8)', () => {
+  const semChave = { phoneE164: null, phoneMasked: '•••• 7777' };
+
+  it('sem a chave: não autorizado continua no grupo próprio e a prévia não marca no_phone', () => {
+    const ana = member('ana', work('noite'), semChave);
+    const caio = member('caio', work('noite'), { ...semChave, contactAuthorization: 'NAO_AUTORIZADO' });
+    expect(canReceive(ana)).toBe(true);
+    expect(canReceive(caio)).toBe(false);
+    expect(isNotAuthorized(caio)).toBe(true);
+    expect(leftOutPeople([ana, caio], null)).toEqual([{ name: 'caio', reason: 'not_authorized' }]);
+  });
+
+  it('hasPhone false é sem telefone: não recebe, não é "não autorizado" e a prévia marca no_phone', () => {
+    const bia = member('bia', work('noite'), { ...SEM_TELEFONE, contactAuthorization: 'NAO_AUTORIZADO' });
+    expect(canReceive(bia)).toBe(false);
+    expect(isNotAuthorized(bia)).toBe(false);
+    expect(leftOutPeople([bia], null)).toEqual([{ name: 'bia', reason: 'no_phone' }]);
+  });
+});
 
 describe('autorização do contato', () => {
   const bloqueado = member('caio', work('noite'), { contactAuthorization: 'NAO_AUTORIZADO' });
@@ -113,7 +135,7 @@ describe('buildSectorTarget', () => {
   });
 
   it('todos os turnos com folga: sem shiftIds, sem userIds, e sem telefone fica de fora', () => {
-    const semFone = member('pedro', work('noite'), { phoneE164: null });
+    const semFone = member('pedro', work('noite'), SEM_TELEFONE);
     const target = buildSectorTarget({
       ...base, sectors: [{ id: 's1', name: 'Produção', members: [...members, semFone] }],
       shiftIds: [], includeOff: true, selectedIds: null,
@@ -161,7 +183,7 @@ describe('buildSectorTarget: setores e níveis', () => {
 describe('leftOutPeople', () => {
   const list = [
     member('ana', work('noite')),
-    member('bruno', work('noite'), { phoneE164: null }),
+    member('bruno', work('noite'), SEM_TELEFONE),
     member('caio', work('noite')),
   ];
 

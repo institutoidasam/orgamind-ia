@@ -10,6 +10,7 @@ import { UsersService } from './users.service';
 import { AuditService } from '../../shared/audit/audit.service';
 import { AuditRepository } from '../../shared/audit/audit.repository';
 import { rethrowRegistrationConflict } from './person-record';
+import type { AssignmentPatch } from './assignment-timeline';
 import {
   HISTORY_KINDS,
   seedHistory,
@@ -74,6 +75,14 @@ const probe = (tx: Prisma.TransactionClient, entity: string) =>
   tx.auditEvent.create({ data: { action: 'user.profile_updated', entity } });
 
 const noTrail = () => Promise.resolve();
+// Setor, turno e nível só pelo parâmetro `assignment` (DV15), com hoje fixo.
+const assignment = (patch: AssignmentPatch) => ({
+  patch,
+  today: '2026-11-19',
+  actorId: null,
+});
+const changeAssignment = (id: string, patch: AssignmentPatch) =>
+  repo.updateWithLastAdminGuard(id, {}, undefined, assignment(patch));
 const failingTrail = (tx: Prisma.TransactionClient, entity: string) =>
   probe(tx, entity).then(() => Promise.reject(new Error('falhou')));
 
@@ -618,9 +627,7 @@ describe('UsersRepository turno (real Postgres)', () => {
     });
     await expect(repo.findShiftForAssignment('shift_nope')).resolves.toBeNull();
 
-    await repo.updateWithLastAdminGuard(withShift.id, {
-      workShift: { disconnect: true },
-    });
+    await changeAssignment(withShift.id, { shiftId: null });
 
     await expect(repo.findById(withShift.id)).resolves.toMatchObject({
       shiftId: null,
@@ -654,11 +661,9 @@ const FAKE_HASH = 'argon2id-fake';
 // Pessoa sem acesso como o UsersService grava (D1): o CHECK User_access_consistent aceita.
 const createPerson = (name: string, levelId?: string) =>
   repo.createWithAudit(
-    {
-      ...personData(name),
-      ...(levelId ? { level: { connect: { id: levelId } } } : {}),
-    },
+    personData(name),
     async () => {},
+    assignment(levelId ? { levelId } : {}),
   );
 
 describe('UsersRepository pessoas sem acesso e nível (real Postgres)', () => {

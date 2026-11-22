@@ -56,6 +56,7 @@ function setup(
       { id: 'user_ana', name: 'Ana', registration: 'A-1' },
     ]),
     findSubjectIdsByQuery: vi.fn().mockResolvedValue([]),
+    findAssignments: vi.fn().mockResolvedValue([]),
   };
   const service = new AuditTrailService(
     repo as unknown as AuditTrailRepository,
@@ -97,6 +98,129 @@ const nameParts = (page: AuditTrailPage) =>
     item.changes?.[0]?.before,
     item.changes?.[0]?.after,
   ]);
+
+const NOT_FOUND = { status: 404, code: 'audit_trail.person_not_found' };
+const ref = (id: string, name: string) => ({ id, name });
+
+/** Como o repositório lê (datas `@db.Date` à meia-noite UTC), com um campo fora do contrato. */
+const ASSIGNMENT_ROWS = [
+  {
+    id: 'asg_open',
+    validFrom: new Date('2026-06-01T00:00:00.000Z'),
+    validTo: null,
+    sector: ref(SECTOR, 'Operação'),
+    shift: ref('shift_day', 'Diurno'),
+    level: null,
+    recordedById: ADMIN.id,
+  },
+  {
+    id: 'asg_old',
+    validFrom: null,
+    validTo: new Date('2026-05-31T00:00:00.000Z'),
+    sector: null,
+    shift: null,
+    level: ref('level_full', 'Pleno'),
+    recordedById: null,
+  },
+];
+
+const ASSIGNMENTS = [
+  {
+    id: 'asg_open',
+    sector: ref(SECTOR, 'Operação'),
+    shift: ref('shift_day', 'Diurno'),
+    level: null,
+    from: '2026-06-01',
+    to: null,
+  },
+  {
+    id: 'asg_old',
+    sector: null,
+    shift: null,
+    level: ref('level_full', 'Pleno'),
+    from: null,
+    to: '2026-05-31',
+  },
+];
+
+describe('AuditTrailService.personAssignments — alcance (DV13)', () => {
+  it('SUPERVISOR vê os vínculos de quem alcança e recebe 403 fora do alcance', async () => {
+    const inReach = setup({ actor: SUPERVISOR });
+    inReach.repo.findAssignments.mockResolvedValue(ASSIGNMENT_ROWS);
+
+    await expect(
+      inReach.service.personAssignments(SUPERVISOR.id, 'user_ana'),
+    ).resolves.toEqual({ items: ASSIGNMENTS });
+    expect(inReach.repo.findAssignments).toHaveBeenCalledWith('user_ana');
+
+    for (const sectorId of ['sector_it', null]) {
+      const outside = setup({ actor: SUPERVISOR, sectorId });
+      await expect(
+        outside.service.personAssignments(SUPERVISOR.id, 'user_ana'),
+        String(sectorId),
+      ).rejects.toMatchObject(FORBIDDEN);
+      expect(outside.repo.findAssignments).not.toHaveBeenCalled();
+    }
+  });
+
+  it('pessoa inexistente: 404 para quem vê qualquer pessoa, 403 para os demais', async () => {
+    const cases = [
+      [ADMIN, NOT_FOUND],
+      [SUPERVISOR, FORBIDDEN],
+    ] as const;
+    for (const [who, error] of cases) {
+      const { repo, service } = setup({ actor: who });
+      repo.findPerson.mockResolvedValue(null);
+
+      await expect(
+        service.personAssignments(who.id, 'user_x'),
+        who.role,
+      ).rejects.toMatchObject(error);
+      expect(repo.findAssignments).not.toHaveBeenCalled();
+    }
+  });
+});
+
+/** `ok` ou `status code` do erro, para comparar as duas rotas da ficha. */
+const outcome = (pending: Promise<unknown>): Promise<string> =>
+  pending.then(
+    () => 'ok',
+    (error: { status: number; code: string }) =>
+      `${error.status} ${error.code}`,
+  );
+
+const DENIED = '403 audit_trail.forbidden';
+const MISSING = '404 audit_trail.person_not_found';
+type AccessCase = [string, TeamActor | null, string | null, boolean, string];
+const SAME_ACCESS: AccessCase[] = [
+  ['ADMIN, pessoa sem setor', ADMIN, null, true, 'ok'],
+  ['SUPERVISOR no alcance', SUPERVISOR, SECTOR, true, 'ok'],
+  ['SUPERVISOR fora do alcance', SUPERVISOR, 'sector_it', true, DENIED],
+  ['SUPERVISOR, pessoa sem setor', SUPERVISOR, null, true, DENIED],
+  ['SUPERVISOR, inexistente', SUPERVISOR, SECTOR, false, DENIED],
+  ['ADMIN, inexistente', ADMIN, SECTOR, false, MISSING],
+  ['VIEWER', actor('VIEWER'), SECTOR, true, DENIED],
+  ['OPERATOR gestor', actor('OPERATOR', [SECTOR]), SECTOR, true, DENIED],
+  ['ator inexistente', null, SECTOR, true, DENIED],
+];
+
+describe('AuditTrailService — Histórico e Vínculos com a mesma regra de acesso', () => {
+  it('personHistory continua com as mesmas respostas', async () => {
+    for (const [label, who, sectorId, exists, expected] of SAME_ACCESS) {
+      const { repo, service } = setup({ actor: who, sectorId });
+      if (!exists) repo.findPerson.mockResolvedValue(null);
+
+      const history = await outcome(
+        service.personHistory('user_x', 'user_ana', PAGE),
+      );
+      const assignments = await outcome(
+        service.personAssignments('user_x', 'user_ana'),
+      );
+
+      expect([history, assignments], label).toEqual([expected, expected]);
+    }
+  });
+});
 
 describe('AuditTrailService.personHistory — nome que é telefone (D11)', () => {
   it('sem telefone.ver_completo: pessoa, autor e valores do campo name saem mascarados; nome normal intacto', async () => {

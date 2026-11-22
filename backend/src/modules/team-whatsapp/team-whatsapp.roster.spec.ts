@@ -1,15 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
+  dayMembers,
   eligibleAcross,
   eligibleFor,
   passesLevel,
   sectorTargetLabel,
   shiftsLabel,
   toRosterMember,
+  toRosterMembers,
   type DayMember,
   type DispatchFilter,
   type LevelFilter,
 } from './team-whatsapp.roster';
+import { withAssignmentOn } from './team-member-assignment';
 import { PHONE, dayPerson } from './team-whatsapp.test-fixtures';
 
 type LabelInput = Parameters<typeof sectorTargetLabel>[0];
@@ -23,6 +26,42 @@ const label = (over: Partial<LabelInput>): string =>
     selected: null,
     ...over,
   });
+
+// Lote C, T6 (GV7): a lista de data passada só troca as linhas; nome e telefone
+// continuam saindo pelo mapeamento do roster, sem mudança nele.
+describe('lista do dia de data passada — nome e telefone pela permissão (GV7)', () => {
+  const NAME_PHONE = '+55 92 99876-5432';
+  const OTHER_PHONE = '+55 92 91111-0000';
+  // Rui hoje está em s9; ontem estava em s1 pela linha de vínculo.
+  const rui = withAssignmentOn(
+    dayPerson({ id: 'u-rui', name: NAME_PHONE, sectorId: 's9' }),
+    {
+      sectorId: 's1',
+      sector: { isActive: true },
+      shiftId: null,
+      shift: null,
+      levelId: null,
+      level: null,
+    },
+  );
+  const ana = dayPerson({ id: 'u-ana', name: OTHER_PHONE });
+  const roster = (fullPhone: boolean) =>
+    toRosterMembers(
+      dayMembers({ sectorId: 's1', date: '2026-10-20', people: [rui, ana] }),
+      { fullPhone },
+    ).map((m) => [m.id, m.name, m.phoneE164, m.phoneMasked, m.fromOtherSector]);
+
+  it('quem entra pela data passada sai com nome e telefone por nameView e phoneView, como os demais membros', () => {
+    expect(roster(false)).toEqual([
+      ['u-ana', '•••• 0000', null, '•••• 4567', false],
+      ['u-rui', '•••• 5432', null, '•••• 4567', false],
+    ]);
+    expect(roster(true)).toEqual([
+      ['u-ana', OTHER_PHONE, PHONE, '•••• 4567', false],
+      ['u-rui', NAME_PHONE, PHONE, '•••• 4567', false],
+    ]);
+  });
+});
 
 describe('toRosterMember — telefone por permissão (CB5)', () => {
   const LINKED = '+5592988887777';

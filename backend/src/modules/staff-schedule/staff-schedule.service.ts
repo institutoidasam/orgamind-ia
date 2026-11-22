@@ -6,7 +6,13 @@ import type {
   StaffScheduleOptions,
 } from '../../schemas/contracts/staff-schedule.schema';
 import type { TeamActor } from '../team-whatsapp/team-whatsapp.policy';
-import { buildBoardRows, citedRefs, type BoardPersonInput } from './board';
+import type { AssignmentLine } from '../users/assignment-timeline';
+import {
+  buildBoardRows,
+  citedRefs,
+  selectBoardPeople,
+  type BoardPersonInput,
+} from './board';
 import { addDays, diffDays, todayIn, type CivilDate } from './civil-date';
 import { invalidPeriod, scheduleForbidden } from './staff-schedule.errors';
 import {
@@ -16,6 +22,7 @@ import {
 } from './staff-schedule.policy';
 import {
   StaffScheduleRepository,
+  type BoardPersonRow,
   type ScheduleData,
 } from './staff-schedule.repository';
 
@@ -28,6 +35,17 @@ const NO_SCHEDULE: ScheduleData = {
   schedule: null,
   exceptions: [],
 };
+const NO_LINES: ReadonlyMap<string, AssignmentLine[]> = new Map();
+
+/**
+ * Fim do trecho PASSADO do período, `min(to, ontem)`; null quando `from` já é
+ * hoje ou futuro (DV9: o quadro lê o cadastro e não consulta as linhas).
+ */
+function pastEnd(from: CivilDate, to: CivilDate, today: CivilDate) {
+  if (from >= today) return null;
+  const yesterday = addDays(today, -1);
+  return to < yesterday ? to : yesterday;
+}
 
 /** Datas de from..to (inclusivo); 422 se from > to ou mais de 42 dias. */
 function periodDates(from: CivilDate, to: CivilDate): CivilDate[] {
@@ -73,16 +91,21 @@ export class StaffScheduleService {
   }
 
   async board(actorId: string, query: BoardQuery): Promise<StaffScheduleBoard> {
+    const today = todayIn(new Date());
     const actor = await this.viewer(actorId);
     await this.assertSectorInReach(actor, query.sectorId);
     const dates = periodDates(query.from, query.to);
-    const { people, truncated } = await this.loadPeople(query);
-    const rows = buildBoardRows({
-      actor,
-      sectorId: query.sectorId,
+    const loaded = await this.loadPeople(query, today);
+    const { sectorId } = query;
+    const { visitorIds } = loaded;
+    const people = selectBoardPeople({
+      sectorId,
       dates,
-      people,
+      today,
+      people: loaded.people,
+      visitorIds,
     });
+    const rows = buildBoardRows({ actor, sectorId, dates, people, today });
     const exceptions = visibleExceptions(actor, people);
     const refs = citedRefs(rows, exceptions);
     const [sectors, shifts] = await Promise.all([
@@ -90,15 +113,15 @@ export class StaffScheduleService {
       this.repo.findShiftsByIds(refs.shiftIds),
     ]);
     return {
-      sectorId: query.sectorId,
+      sectorId,
       from: query.from,
       to: query.to,
-      today: todayIn(new Date()),
+      today,
       sectors,
       shifts,
       rows,
       exceptions,
-      truncated,
+      truncated: loaded.truncated,
     };
   }
 
@@ -120,32 +143,64 @@ export class StaffScheduleService {
   }
 
   /**
-   * Membros ativos do setor principal, depois visitantes do período, com a
-   * escala; no máximo `BOARD_PEOPLE_LIMIT` (pede um a mais para saber se cortou).
+   * Candidatos ao quadro, sem repetir, na ordem membros do cadastro, vinculados
+   * no passado e visitantes (a consulta de vínculo só roda se `from` < hoje);
+   * pede um a mais por consulta para saber se cortou.
+   */
+  private async listCandidates(
+    query: BoardQuery,
+    past: CivilDate | null,
+  ): Promise<{ everyone: BoardPersonRow[]; visitorIds: string[] }> {
+    const { sectorId, from, to } = query;
+    const probe = BOARD_PEOPLE_LIMIT + 1;
+    const [members, visitorIds, assignedIds] = await Promise.all([
+      this.repo.listSectorPeople(sectorId, probe),
+      this.repo.listVisitorIds(sectorId, from, to, probe),
+      past === null
+        ? Promise.resolve<string[]>([])
+        : this.repo.listAssignedUserIds(sectorId, from, past, probe),
+    ]);
+    const known = new Set(members.map((person) => person.id));
+    const extraIds = [...new Set([...assignedIds, ...visitorIds])].filter(
+      (id) => !known.has(id),
+    );
+    const extra =
+      extraIds.length > 0 ? await this.repo.listPeopleByIds(extraIds) : [];
+    return { everyone: [...members, ...extra], visitorIds };
+  }
+
+  /**
+   * Membros ativos do setor principal, vinculados ao setor no trecho passado e
+   * visitantes do período, com a escala e as linhas de vínculo; no máximo
+   * `BOARD_PEOPLE_LIMIT` (o corte vale para a união). Quem entra de fato no
+   * quadro sai de `selectBoardPeople`.
    */
   private async loadPeople(
     query: BoardQuery,
-  ): Promise<{ people: BoardPersonInput[]; truncated: boolean }> {
-    const { sectorId, from, to } = query;
-    const probe = BOARD_PEOPLE_LIMIT + 1;
-    const [members, visitorIds] = await Promise.all([
-      this.repo.listSectorPeople(sectorId, probe),
-      this.repo.listVisitorIds(sectorId, from, to, probe),
-    ]);
-    const visitors =
-      visitorIds.length > 0 ? await this.repo.listPeopleByIds(visitorIds) : [];
-    const everyone = [...members, ...visitors];
+    today: CivilDate,
+  ): Promise<{
+    people: BoardPersonInput[];
+    visitorIds: ReadonlySet<string>;
+    truncated: boolean;
+  }> {
+    const { from, to } = query;
+    const past = pastEnd(from, to, today);
+    const { everyone, visitorIds } = await this.listCandidates(query, past);
     const people = everyone.slice(0, BOARD_PEOPLE_LIMIT);
-    const data = await this.repo.loadScheduleData(
-      people.map((person) => person.id),
-      from,
-      to,
-    );
+    const ids = people.map((person) => person.id);
+    const [data, lines] = await Promise.all([
+      this.repo.loadScheduleData(ids, from, to),
+      past === null
+        ? Promise.resolve(NO_LINES)
+        : this.repo.loadAssignmentLines(ids, from, past),
+    ]);
     return {
       truncated: everyone.length > BOARD_PEOPLE_LIMIT,
+      visitorIds: new Set(visitorIds),
       people: people.map((person) => ({
         ...person,
         ...(data.get(person.id) ?? NO_SCHEDULE),
+        assignments: lines.get(person.id) ?? [],
       })),
     };
   }

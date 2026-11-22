@@ -22,6 +22,7 @@ import {
   registrationTaken,
 } from './users.errors';
 import type {
+  AssignmentChange,
   PersonDeleteTrail,
   PersonUpdateTrail,
   UserListFilters,
@@ -37,6 +38,9 @@ import {
   type AuthorizationRow,
 } from './person-record';
 import { personAuditChanges, personChangeAction } from './person-audit';
+import type { AssignmentPatch, AssignmentValues } from './assignment-timeline';
+import { isOpenAssignmentConflict } from './assignment-writer';
+import { todayIn } from '../staff-schedule/civil-date';
 import type {
   ContactAuthorization,
   ContactAuthorizationInput,
@@ -157,14 +161,38 @@ function normalizeJobTitle(value: string | null | undefined): string | null {
   return value?.trim() || null;
 }
 
-// Relação opcional no PATCH: id = liga; null (ou vazio) = desliga.
-function relationPatch(id: string | null) {
-  return id ? { connect: { id } } : { disconnect: true };
+// Vínculo da criação (DV6): os três sempre; ausente, null ou vazio = null.
+// Nunca vai em `data`: só pelo parâmetro do repositório (DV5/DV15).
+function creationAssignment(input: {
+  sectorId?: string | null;
+  shiftId?: string | null;
+  levelId?: string | null;
+}): AssignmentValues {
+  return {
+    sectorId: input.sectorId || null,
+    shiftId: input.shiftId || null,
+    levelId: input.levelId || null,
+  };
 }
 
-// Relação opcional no cadastro: id = liga; ausente/null = campo omitido.
-function connectIfGiven(id: string | null | undefined) {
-  return id ? { connect: { id } } : undefined;
+// Vínculo do PATCH (CV2): só as chaves presentes (ausente = mantém); null ou
+// vazio = limpa; nenhuma chave de vínculo = undefined (o vínculo não é tocado).
+function assignmentPatch(input: UserPatch): AssignmentPatch | undefined {
+  const patch: AssignmentPatch = {};
+  if (input.sectorId !== undefined) patch.sectorId = input.sectorId || null;
+  if (input.shiftId !== undefined) patch.shiftId = input.shiftId || null;
+  if (input.levelId !== undefined) patch.levelId = input.levelId || null;
+  return Object.keys(patch).length > 0 ? patch : undefined;
+}
+
+// Troca de vínculo da edição: o "hoje" de Manaus calculado uma vez por
+// operação (DV7); sem chave de vínculo no PATCH, sem assignment.
+function assignmentChange(
+  input: UserPatch,
+  actorId: string,
+): AssignmentChange | undefined {
+  const patch = assignmentPatch(input);
+  return patch && { patch, today: todayIn(new Date()), actorId };
 }
 
 // D1: sem acesso grava SEMPRE VIEWER, sem e-mail/senha e sem troca de senha
@@ -183,9 +211,6 @@ function personWithoutAccessData(
     mustChangePassword: false,
     phoneE164: linked.phoneE164,
     contact: { connect: { id: linked.contactId } },
-    sector: connectIfGiven(input.sectorId),
-    level: connectIfGiven(input.levelId),
-    workShift: connectIfGiven(input.shiftId),
     jobTitle: normalizeJobTitle(input.jobTitle),
     ...linked.record,
     createdBy: { connect: { id: actorId } },
@@ -353,25 +378,31 @@ export class UsersService {
    * Grava a pessoa e a trilha da criação na mesma transação (GC1): `action` é
    * `user.invited` (com acesso) ou `user.person_created`. A trilha leva o
    * retrato da pessoa com telefone e e-mail mascarados (GC2), sem senha e sem
-   * metadata com e-mail.
+   * metadata com e-mail. Setor, turno e nível vão só em `values`: o
+   * repositório abre a linha de vínculo com início = hoje (DV6/DV7).
    */
   private createWithTrail(
     data: Prisma.UserCreateInput,
     action: 'user.invited' | 'user.person_created',
     actorId: string,
+    values: AssignmentValues,
   ): Promise<UserSummary> {
+    const assignment = { patch: values, today: todayIn(new Date()), actorId };
     return this.repo
-      .createWithAudit(data, (tx, row, userId) =>
-        this.audit.recordChange(tx, {
-          action,
-          entity: 'User',
-          entityId: userId,
-          category: 'PERSON',
-          subjectUserId: userId,
-          reason: null,
-          changes: personAuditChanges(null, row),
-          actorId,
-        }),
+      .createWithAudit(
+        data,
+        (tx, row, userId) =>
+          this.audit.recordChange(tx, {
+            action,
+            entity: 'User',
+            entityId: userId,
+            category: 'PERSON',
+            subjectUserId: userId,
+            reason: null,
+            changes: personAuditChanges(null, row),
+            actorId,
+          }),
+        assignment,
       )
       .catch(rethrowPhoneConflict)
       .catch(rethrowRegistrationConflict);
@@ -405,23 +436,17 @@ export class UsersService {
         email: input.email,
         name: input.name ?? null,
         role: input.role,
-        ...(input.sectorId
-          ? { sector: { connect: { id: input.sectorId } } }
-          : {}),
         password,
         mustChangePassword: true,
         phoneE164: linked.phoneE164,
         contact: { connect: { id: linked.contactId } },
         jobTitle: normalizeJobTitle(input.jobTitle),
-        ...(input.shiftId
-          ? { workShift: { connect: { id: input.shiftId } } }
-          : {}),
-        level: connectIfGiven(input.levelId),
         ...linked.record,
         createdBy: { connect: { id: createdById } },
       },
       'user.invited',
       createdById,
+      creationAssignment(input),
     );
   }
 
@@ -452,6 +477,7 @@ export class UsersService {
       }),
       'user.person_created',
       actorId,
+      creationAssignment(input),
     );
     return toUserSummary(user);
   }
@@ -557,6 +583,8 @@ export class UsersService {
       ...recordUpdateData(input, actorId, user),
       ...(await this.phoneUpdate(user, input.phone, input.name)),
     };
+    // Setor, turno e nível só pelo parâmetro `assignment` (DV5/DV15).
+    const assignment = assignmentChange(input, actorId);
 
     // Transactional update with last-admin guard. Two concurrent demotions of
     // the only two admins would otherwise both pass a separate countAdmins
@@ -566,6 +594,7 @@ export class UsersService {
         id,
         data,
         this.updateTrail(id, actorId, meta),
+        assignment,
       ),
     );
     if ('lastAdmin' in result) {
@@ -701,18 +730,9 @@ export class UsersService {
     return {
       ...(input.name !== undefined ? { name: input.name.trim() } : {}),
       ...(input.role !== undefined ? { role: input.role } : {}),
-      ...(input.sectorId !== undefined
-        ? { sector: relationPatch(input.sectorId) }
-        : {}),
       ...(input.isActive !== undefined ? { isActive: input.isActive } : {}),
-      ...(input.shiftId !== undefined
-        ? { workShift: relationPatch(input.shiftId) }
-        : {}),
       ...(input.jobTitle !== undefined
         ? { jobTitle: normalizeJobTitle(input.jobTitle) }
-        : {}),
-      ...(input.levelId !== undefined
-        ? { level: relationPatch(input.levelId) }
         : {}),
       ...(changesIdentity ? { sessionVersion: { increment: 1 } } : {}),
     };
@@ -747,9 +767,12 @@ export class UsersService {
     try {
       return await operation();
     } catch (error) {
+      // Tentativas esgotadas: P2034, ou P2002 da linha aberta de vínculo (DV7).
+      // Mesmo 409 nos dois; o texto fala de administrador (o front lê o código).
       if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2034'
+        (error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === 'P2034') ||
+        isOpenAssignmentConflict(error)
       ) {
         throw new ConflictError(
           'Concurrent administrator change, retry the request',

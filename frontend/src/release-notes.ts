@@ -31,6 +31,19 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.11.19.2',
+    date: '2026-11-19',
+    title: 'Histórico de vínculos',
+    items: [
+      {
+        text: 'Trocar o setor, o turno ou o nível de alguém não muda mais o passado: a escala de dias anteriores e os envios antigos continuam mostrando onde a pessoa estava. A troca vale a partir de hoje, e o histórico de cada pessoa aparece em Histórico, na seção Vínculos.',
+      },
+      {
+        text: 'No WhatsApp da equipe, a lista de uma data que já passou mostra quem estava no setor naquele dia. Isso inclui o atalho do turno da noite em andamento, que usa a data de ontem.',
+      },
+    ],
+  },
+  {
     version: '2026.11.19.1',
     date: '2026-11-19',
     title: 'Permissões por ação',

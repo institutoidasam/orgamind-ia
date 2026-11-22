@@ -48,6 +48,10 @@ const invite = (extra: { shiftId?: string | null } = {}) =>
     'admin',
   );
 const patchData = () => repo.updateWithLastAdminGuard.mock.calls[0]?.[1];
+// O turno vai só no parâmetro `assignment` do repositório (DV5).
+const createdLink = (call: number) =>
+  repo.createWithAudit.mock.calls[call]?.[2]?.patch;
+const patchLink = () => repo.updateWithLastAdminGuard.mock.calls[0]?.[3]?.patch;
 
 beforeEach(() => {
   repo = mockDeep();
@@ -75,12 +79,13 @@ describe('UsersService — turno (shiftId) no cadastro e na edição', () => {
     await invite({ shiftId: 'shift_first' });
     await invite();
     await svc.updateUser('u1', { shiftId: 'shift_first' }, 'admin');
-    const connect = { workShift: { connect: { id: 'shift_first' } } };
-    expect(repo.createWithAudit.mock.calls[0][0]).toMatchObject(connect);
+    expect(createdLink(0)).toMatchObject({ shiftId: 'shift_first' });
+    expect(createdLink(1)).toMatchObject({ shiftId: null });
     expect(repo.createWithAudit.mock.calls[1][0]).not.toHaveProperty(
       'workShift',
     );
-    expect(patchData()).toEqual(connect);
+    expect(patchData()).toEqual({});
+    expect(patchLink()).toEqual({ shiftId: 'shift_first' });
     expect(repo.findShiftForAssignment.mock.calls).toEqual([
       ['shift_first'],
       ['shift_first'],
@@ -107,11 +112,13 @@ describe('UsersService — turno (shiftId) no cadastro e na edição', () => {
     expect(patchData()).toMatchObject({ name: 'Ana Maria' });
     expect(patchData()).not.toHaveProperty('workShift');
     expect(patchData()).not.toHaveProperty('shiftId');
+    expect(patchLink()).toBeUndefined();
   });
 
   it('PATCH shiftId null limpa e não revoga sessão', async () => {
     await svc.updateUser('u1', { shiftId: null }, 'admin');
-    expect(patchData()).toEqual({ workShift: { disconnect: true } });
+    expect(patchData()).toEqual({});
+    expect(patchLink()).toEqual({ shiftId: null });
     expect(repo.findShiftForAssignment.mock.calls).toEqual([]);
     expect(refresh.revokeAllForUser.mock.calls).toEqual([]);
   });

@@ -137,6 +137,7 @@ model User {
   teamWhatsappRecipients TeamWhatsappRecipient[] @relation("TeamWhatsappRecipientUser")
   staffSchedule         StaffSchedule?
   staffExceptions       StaffScheduleException[]
+  assignments           UserAssignment[]
 
   @@index([shiftId])
   @@index([levelId])
@@ -199,6 +200,7 @@ model Sector {
   recipientLinks      InternalRecipient[]
   numbers             SectorNumber[]
   staffExceptions     StaffScheduleException[]
+  assignmentHistory   UserAssignment[]
   // Número da área (C1): o canal pelo qual a equipe dela recebe os recados. Só
   // vale se o canal estiver ativo e for GOZAP/EVOLUTION (effectiveChannel).
   // SetNull: remover o canal deixa a área sem número, sem apagar a área.
@@ -1652,6 +1654,7 @@ model Shift {
   teamRecipients TeamWhatsappRecipient[]
   scheduleDays    StaffScheduleDay[]
   staffExceptions StaffScheduleException[]
+  assignmentHistory UserAssignment[]
 }
 
 // Nível hierárquico da pessoa (Coordenador, Líder…). Editável só pelo ADMIN;
@@ -1665,6 +1668,37 @@ model StaffLevel {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   users     User[]
+  assignmentHistory UserAssignment[]
+}
+
+// Histórico de vínculo da pessoa (Lote C, DV1): setor, turno e nível com início
+// e fim em datas civis. Linha aberta (`validTo` nulo) = vínculo atual, igual à
+// ficha; `validFrom` nulo = anterior ao histórico (só a migração). Setor, turno e
+// nível com Restrict (DV3): o SetNull apagaria o passado das linhas fechadas.
+// `recordedById` sem FK, como `AuditEvent.actorId`; nulo = migração.
+model UserAssignment {
+  id           String      @id @default(cuid())
+  userId       String
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sectorId     String?
+  sector       Sector?     @relation(fields: [sectorId], references: [id], onDelete: Restrict)
+  shiftId      String?
+  shift        Shift?      @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+  levelId      String?
+  level        StaffLevel? @relation(fields: [levelId], references: [id], onDelete: Restrict)
+  validFrom    DateTime?   @db.Date // nulo = anterior ao histórico (só migração/DV8)
+  validTo      DateTime?   @db.Date // nulo = linha aberta
+  recordedById String? // sem FK; nulo = migração
+  recordedAt   DateTime    @default(now())
+  // Só no SQL (migração 20261119110000; o Prisma não os modela, DV2):
+  // UserAssignment_userId_open_key (único parcial, validTo IS NULL) e
+  // CHECK UserAssignment_period_check. Não remover num migrate futuro: se um
+  // diff gerado trouxer DROP deles, apague a linha (o spec de migração falha).
+
+  @@index([userId, validFrom])
+  @@index([sectorId, validFrom, validTo])
+  @@index([shiftId])
+  @@index([levelId])
 }
 
 enum TeamWhatsappTargetType {

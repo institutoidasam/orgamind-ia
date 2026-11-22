@@ -8,10 +8,17 @@ import type { UsersRepository, UserSummary } from './users.repository';
 import type { AuditService } from '../../shared/audit/audit.service';
 import type { RefreshService } from '../auth/refresh.service';
 import { ValidationError } from '../../shared/errors/domain.error';
+import { NO_ASSIGNMENT } from './assignment-timeline';
 
 vi.mock('argon2');
 
 const NINE = '+5592991234567';
+// Chamada do convite ao repositório: dados, trilha e o vínculo vazio (DV5).
+const inviteCall = (data: object): unknown[] => [
+  expect.objectContaining(data),
+  expect.any(Function),
+  expect.objectContaining({ patch: NO_ASSIGNMENT, actorId: 'admin' }),
+];
 const OLD = '+5592988887777';
 let repo: DeepMockProxy<UsersRepository>;
 let audit: DeepMockProxy<AuditService>;
@@ -67,13 +74,7 @@ describe('UsersService.createUser — telefone', () => {
     expect(phones.assertAvailable.mock.calls).toEqual([[NINE]]);
     expect(phones.resolveContactId.mock.calls).toEqual([[NINE, 'a@b.com']]);
     expect(repo.createWithAudit.mock.calls).toEqual([
-      [
-        expect.objectContaining({
-          phoneE164: NINE,
-          contact: { connect: { id: 'c1' } },
-        }),
-        expect.any(Function),
-      ],
+      inviteCall({ phoneE164: NINE, contact: { connect: { id: 'c1' } } }),
     ]);
     expect(JSON.stringify(audit.log.mock.calls)).not.toContain(NINE);
   });

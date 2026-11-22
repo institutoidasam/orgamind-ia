@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Skeleton } from '@/components/ui/skeleton';
 import { readApiErrorBody } from '@/lib/api-error';
 import { PERSON_HISTORY_PAGE_SIZE, usePersonHistory } from '../api';
+import { PersonAssignments } from './person-assignments';
 import { TrailTable } from './trail-table';
 
 const FORBIDDEN_CODE = 'audit_trail.forbidden';
@@ -94,6 +95,7 @@ export function PersonHistoryDialog({ person, open, onOpenChange }: Props) {
           <DialogTitle>{`Histórico de ${person.name}`}</DialogTitle>
           <DialogDescription>Quem alterou o quê, quando e por quê. Os mais recentes aparecem primeiro.</DialogDescription>
         </DialogHeader>
+        <PersonAssignments userId={person.id} />
         <HistoryBody key={person.id} personId={person.id} />
       </DialogContent>
     </Dialog>

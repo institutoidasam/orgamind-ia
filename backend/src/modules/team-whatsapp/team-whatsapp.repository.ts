@@ -9,7 +9,11 @@ import {
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import type { ShiftRef } from '../../schemas/contracts/shift.schema';
 import { rosterSnapshotSchema } from '../../schemas/contracts/team-whatsapp.schema';
-import { toDbDate, type CivilDate } from '../staff-schedule/civil-date';
+import {
+  toDbDate,
+  todayIn,
+  type CivilDate,
+} from '../staff-schedule/civil-date';
 import type {
   ScheduleCycle,
   ScheduleExceptionInput,
@@ -17,6 +21,11 @@ import type {
 import { StaffScheduleRepository } from '../staff-schedule/staff-schedule.repository';
 import type { PageQuery } from './dto/page-query.dto';
 import { tooManyPeople } from './team-whatsapp.errors';
+import {
+  hasOtherSectorTo,
+  withAssignmentOn,
+  type AssignmentOnRow,
+} from './team-member-assignment';
 import { PROVIDER_DISABLED_CODE } from '../../shared/errors/channel-provider-disabled.error';
 import { NOT_REPEATABLE_CODES } from './team-whatsapp.outcome';
 import type { RosterSnapshot } from './team-whatsapp.roster';
@@ -353,6 +362,27 @@ function pageWindow({ page, pageSize }: PageQuery) {
   return { skip: (page - 1) * pageSize, take: pageSize };
 }
 
+/** Linha de vínculo que cobre a data (DV9): início nulo = desde sempre; fim nulo = aberta. */
+function assignmentCovering(date: CivilDate) {
+  const day = toDbDate(date);
+  return {
+    AND: [
+      { OR: [{ validFrom: null }, { validFrom: { lte: day } }] },
+      { OR: [{ validTo: null }, { validTo: { gte: day } }] },
+    ],
+  } satisfies Prisma.UserAssignmentWhereInput;
+}
+
+/** Campos de vínculo da linha na forma de `TeamMemberRow` (`AssignmentOnRow`). */
+const assignmentOnSelect = {
+  sectorId: true,
+  sector: { select: { isActive: true } },
+  shiftId: true,
+  shift: { select: { name: true } },
+  levelId: true,
+  level: { select: { id: true, name: true } },
+} satisfies Prisma.UserAssignmentSelect;
+
 @Injectable()
 export class TeamWhatsappRepository {
   constructor(
@@ -426,19 +456,35 @@ export class TeamWhatsappRepository {
    * consultas para todos (visitantes, pessoas, ciclo e exceções): os ativos do
    * setor e os de fora com OTHER_SECTOR para ele nessa data. Quem entra decide
    * `dayMembers`. Todo setor pedido tem entrada, ainda que vazia.
+   * Data passada (DV11): entram também os ativos com vínculo num dos setores na
+   * data, e cada pessoa leva setor, turno e nível do vínculo da data (sem linha
+   * que cubra, o espelho) antes do agrupamento; quem tinha OTHER_SECTOR para o
+   * setor e outro setor na data conta como visitante. Hoje e futuro: só o
+   * espelho, sem consulta a `UserAssignment` (GV4).
    */
   async loadDayPeopleMany(
     sectorIds: readonly string[],
     date: CivilDate,
+    today: CivilDate = todayIn(new Date()),
   ): Promise<Map<string, TeamMemberWithSchedule[]>> {
+    const past = date < today;
     const visitors = await this.schedule.listVisitorIdsBySector(
       sectorIds,
       date,
       date,
     );
-    const rows = await this.findMembersForDay(sectorIds, [
-      ...new Set([...visitors.values()].flat()),
+    const assigned = past ? await this.findAssignedIdsOn(sectorIds, date) : [];
+    const found = await this.findMembersForDay(sectorIds, [
+      ...new Set([...[...visitors.values()].flat(), ...assigned]),
     ]);
+    let rows = found;
+    if (past) {
+      const lines = await this.findAssignmentsOn(
+        found.map((r) => r.id),
+        date,
+      );
+      rows = found.map((row) => withAssignmentOn(row, lines.get(row.id)));
+    }
     const data = await this.schedule.loadScheduleData(
       rows.map((r) => r.id),
       date,
@@ -454,10 +500,51 @@ export class TeamWhatsappRepository {
         const visiting = new Set(visitors.get(sectorId));
         return [
           sectorId,
-          people.filter((p) => p.sectorId === sectorId || visiting.has(p.id)),
+          people.filter(
+            (p) =>
+              p.sectorId === sectorId ||
+              visiting.has(p.id) ||
+              (past && hasOtherSectorTo(p, sectorId)),
+          ),
         ];
       }),
     );
+  }
+
+  /** Ativos com linha de vínculo num dos setores cobrindo a data (DV11, DV16). */
+  private async findAssignedIdsOn(
+    sectorIds: readonly string[],
+    date: CivilDate,
+  ): Promise<string[]> {
+    const lines = await this.prisma.userAssignment.findMany({
+      where: {
+        sectorId: { in: [...sectorIds] },
+        user: { isActive: true },
+        ...assignmentCovering(date),
+      },
+      distinct: ['userId'],
+      select: { userId: true },
+    });
+    return lines.map((l) => l.userId);
+  }
+
+  /**
+   * Linha de vínculo de cada pessoa que cobre a data; quem não tem fica fora do
+   * mapa (espelho, DV8). Se duas cobrissem, vale a de início mais recente.
+   */
+  private async findAssignmentsOn(
+    userIds: readonly string[],
+    date: CivilDate,
+  ): Promise<Map<string, AssignmentOnRow>> {
+    const lines = await this.prisma.userAssignment.findMany({
+      where: { userId: { in: [...userIds] }, ...assignmentCovering(date) },
+      orderBy: [
+        { validFrom: { sort: 'asc', nulls: 'first' } },
+        { recordedAt: 'asc' },
+      ],
+      select: { userId: true, ...assignmentOnSelect },
+    });
+    return new Map(lines.map(({ userId, ...line }) => [userId, line]));
   }
 
   /**

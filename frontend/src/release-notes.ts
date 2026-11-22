@@ -31,6 +31,29 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.11.20.3',
+    date: '2026-11-20',
+    title: 'WhatsApp da equipe: alerta urgente com confirmação "OK"',
+    items: [
+      {
+        text: 'A finalidade Urgência agora é um alerta com confirmação: no fim de todo alerta vai a linha "Responda OK para confirmar que recebeu." e a pessoa confirma respondendo OK no WhatsApp. Na tela de envio a linha aparece embaixo da caixa de texto, sem edição, e conta nos 2000 caracteres (o seu texto vai até 1959). Na revisão aparece o prazo de ciência: 15 minutos, contados da confirmação do envio.',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'No resultado do alerta, o painel de pendências mostra quem já confirmou e quem ainda não, com o prazo. Passado o prazo só mudam o rótulo e a ordem: nenhuma mensagem sai sozinha.',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'Dá para mandar um lembrete só às pessoas pendentes (no máximo 3 por alerta, com 5 minutos de intervalo) e registrar a ciência manual de quem avisou por outro meio, com a opção de desfazer.',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'Nova permissão "Criar alerta urgente". Até o administrador ligar "Criar alerta urgente" para outros papéis, só ele cria alerta: Supervisor e Operador deixam de ver a finalidade Urgência nesta atualização, e quem tem "Enviar WhatsApp à equipe" continua usando as outras finalidades.',
+        where: '/whatsapp-equipe',
+      },
+    ],
+  },
+  {
     version: '2026.11.20.2',
     date: '2026-11-20',
     title: 'WhatsApp da equipe: resultado do envio com hora, conexão e repetições',

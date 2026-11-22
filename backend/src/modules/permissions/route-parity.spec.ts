@@ -24,6 +24,7 @@ import { DomainError } from '../../shared/errors/domain.error';
 import { SectorPeopleController } from '../sector-people/sector-people.controller';
 import { StaffScheduleController } from '../staff-schedule/staff-schedule.controller';
 import { TeamWhatsappController } from '../team-whatsapp/team-whatsapp.controller';
+import { TeamAlertController } from '../team-whatsapp/team-alert.controller';
 import { ShiftsController } from '../shifts/shifts.controller';
 import { LevelsController } from '../levels/levels.controller';
 import { InternalSectorsController } from '../internal-sectors/internal-sectors.controller';
@@ -93,6 +94,18 @@ const PARITY: ParityRow[] = [
       ['POST /dispatches', ASO],
       ['POST /dispatches/:id/cancel', ASO],
       ['POST /dispatches/:id/retry', ASO],
+    ],
+  },
+  {
+    // Lote I (DI13): rotas novas, mesmos papéis do envio; leitura com `@Roles`,
+    // escrita só com `@RequirePermission('equipe.enviar')` (a chave da urgência
+    // é do serviço). A mistura é barrada pelo teste abaixo.
+    controller: TeamAlertController,
+    routes: [
+      ['GET /dispatches/:id/alert', ASO],
+      ['POST /dispatches/:id/recipients/:recipientId/ack', ASO],
+      ['DELETE /dispatches/:id/recipients/:recipientId/ack', ASO],
+      ['POST /dispatches/:id/reminders', ASO],
     ],
   },
   { controller: ShiftsController, routes: CRUD_A },

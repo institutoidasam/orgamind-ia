@@ -17,6 +17,8 @@ const NO_PURPOSE = {
   activityTime: null,
   activityPlace: null,
   urgencyReason: null,
+  ackDeadlineMinutes: null,
+  parentDispatch: null,
 };
 
 const listRow = (over: Partial<TeamDispatchRow>): TeamDispatchRow => ({

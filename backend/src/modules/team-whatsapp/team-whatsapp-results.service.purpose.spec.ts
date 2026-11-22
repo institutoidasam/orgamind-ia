@@ -28,6 +28,8 @@ const OLD_COLUMNS = {
   activityTime: null,
   activityPlace: null,
   urgencyReason: null,
+  ackDeadlineMinutes: null,
+  parentDispatch: null,
   audienceRule: null,
   audienceExcluded: null,
   schedulePolicy: null,

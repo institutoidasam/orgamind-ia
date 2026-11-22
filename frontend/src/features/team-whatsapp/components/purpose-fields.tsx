@@ -1,7 +1,9 @@
+import { useEffect } from 'react';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { usePermission } from '@/features/permissions/use-permission';
 import { BASE_LABEL, INCLUDE_OFF_LABEL, PURPOSE_LABEL } from '../labels';
 import { PURPOSE_RULES } from '../purpose';
 import type { TeamAudienceBase, TeamPurpose } from '../schemas';
@@ -43,6 +45,20 @@ function Choice<T extends string>({ id, label, value, options, names, onChange }
 }
 
 const PURPOSES = Object.keys(PURPOSE_LABEL) as TeamPurpose[];
+const WITHOUT_URGENCY = PURPOSES.filter((purpose) => purpose !== 'urgency');
+const DEFAULT_PURPOSE: TeamPurpose = 'shift_notice';
+
+/**
+ * Sem `equipe.urgencia` a Urgência não aparece (I1). Só esconde: a recusa de verdade é do servidor. Se a permissão
+ * sair com a Urgência já escolhida, a tela volta à finalidade padrão em vez de manter uma opção que não existe mais.
+ */
+function usePurposeOptions({ purpose, pickPurpose }: Pick<Props['filters'], 'purpose' | 'pickPurpose'>): TeamPurpose[] {
+  const canUrgency = usePermission('equipe.urgencia');
+  useEffect(() => {
+    if (purpose === 'urgency' && !canUrgency) pickPurpose(DEFAULT_PURPOSE);
+  }, [purpose, canUrgency, pickPurpose]);
+  return canUrgency ? PURPOSES : WITHOUT_URGENCY;
+}
 
 /** A base só tem controle onde há escolha (Alinhamento); nas outras finalidades aparece como texto (F1). */
 function BaseField({ purpose, base, onChange }: { purpose: TeamPurpose; base: TeamAudienceBase; onChange: (base: TeamAudienceBase) => void }) {
@@ -93,10 +109,11 @@ function ActivityFields({ filters }: Props) {
 export function PurposeFields({ filters }: Props) {
   const { purpose, base, includeOff } = filters;
   const rule = PURPOSE_RULES[purpose];
+  const options = usePurposeOptions(filters);
   return (
     <div className="space-y-3">
       <Choice
-        id="team-whatsapp-purpose" label="Finalidade" value={purpose} options={PURPOSES} names={PURPOSE_LABEL}
+        id="team-whatsapp-purpose" label="Finalidade" value={purpose} options={options} names={PURPOSE_LABEL}
         onChange={filters.pickPurpose}
       />
       <BaseField purpose={purpose} base={base} onChange={filters.pickBase} />

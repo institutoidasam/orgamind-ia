@@ -49,6 +49,9 @@ const detail = (extra: Record<string, unknown> = {}) => ({
   base: 'assigned',
   rule: null,
   excluded: [],
+  ackDeadlineMinutes: null,
+  ackDeadlineAt: null,
+  reminderOf: null,
   ...extra,
 });
 

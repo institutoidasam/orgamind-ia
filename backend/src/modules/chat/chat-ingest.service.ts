@@ -795,7 +795,7 @@ export class ChatIngestService {
         ...(opts.bumpUnread ? { unreadCount: { increment: 1 } } : {}),
       },
     });
-    await this.trackTeamReply(m, instanceId, opts, twinIds);
+    /* prettier-ignore */ await this.trackTeamReply(m, { messageId: message.id, instanceId, twinIds }, opts);
     await this.events.publish({ type: 'message.created', conversationId: conversation.id, instanceId, messageId: message.id });
 
     // Auto-resposta: só texto entra aqui; imagem/áudio disparam o bot no fim do
@@ -833,13 +833,15 @@ export class ChatIngestService {
    *
    * Best-effort (GC14): uma falha aqui não pode perder a mensagem nem fazer o
    * provedor reentregá-la. Log sem telefone nem nome (GC8): só o canal.
+   * Lote I (CI4): passa também a mensagem gravada (id, tipo, texto) para a
+   * ciência do alerta; o texto não vai a log.
    */
   private async trackTeamReply(
     m: InboundChatMessage,
-    instanceId: string,
+    link: { messageId: string; instanceId: string; twinIds: readonly string[] },
     opts: { direction: MessageDirection; backfill?: boolean },
-    twinIds: readonly string[],
   ): Promise<void> {
+    const { messageId, instanceId, twinIds } = link;
     if (opts.direction !== MessageDirection.INBOUND || opts.backfill) return;
     if (twinIds.length === 0) return;
     try {
@@ -847,6 +849,7 @@ export class ChatIngestService {
         channelId: instanceId,
         contactIds: twinIds,
         receivedAt: m.receivedAt,
+        message: { id: messageId, kind: m.kind, text: m.text ?? null },
       });
     } catch (err: unknown) {
       this.logger.warn(

@@ -20,9 +20,12 @@ const MIGRATION_SQL = path.resolve(
 
 type PermissionRow = { role: string; key: string; granted: boolean };
 
-// A matriz inicial inteira (2 papéis x 10 chaves), na ordem de leitura do SELECT.
+// equipe.urgencia não é semeada (DI2): linha ausente cai no padrão desligado.
+const SEEDED_KEYS = PERMISSION_KEYS.filter((key) => key !== 'equipe.urgencia');
+
+// A matriz inicial semeada (2 papéis x 10 chaves), na ordem de leitura do SELECT.
 const EXPECTED_ROWS: PermissionRow[] = EDITABLE_ROLES.flatMap((role) =>
-  PERMISSION_KEYS.map((key) => ({
+  SEEDED_KEYS.map((key) => ({
     role,
     key,
     granted: DEFAULT_MATRIX[role].includes(key),
@@ -71,6 +74,7 @@ describe('migração 20261119100000_role_permissions', () => {
 
     expect(rows).toHaveLength(20);
     expect(rows).toEqual(EXPECTED_ROWS);
+    expect(rows.some((row) => row.key === 'equipe.urgencia')).toBe(false);
     expect(authored).toBe(0n);
   });
 

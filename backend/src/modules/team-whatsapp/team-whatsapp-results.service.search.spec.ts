@@ -180,6 +180,7 @@ describe('TeamWhatsappResultsService.recipients — telefone usado (G4)', () => 
 const detailRow = (
   over: Partial<DispatchDetailRow> = {},
 ): DispatchDetailRow => ({
+  ackDeadlineMinutes: null,
   activityDate: null,
   activityPlace: null,
   activityTime: null,
@@ -192,6 +193,7 @@ const detailRow = (
   firedAt: null,
   id: 'd1',
   includeOff: false,
+  parentDispatch: null,
   purpose: null,
   recheckedAt: null,
   roster: null,

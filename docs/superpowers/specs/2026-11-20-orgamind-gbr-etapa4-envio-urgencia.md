@@ -154,6 +154,16 @@ Quarta etapa do plano entregue à GBR (`reports/plano-gbr/`), na ordem pedida pe
   - o teto de 3 lembretes com 5 minutos de intervalo;
   - se quem assume o turno pode dar ciência manual (hoje: quem tem a chave e vê o envio, isto é, o autor ou o ADMIN);
   - se a linha fixa no fim do alerta conta como "fluxo aprovado" (C364-365).
+  - Decisões do plano que mudam o que a GBR vê (detalhe em "Dúvidas de produto" do plano do Lote I):
+    - a resposta só vale como ciência até 24 h depois do aceite do envio mais recente para a pessoa naquele número; depois disso conta só como "Respondeu";
+    - o lembrete vai para o número atual da área e para o telefone atual da pessoa (quem trocou de número depois do alerta recebe no número novo);
+    - se a fila estiver fora do ar, o lembrete conta no limite de 3 e as pessoas ficam "Falhou", repetíveis;
+    - se nenhum dos marcados tem telefone válido, o lembrete é recusado e não conta no limite;
+    - quem confirma (ou tem a ciência manual desfeita) nos milissegundos em que o lembrete está saindo pode receber o lembrete (ou ficar "Pulado: já confirmou");
+    - lembrete em que todos já tinham confirmado aparece como "Ninguém recebeu";
+    - dois "OK" com segundos de diferença: a hora da ciência pode ser de um e a mensagem guardada a do outro;
+    - pessoa desativada depois do alerta ainda recebe o lembrete (o "Repetir" de hoje também não confere);
+    - a migração segura as tabelas do envio da equipe até terminar: deploy fora do horário de envio e com um container só.
 - **Transição:** se o Lote F for à produção antes da Etapa 4, SUPERVISOR e OPERATOR perdem a Urgência na atualização seguinte; a nota de versão precisa dizer isso.
 
 ## Aceite

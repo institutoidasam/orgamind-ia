@@ -9,17 +9,9 @@ import {
 import type { RetryTeamDispatchResponse } from '../../schemas/contracts/team-whatsapp.schema';
 import type { RetryRecipientsInput } from './dto/retry-recipients.dto';
 import { dispatchNotFound, teamForbidden } from './team-whatsapp.errors';
-import {
-  canSendToSector,
-  canSendToUser,
-  canViewDispatch,
-  isTeamSender,
-  type TeamActor,
-} from './team-whatsapp.policy';
-import {
-  TeamWhatsappRepository,
-  type DispatchForActor,
-} from './team-whatsapp.repository';
+import { requireAreaOf } from './team-dispatch-area';
+import { canViewDispatch, isTeamSender } from './team-whatsapp.policy';
+import { TeamWhatsappRepository } from './team-whatsapp.repository';
 import { enqueueTeamRetry } from './team-whatsapp.service';
 
 /**
@@ -49,7 +41,7 @@ export class TeamWhatsappRetryService {
     if (!dispatch || !canViewDispatch(actor, dispatch)) {
       throw dispatchNotFound();
     }
-    await this.requireAreaOf(actor, dispatch);
+    await requireAreaOf(this.repo, actor, dispatch);
     const refs = await this.repo.requeueFailed(
       dispatch.id,
       'all' in input ? 'all' : input.recipientIds,
@@ -64,29 +56,5 @@ export class TeamWhatsappRetryService {
       { actorId: actor.id, dispatchId: dispatch.id, requeued: refs.length },
     );
     return { requeued: refs.length };
-  }
-
-  /**
-   * Mesma regra do cancelamento para envio a setor: ADMIN qualquer; o gestor só
-   * se TODO setor do envio passa por `canSendToSector` (envio a setor sem linha
-   * de setor → 403: "todos" de uma lista vazia não autoriza). Alvo pessoa: o
-   * `canSendToUser` do `targetId` vale para todos (ADMIN inclusive), e usuário
-   * apagado ou inativo → 403, porque o envio reentregaria a quem já saiu.
-   */
-  private async requireAreaOf(
-    actor: TeamActor,
-    dispatch: DispatchForActor,
-  ): Promise<void> {
-    if (dispatch.targetType === 'USER') {
-      const user = await this.repo.findTargetUser(dispatch.targetId);
-      if (!user || !canSendToUser(actor, user)) throw teamForbidden();
-      return;
-    }
-    if (actor.role === 'ADMIN') return;
-    if (dispatch.sectors.length === 0) throw teamForbidden();
-    for (const { sectorId } of dispatch.sectors) {
-      const sector = await this.repo.findSector(sectorId);
-      if (!sector || !canSendToSector(actor, sector)) throw teamForbidden();
-    }
   }
 }

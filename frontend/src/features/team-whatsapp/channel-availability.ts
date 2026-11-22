@@ -1,21 +1,14 @@
-import type { TeamChannel } from './schemas';
+import type { TeamSectorChannel } from './schemas';
 
-export type ChannelAvailability =
-  | { usable: true }
-  | { usable: false; label: 'Desconectado' | 'Aguardando conexão' };
-
-const WAITING: ChannelAvailability = { usable: false, label: 'Aguardando conexão' };
+export type LiveState = TeamSectorChannel['live']['state'];
+export type ChannelBlock = 'disconnected' | 'unverified';
 
 /**
- * Situação do canal para o seletor de envio. `connectionState` nulo (evento de
- * conexão expirado ou nunca recebido) NUNCA significa desconectado: com
- * telefone conhecido o canal segue utilizável; sem telefone ainda não pareou.
+ * O que o estado ao vivo do número trava (D7). Só `open` libera o envio imediato. `unknown` = o
+ * provedor não respondeu, então não se sabe: trava igual, mas com outro texto e com "Conferir de
+ * novo". `connecting` conta como desconectado, como no servidor (`channel_disconnected`).
  */
-export function channelAvailability(
-  { connectionState, phoneE164 }: Pick<TeamChannel, 'connectionState' | 'phoneE164'>,
-): ChannelAvailability {
-  if (connectionState === 'open') return { usable: true };
-  if (connectionState === 'close') return { usable: false, label: 'Desconectado' };
-  if (connectionState === 'connecting') return WAITING;
-  return phoneE164 ? { usable: true } : WAITING;
+export function liveBlock(state: LiveState): ChannelBlock | null {
+  if (state === 'open') return null;
+  return state === 'unknown' ? 'unverified' : 'disconnected';
 }

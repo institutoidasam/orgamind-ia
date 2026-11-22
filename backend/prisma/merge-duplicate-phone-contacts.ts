@@ -175,6 +175,11 @@ export type MergeReport = {
   /** Conversas fundidas numa só (canônico e duplicado tinham conversa no MESMO canal). */
   conversationsFolded: number;
   importItemsMoved: number;
+  /**
+   * TeamWhatsappRecipient.contactId repontados (snapshot do contato no envio da
+   * equipe, coluna SEM FK: o tracking de respostas casa por ele).
+   */
+  teamRecipientsMoved: number;
   /** Canônicos cuja reidratação de consentimento falhou (o merge foi feito; rode o rehydrate de novo). */
   rehydrateFailures: string[];
   /**
@@ -457,6 +462,7 @@ export async function mergeDuplicatePhoneContacts(
     conversationsMoved: 0,
     conversationsFolded: 0,
     importItemsMoved: 0,
+    teamRecipientsMoved: 0,
     rehydrateFailures: [],
     liveRowsNeutralized: 0,
     failedPairs: [],
@@ -527,11 +533,7 @@ export async function mergeDuplicatePhoneContacts(
           fields: moved.conflicts,
         });
       }
-      report.messagesMoved += moved.messages;
-      report.conversationsMoved += moved.conversationsMoved;
-      report.conversationsFolded += moved.conversationsFolded;
-      report.importItemsMoved += moved.importItems;
-      report.liveRowsNeutralized += moved.liveRowsNeutralized;
+      addMoved(report, moved);
       report.merged += 1;
       report.merges.push({
         survivorPhone: survivor.phoneE164,
@@ -713,20 +715,56 @@ async function relinkTeamUser(
   return [];
 }
 
+/**
+ * TeamWhatsappRecipient.contactId (snapshot do contato da conversa no envio da
+ * equipe) não tem FK — nem cascade, nem SetNull: nada o reaponta sozinho. Sem
+ * isto, a resposta de quem teve o contato fundido deixa de casar no tracking
+ * (canal + contactId) e não marca "Respondeu". A contagem vale no dry-run; a
+ * escrita só com apply, na transação do par, antes do delete do perdedor.
+ */
+async function relinkTeamRecipients(
+  db: Db,
+  survivor: ContactRow,
+  loser: ContactRow,
+  apply: boolean,
+): Promise<number> {
+  const where = { contactId: loser.id };
+  const count = await db.teamWhatsappRecipient.count({ where });
+  if (apply) {
+    await db.teamWhatsappRecipient.updateMany({
+      where,
+      data: { contactId: survivor.id },
+    });
+  }
+  return count;
+}
+
+type PairMoved = {
+  messages: number;
+  conversationsMoved: number;
+  conversationsFolded: number;
+  importItems: number;
+  teamRecipients: number;
+  conflicts: string[];
+  liveRowsNeutralized: number;
+};
+
+function addMoved(report: MergeReport, moved: PairMoved): void {
+  report.messagesMoved += moved.messages;
+  report.conversationsMoved += moved.conversationsMoved;
+  report.conversationsFolded += moved.conversationsFolded;
+  report.importItemsMoved += moved.importItems;
+  report.teamRecipientsMoved += moved.teamRecipients;
+  report.liveRowsNeutralized += moved.liveRowsNeutralized;
+}
+
 async function mergePair(
   db: Db,
   survivor: ContactRow,
   loser: ContactRow,
   apply: boolean,
   wonByRealTraffic: boolean,
-): Promise<{
-  messages: number;
-  conversationsMoved: number;
-  conversationsFolded: number;
-  importItems: number;
-  conflicts: string[];
-  liveRowsNeutralized: number;
-}> {
+): Promise<PairMoved> {
   const dupConversations = await db.conversation.findMany({
     where: { contactId: loser.id },
     select: { id: true, instanceId: true, lastMessageAt: true, createdAt: true },
@@ -763,6 +801,7 @@ async function mergePair(
       data: { contactId: survivor.id },
     });
   }
+  const teamRecipients = await relinkTeamRecipients(db, survivor, loser, apply);
 
   let conversationsMoved = 0;
   let conversationsFolded = 0;
@@ -840,6 +879,7 @@ async function mergePair(
     conversationsMoved,
     conversationsFolded,
     importItems,
+    teamRecipients,
     conflicts,
     liveRowsNeutralized,
   };
@@ -918,6 +958,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log(`conversas repontadas ....... ${r.conversationsMoved}`);
     console.log(`conversas fundidas ......... ${r.conversationsFolded}`);
     console.log(`ImportItems repontados ..... ${r.importItemsMoved}`);
+    console.log(`destinatários da equipe .... ${r.teamRecipientsMoved}`);
     console.log(`linhas vivas neutralizadas . ${r.liveRowsNeutralized}`);
     console.log(`pares que FALHARAM ......... ${r.failedPairs.length}`);
 

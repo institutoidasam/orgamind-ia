@@ -40,6 +40,12 @@ vi.mock('@/stores/auth.store', () => ({
   useAuthStore: (sel: (s: unknown) => unknown) => sel({ user: { role: 'ADMIN' } }),
 }));
 
+// --- Setores (aviso de áreas sem número) ----------------------------------
+const sectorsState: { items: { id: string; name: string; channel: unknown }[] } = { items: [] };
+vi.mock('@/features/internal-admin/api', () => ({
+  useSectors: () => ({ data: { items: sectorsState.items }, isError: false }),
+}));
+
 // --- Section stubs (drive orchestration only) -----------------------------
 vi.mock('@/features/whatsapp/components/evolution-section', () => ({
   EvolutionSection: ({ role }: { role: string }) => (
@@ -80,6 +86,7 @@ beforeEach(() => {
   providersState.data = undefined;
   providersState.isError = false;
   providersState.error = null;
+  sectorsState.items = [];
 });
 
 describe('ConnectPage — one section per configured provider (scope "all")', () => {
@@ -104,6 +111,16 @@ describe('ConnectPage — one section per configured provider (scope "all")', ()
     providersState.data = { providers: [group('EVOLUTION'), group('TWILIO')] };
     wrap(<ConnectPage />);
     expect(screen.getByTestId('evolution-section')).toHaveTextContent('evolution:ADMIN');
+  });
+});
+
+describe('ConnectPage — áreas sem número no topo', () => {
+  it('mostra o aviso uma vez e não traz mais a tela "Números e canais"', () => {
+    providersState.data = { providers: [group('EVOLUTION'), group('GOZAP')] };
+    sectorsState.items = [{ id: 'rh', name: 'RH', channel: null }];
+    wrap(<ConnectPage />);
+    expect(screen.getAllByText('Áreas sem número: RH')).toHaveLength(1);
+    expect(screen.queryByText('Números e canais')).not.toBeInTheDocument();
   });
 });
 

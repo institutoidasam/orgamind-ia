@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { useEffect, useEffectEvent, useState } from 'react';
+import { useForm, type UseFormReturn } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
@@ -7,7 +7,11 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { extractApiError } from '@/lib/api-error';
 import { useCreateInstance, useInstanceQr } from '../api';
+import { useAreaChoice } from '../use-area-choice';
+import { MoveConfirmation, SectorPicker } from './sector-picker';
 import { createInstanceInputSchema, type CreateInstanceInput, type Instance, type InstanceQr } from '../schemas';
 
 type Props = {
@@ -16,34 +20,38 @@ type Props = {
   onCreated: (i: Instance) => void;
 };
 
+/**
+ * Only polls the QR endpoint while the dialog is actually open; otherwise a
+ * dialog closed on the QR step keeps churning a request every few seconds.
+ * Closing must clear the created-instance state so a re-open starts fresh on
+ * the form step (and the QR poll stays disabled).
+ */
 export function CreateInstanceDialog({ open, onOpenChange, onCreated }: Props) {
   const [created, setCreated] = useState<Instance | null>(null);
-  const form = useForm<CreateInstanceInput>({
-    resolver: zodResolver(createInstanceInputSchema),
-    defaultValues: { name: '', isDefault: false },
-  });
-  const create = useCreateInstance();
-  // Only poll the QR endpoint while the dialog is actually open; otherwise a
-  // dialog closed on the QR step keeps churning a request every few seconds.
+  const areas = useAreaChoice(null);
   const qr = useInstanceQr(open ? created?.id : undefined);
 
-  // Closing the dialog must clear the created-instance state so a re-open starts
-  // fresh on the form step (and the QR poll above stays disabled).
   const handleOpenChange = (next: boolean) => {
-    if (!next) setCreated(null);
+    if (!next) {
+      setCreated(null);
+      areas.reset();
+    }
     onOpenChange(next);
   };
 
+  // Pareamento concluído: fecha pelo mesmo caminho do operador (handleOpenChange),
+  // para que as áreas escolhidas também sejam descartadas.
+  const finishPairing = useEffectEvent((instance: Instance) => {
+    onCreated(instance); // pass the originally-created instance
+    handleOpenChange(false);
+  });
+
   useEffect(() => {
     if (qr.data?.state === 'open' && created) {
-      const t = setTimeout(() => {
-        onCreated(created); // pass the originally-created instance
-        onOpenChange(false);
-        setCreated(null);
-      }, 800);
+      const t = setTimeout(() => finishPairing(created), 800);
       return () => clearTimeout(t);
     }
-  }, [qr.data?.state, created, onCreated, onOpenChange]);
+  }, [qr.data?.state, created]);
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -53,31 +61,7 @@ export function CreateInstanceDialog({ open, onOpenChange, onCreated }: Props) {
         </DialogHeader>
 
         {!created ? (
-          <form
-            onSubmit={form.handleSubmit(async (input) => {
-              const inst = await create.mutateAsync(input);
-              setCreated(inst);
-            })}
-            className="space-y-3"
-          >
-            <div className="space-y-1">
-              <Label htmlFor="name">Nome de exibição</Label>
-              <Input id="name" {...form.register('name')} />
-              {form.formState.errors.name && (
-                <p className="text-xs text-destructive">{form.formState.errors.name.message}</p>
-              )}
-            </div>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" {...form.register('isDefault')} />
-              Marcar como conexão padrão
-            </label>
-            <DialogFooter>
-              <Button type="button" variant="ghost" onClick={() => handleOpenChange(false)}>Cancelar</Button>
-              <Button type="submit" disabled={create.isPending}>
-                {create.isPending ? 'Criando…' : 'Criar e gerar QR'}
-              </Button>
-            </DialogFooter>
-          </form>
+          <CreateForm areas={areas} onCreated={setCreated} onCancel={() => handleOpenChange(false)} />
         ) : (
           <QrPane
             qr={qr.data}
@@ -90,6 +74,83 @@ export function CreateInstanceDialog({ open, onOpenChange, onCreated }: Props) {
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+type CreateFormProps = {
+  areas: ReturnType<typeof useAreaChoice>;
+  onCreated: (instance: Instance) => void;
+  onCancel: () => void;
+};
+
+function CreateError({ message }: { message: string }) {
+  return (
+    <Alert variant="destructive">
+      <AlertTitle>Não foi possível criar a conexão</AlertTitle>
+      <AlertDescription>{message}</AlertDescription>
+    </Alert>
+  );
+}
+
+function NameField({ form }: { form: UseFormReturn<CreateInstanceInput> }) {
+  return (
+    <div className="space-y-1">
+      <Label htmlFor="name">Nome de exibição</Label>
+      <Input id="name" {...form.register('name')} />
+      {form.formState.errors.name && (
+        <p className="text-xs text-destructive">{form.formState.errors.name.message}</p>
+      )}
+    </div>
+  );
+}
+
+/** Nome, conexão padrão e áreas; área em outro número pede confirmação antes de criar. */
+function CreateForm({ areas, onCreated, onCancel }: CreateFormProps) {
+  const [backendError, setBackendError] = useState<string | null>(null);
+  const form = useForm<CreateInstanceInput>({
+    resolver: zodResolver(createInstanceInputSchema),
+    defaultValues: { name: '', isDefault: false },
+  });
+  const create = useCreateInstance();
+
+  const submit = form.handleSubmit((input) =>
+    areas.proceed(async () => {
+      setBackendError(null);
+      try {
+        onCreated(await create.mutateAsync({ ...input, sectorIds: areas.selected }));
+      } catch (err) {
+        areas.dismiss();
+        setBackendError((await extractApiError(err)).title);
+      }
+    }),
+  );
+
+  if (areas.confirming) {
+    return (
+      <MoveConfirmation
+        moves={areas.moves}
+        pending={create.isPending}
+        onConfirm={() => void submit()}
+        onCancel={areas.dismiss}
+      />
+    );
+  }
+  return (
+    <form onSubmit={submit} className="space-y-3">
+      {backendError && <CreateError message={backendError} />}
+      <NameField form={form} />
+      <SectorPicker sectors={areas.sectors} value={areas.selected} loading={areas.loading} onChange={areas.setSelected} />
+      <label className="flex items-center gap-2 text-sm">
+        <input type="checkbox" {...form.register('isDefault')} />
+        Marcar como conexão padrão
+      </label>
+      <DialogFooter>
+        <Button type="button" variant="ghost" onClick={onCancel}>Cancelar</Button>
+        <Button type="submit" disabled={create.isPending}>
+          {create.isPending ? 'Criando…' : 'Criar e gerar QR'}
+        </Button>
+      </DialogFooter>
+    </form>
   );
 }
 

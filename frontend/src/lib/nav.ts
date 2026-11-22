@@ -87,7 +87,7 @@ export const NAV: NavItem[] = [
   { to: '/turnos', label: 'Turnos', icon: Clock, section: 'admin', roles: ['ADMIN'] },
   { to: '/niveis', label: 'Níveis', icon: Layers, section: 'admin', roles: ['ADMIN'] },
   { to: '/users', label: 'Usuários', icon: UserCog, section: 'admin', roles: ['ADMIN'] },
-  { to: '/connect', label: 'Números e canais', icon: Wifi, section: 'admin', roles: ['ADMIN'] },
+  { to: '/connect', label: 'Conexões', icon: Wifi, section: 'admin', roles: ['ADMIN'] },
 
   // Telas legadas preservam URLs e breadcrumbs, mas não fazem parte do painel
   // interno. O backend legado só aceita ADMIN/OPERATOR; SUPERVISOR/VIEWER não

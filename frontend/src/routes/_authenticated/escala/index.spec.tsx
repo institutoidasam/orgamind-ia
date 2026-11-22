@@ -47,11 +47,11 @@ function row(userId: string, name: string, extra: Record<string, unknown>) {
   return { userId, name, jobTitle: null, fromOtherSector: false, canEdit: true, profileShiftId: null, schedule: null, ...extra };
 }
 
-function boardFor({ sectorId, from, to }: Range) {
+function boardFor({ sectorId, from, to }: Range, truncated = false) {
   const days = (first: unknown) =>
     daysBetween(from, to).map((date, i) => ({ date, situation: i === 0 ? first : WORK_NOITE, exceptionId: null }));
   return {
-    sectorId, from, to, today: '2026-10-21', sectors: [producao], shifts: [{ ...noite, isActive: true }], exceptions: [],
+    sectorId, from, to, today: '2026-10-21', sectors: [producao], shifts: [{ ...noite, isActive: true }], exceptions: [], truncated,
     rows: [
       row('u1', 'Ana', { jobTitle: 'Operadora', profileShiftId: 'noite', days: days(WORK_NOITE) }),
       row('u2', 'Bia', { canEdit: false, days: days(DAY_OFF) }),
@@ -60,12 +60,12 @@ function boardFor({ sectorId, from, to }: Range) {
   };
 }
 
-function mockData(sectors = [producao]) {
+function mockData(sectors = [producao], truncated = false) {
   mocks.useScheduleOptions.mockReturnValue({
     data: { today: '2026-10-21', sectors, shifts: [noite] }, isLoading: false, isError: false,
   });
   mocks.useScheduleBoard.mockImplementation((q: Range | null) =>
-    q ? { data: boardFor(q), isLoading: false, isError: false } : { data: undefined, isLoading: false, isError: false },
+    q ? { data: boardFor(q, truncated), isLoading: false, isError: false } : { data: undefined, isLoading: false, isError: false },
   );
 }
 
@@ -105,6 +105,20 @@ describe('/escala: setor e quadro', () => {
     expect(screen.getAllByText('de outro setor')).toHaveLength(1);
     expect(within(rowOf('Caio')).getByText('de outro setor')).toBeInTheDocument();
     expect(within(rowOf('Bia')).getAllByText('Folga')).toHaveLength(1);
+  });
+});
+
+describe('/escala: quadro truncado (D13)', () => {
+  const NOTICE = 'Mostrando as primeiras 500 pessoas deste setor.';
+
+  it('quadro com truncated avisa que só as primeiras 500 pessoas aparecem; sem truncated não avisa', () => {
+    mockData([producao], true);
+    const { unmount } = render(<Page />);
+    expect(screen.getByText(NOTICE)).toBeInTheDocument();
+    unmount();
+    mockData([producao], false);
+    render(<Page />);
+    expect(screen.queryByText(NOTICE)).not.toBeInTheDocument();
   });
 });
 

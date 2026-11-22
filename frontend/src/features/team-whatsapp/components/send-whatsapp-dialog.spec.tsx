@@ -1,51 +1,78 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HTTPError } from 'ky';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mutateAsync, toastSuccess, useTeamTargets, mutationState } = vi.hoisted(() => ({
+const { mutateAsync, toastSuccess, useTeamRoster, useTeamPersonRoute, mutationState, auth } = vi.hoisted(() => ({
   mutateAsync: vi.fn(),
   toastSuccess: vi.fn(),
-  useTeamTargets: vi.fn(),
+  useTeamRoster: vi.fn(),
+  useTeamPersonRoute: vi.fn(),
   mutationState: { isPending: false },
+  auth: { role: 'OPERATOR' },
 }));
 
 vi.mock('../api', () => ({
-  useTeamTargets: () => useTeamTargets(),
+  useTeamRoster: (...args: unknown[]) => useTeamRoster(...args),
+  useTeamPersonRoute: (...args: unknown[]) => useTeamPersonRoute(...args),
   useCreateTeamDispatch: () => ({ mutateAsync, isPending: mutationState.isPending }),
 }));
 vi.mock('sonner', () => ({ toast: { success: toastSuccess, error: vi.fn() } }));
+vi.mock('@/stores/auth.store', () => ({
+  useAuthStore: (sel: (s: unknown) => unknown) => sel({ user: { role: auth.role } }),
+}));
+vi.mock('@tanstack/react-router', () => ({
+  Link: ({ to, children }: { to: string; children: React.ReactNode }) => <a href={to}>{children}</a>,
+}));
 
 import { SendWhatsappDialog } from './send-whatsapp-dialog';
-import type { SendTarget, TeamChannel } from '../schemas';
+import type { LeftOutPerson, SendTarget, TeamSectorChannel } from '../schemas';
 
 const sector: SendTarget = {
   type: 'sector', sectorIds: ['s1'], levelIds: [], withoutLevel: false,
   label: 'Compras · todos os turnos · 21/10', date: '2026-10-21',
-  shiftId: null, includeOff: false, userIds: null,
+  shiftIds: [], includeOff: false, userIds: null,
   recipients: [{ id: 'a', name: 'Ana' }, { id: 'b', name: 'Bia' }, { id: 'c', name: 'Caio' }], leftOut: [],
 };
 const person: SendTarget = { type: 'user', userId: 'u1', label: 'Rui' };
-const channel: TeamChannel = {
-  id: 'ch1', name: 'GoZap Principal', phoneE164: '+5592991234567', provider: 'GOZAP', connectionState: 'open',
-};
-const closed: TeamChannel = {
-  id: 'ch2', name: 'Atendimento', phoneE164: '+5592988887777', provider: 'EVOLUTION', connectionState: 'close',
-};
-const pending: TeamChannel = {
-  id: 'ch3', name: 'ROBO', phoneE164: null, provider: 'EVOLUTION', connectionState: 'connecting',
-};
-const second: TeamChannel = { ...channel, id: 'ch4', name: 'GoZap Reserva', phoneE164: '+5592977776666' };
 
-function setup(
-  target: SendTarget = sector,
-  channels = [channel],
-  query: Record<string, unknown> = { data: { channels, sectors: [] } },
-) {
-  useTeamTargets.mockReturnValue(query);
+const NUMBER = '+5592991234567';
+const channel = (state: TeamSectorChannel['live']['state'] = 'open'): TeamSectorChannel => ({
+  id: 'ch1', name: 'GoZap Principal', phoneE164: NUMBER, provider: 'GOZAP',
+  live: { state, checkedAt: new Date(2026, 10, 10, 14, 5).toISOString() },
+});
+
+const refetch = vi.fn();
+type Query = { data?: unknown; isLoading?: boolean; isError?: boolean; isFetching?: boolean };
+const answer = (query: Query) => ({ isLoading: false, isError: false, isFetching: false, refetch, ...query });
+
+/** A escala traz cada pessoa em um só setor: a primeira área fica com quem recebe (como no servidor). */
+function rosterOf(target: SendTarget, ch: TeamSectorChannel | null = channel()) {
+  const ids = target.type === 'sector' ? target.sectorIds : [];
+  const recipients = target.type === 'sector' ? target.recipients : [];
+  return {
+    date: '2026-10-21', shiftStarts: [],
+    sectors: ids.map((id, i) => ({ sectorId: id, name: id === 's1' ? 'Compras' : id, channel: ch, members: i === 0 ? recipients : [] })),
+  };
+}
+
+type Route = { roster?: Query; person?: Query };
+
+function setup(target: SendTarget = sector, route: Route = {}) {
+  useTeamRoster.mockReturnValue(answer(route.roster ?? { data: rosterOf(target) }));
+  useTeamPersonRoute.mockReturnValue(answer(route.person ?? {
+    data: { userId: 'u1', sector: { id: 's1', name: 'Compras' }, channel: channel() },
+  }));
   const onOpenChange = vi.fn();
-  const view = render(<SendWhatsappDialog open onOpenChange={onOpenChange} target={target} />);
-  return { onOpenChange, user: userEvent.setup(), view };
+  const qc = new QueryClient();
+  const invalidate = vi.spyOn(qc, 'invalidateQueries');
+  const view = render(
+    <QueryClientProvider client={qc}>
+      <SendWhatsappDialog open onOpenChange={onOpenChange} target={target} />
+    </QueryClientProvider>,
+  );
+  return { onOpenChange, user: userEvent.setup(), view, invalidate };
 }
 
 async function submit(user: ReturnType<typeof userEvent.setup>, text = 'Oi equipe') {
@@ -58,18 +85,12 @@ function httpError(status: number, code: string) {
   return new HTTPError(response, new Request('https://x'), {} as never);
 }
 
-// Radix Select (shadcn) usa PointerEvents/scrollIntoView, que o jsdom não tem.
-if (!Element.prototype.hasPointerCapture) {
-  Element.prototype.hasPointerCapture = () => false;
-}
-if (!Element.prototype.scrollIntoView) {
-  Element.prototype.scrollIntoView = () => {};
-}
-
 beforeEach(() => {
   mutateAsync.mockReset();
   toastSuccess.mockReset();
+  refetch.mockReset();
   mutationState.isPending = false;
+  auth.role = 'OPERATOR';
 });
 
 describe('SendWhatsappDialog destino e formulário', () => {
@@ -83,13 +104,11 @@ describe('SendWhatsappDialog destino e formulário', () => {
     expect(screen.getByText('Rui')).toBeInTheDocument();
   });
 
-  it('pré-seleciona o único canal e só habilita Enviar com texto', async () => {
+  it('só habilita Enviar com texto', async () => {
     const { user } = setup();
-    expect(screen.getByText(/GoZap Principal/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeDisabled();
-    await user.type(screen.getByRole('textbox'), 'Oi equipe');
+    await user.type(screen.getByRole('textbox'), 'Oi');
     expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeEnabled();
-    expect(screen.getByText('9/2000')).toBeInTheDocument();
   });
 
   it('desabilita Enviar enquanto o envio está em andamento', async () => {
@@ -100,79 +119,109 @@ describe('SendWhatsappDialog destino e formulário', () => {
   });
 });
 
-describe('SendWhatsappDialog situação dos canais', () => {
-  it('sem canais avisa e mantém Enviar desabilitado', async () => {
-    const { user } = setup(sector, []);
-    await user.type(screen.getByRole('textbox'), 'Oi');
-    expect(screen.getByText('Nenhum canal GoZap ou Evolution ativo.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeDisabled();
+describe('SendWhatsappDialog número por área (sem seletor de canal)', () => {
+  it('não tem campo Canal e mostra a divisão por número com a hora conferida', () => {
+    setup();
+    expect(screen.queryByLabelText('Canal')).not.toBeInTheDocument();
+    expect(screen.queryByText('Canal')).not.toBeInTheDocument();
+    expect(screen.getByText(`Compras, 3 pessoas, pelo ${NUMBER}`)).toBeInTheDocument();
+    expect(screen.getByText('conferido às 14:05')).toBeInTheDocument();
   });
 
-  it('mostra canais inutilizáveis desabilitados com a situação, depois dos utilizáveis', async () => {
-    const { user } = setup(sector, [pending, closed, channel]);
-    await user.click(screen.getByRole('combobox', { name: 'Canal' }));
-    const options = screen.getAllByRole('option');
-    expect(options.map((o) => o.textContent)).toEqual([
-      'GoZap Principal · (92) 99123-4567',
-      'ROBO · — · Aguardando conexão',
-      'Atendimento · (92) 98888-7777 · Desconectado',
-    ]);
-    expect(options[0]).not.toHaveAttribute('data-disabled');
-    expect(options[1]).toHaveAttribute('data-disabled');
-    expect(options[2]).toHaveAttribute('data-disabled');
-  });
-
-  it('enquanto os canais carregam mostra "Carregando canais…" e mantém Enviar desabilitado', async () => {
-    const { user } = setup(sector, [], { data: undefined, isLoading: true, isError: false });
-    await user.type(screen.getByRole('textbox'), 'Oi');
-    expect(screen.getByText('Carregando canais…')).toBeInTheDocument();
-    expect(screen.queryByText(/Nenhum canal/)).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeDisabled();
-  });
-
-  it('com erro ao carregar os canais mostra mensagem de erro, não "Nenhum canal"', async () => {
-    const { user } = setup(sector, [], { data: undefined, isLoading: false, isError: true });
-    await user.type(screen.getByRole('textbox'), 'Oi');
-    expect(screen.getByRole('alert')).toHaveTextContent('Não foi possível carregar os canais.');
-    expect(screen.queryByText(/Nenhum canal/)).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeDisabled();
+  it('a consulta da escala usa os setores e a data do envio', () => {
+    setup();
+    expect(useTeamRoster).toHaveBeenCalledWith(['s1'], '2026-10-21');
   });
 });
 
-describe('SendWhatsappDialog auto-seleção, sem canal utilizável e refetch', () => {
-  it('escolhe sozinho o único canal utilizável entre vários', async () => {
-    const { user } = setup(sector, [pending, closed, channel]);
-    await user.type(screen.getByRole('textbox'), 'Oi');
-    expect(screen.getByRole('combobox', { name: 'Canal' })).toHaveTextContent('GoZap Principal');
-    expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeEnabled();
-  });
+describe('SendWhatsappDialog número por área (sem seletor de canal)', () => {
+  describe('com turno único e início futuro (dá para agendar)', () => {
+    const scheduled: SendTarget = {
+      ...(sector as Extract<SendTarget, { type: 'sector' }>),
+      shiftIds: ['noite'], shiftStart: { startsAt: '2099-10-22T02:00:00.000Z', startTime: '22:00' },
+    };
 
-  it('com dois utilizáveis nada vem escolhido', async () => {
-    const { user } = setup(sector, [channel, second]);
-    await user.type(screen.getByRole('textbox'), 'Oi');
-    expect(screen.getByRole('combobox', { name: 'Canal' })).toHaveTextContent('Escolha o canal');
-    expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeDisabled();
-  });
-
-  it('com canais mas nenhum utilizável avisa para reconectar e mantém Enviar desabilitado', async () => {
-    const { user } = setup(sector, [pending, closed]);
-    await user.type(screen.getByRole('textbox'), 'Oi');
-    expect(screen.getByText('Nenhum canal conectado — reconecte em Números e canais.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeDisabled();
-  });
-
-  it('desabilita Enviar quando o canal escolhido fica inutilizável num refetch', async () => {
-    const { user, view } = setup(sector, [channel, second]);
-    await user.click(screen.getByRole('combobox', { name: 'Canal' }));
-    await user.click(screen.getByRole('option', { name: /GoZap Reserva/ }));
-    await user.type(screen.getByRole('textbox'), 'Oi');
-    expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeEnabled();
-    useTeamTargets.mockReturnValue({
-      data: { channels: [channel, { ...second, connectionState: 'close' as const }], sectors: [] },
+    it('área sem número: Enviar agora e No início do turno ficam desabilitados', async () => {
+      const { user } = setup(scheduled, { roster: { data: rosterOf(scheduled, null) } });
+      await user.type(screen.getByRole('textbox'), 'Oi');
+      expect(screen.getByText('Áreas sem número: Compras')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'No início do turno' })).toBeDisabled();
     });
-    view.rerender(<SendWhatsappDialog open onOpenChange={vi.fn()} target={sector} />);
+
+    it('número fora do ar (close): só Enviar agora fica desabilitado', async () => {
+      const { user } = setup(scheduled, { roster: { data: rosterOf(scheduled, channel('close')) } });
+      await user.type(screen.getByRole('textbox'), 'Oi');
+      expect(screen.getByText(`O número ${NUMBER} está desconectado. Áreas: Compras.`)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'No início do turno' })).toBeEnabled();
+    });
+  });
+
+  it.each([
+    ['ADMIN', true],
+    ['OPERATOR', false],
+  ])('área sem número: o link Conexões aparece só para o ADMIN (%s)', (role, hasLink) => {
+    auth.role = role;
+    setup(sector, { roster: { data: rosterOf(sector, null) } });
+    expect(screen.queryByRole('link', { name: 'Conexões' }) !== null).toBe(hasLink);
+  });
+
+  it('número sem resposta (unknown): trava o envio e Conferir de novo refaz a consulta da escala', async () => {
+    const { user } = setup(sector, { roster: { data: rosterOf(sector, channel('unknown')) } });
+    await user.type(screen.getByRole('textbox'), 'Oi');
     expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeDisabled();
-    expect(screen.getByRole('combobox', { name: 'Canal' })).toHaveTextContent('Escolha o canal');
+    await user.click(screen.getByRole('button', { name: 'Conferir de novo' }));
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('SendWhatsappDialog número por área (sem seletor de canal)', () => {
+  it.each([
+    ['carregando', { isLoading: true }],
+    ['conferindo de novo', { data: rosterOf(sector), isFetching: true }],
+    ['com erro', { isError: true }],
+  ])('escala %s: não deixa enviar', async (_name, query) => {
+    const { user } = setup(sector, { roster: query });
+    await user.type(screen.getByRole('textbox'), 'Oi');
+    expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeDisabled();
+  });
+
+  it('escala com erro mostra que não deu para conferir, com Conferir de novo', async () => {
+    const { user } = setup(sector, { roster: { isError: true } });
+    expect(screen.getByText('Não foi possível conferir o número. Tente de novo')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Conferir de novo' }));
+    expect(refetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('SendWhatsappDialog número por área (sem seletor de canal)', () => {
+  it('alvo pessoa: mostra o número da área dela e consulta só a rota da pessoa', () => {
+    setup(person);
+    expect(useTeamPersonRoute).toHaveBeenCalledWith('u1');
+    expect(useTeamRoster).toHaveBeenCalledWith([], '');
+    expect(screen.getByText(`Compras, 1 pessoa, pelo ${NUMBER}`)).toBeInTheDocument();
+  });
+
+  it('alvo pessoa sem área: diz que não tem área e não deixa enviar', async () => {
+    const { user } = setup(person, {
+      person: { data: { userId: 'u1', sector: null, channel: null } },
+    });
+    await user.type(screen.getByRole('textbox'), 'Oi');
+    expect(screen.getByText('Esta pessoa não tem área.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeDisabled();
+  });
+
+  it.each([
+    ['sector_without_number', 422, 'Há área sem número neste envio. Associe um número a ela em Conexões.'],
+    ['channel_unverified', 409, 'Não foi possível conferir o número. Tente de novo'],
+  ])('recusa %s do servidor: mostra a mensagem, não fecha e refaz a prévia', async (code, status, message) => {
+    mutateAsync.mockRejectedValue(httpError(status, `team_whatsapp.${code}`));
+    const { user, onOpenChange, invalidate } = setup();
+    await submit(user);
+    expect(await screen.findByRole('alert')).toHaveTextContent(message);
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['team-whatsapp', 'roster'] });
   });
 });
 
@@ -184,8 +233,9 @@ describe('SendWhatsappDialog envio', () => {
     });
     const { user, onOpenChange } = setup();
     await submit(user);
-    expect(mutateAsync).toHaveBeenCalledWith({
-      channelId: 'ch1', text: 'Oi equipe', target: { type: 'sector', sectorIds: ['s1'], date: '2026-10-21' },
+    // Sem `channelId`: o servidor escolhe o número pela área de cada pessoa.
+    expect(mutateAsync.mock.calls[0][0]).toStrictEqual({
+      text: 'Oi equipe', target: { type: 'sector', sectorIds: ['s1'], date: '2026-10-21' },
     });
     await waitFor(() => expect(toastSuccess).toHaveBeenCalled());
     const [title, opts] = toastSuccess.mock.calls[0];
@@ -200,48 +250,68 @@ describe('SendWhatsappDialog envio', () => {
     mutateAsync.mockResolvedValue({ dispatchId: 'd2', queued: 1, skipped: [] });
     const { user } = setup(person);
     await submit(user);
-    expect(mutateAsync).toHaveBeenCalledWith({
-      channelId: 'ch1', text: 'Oi equipe', target: { type: 'user', userId: 'u1' },
+    expect(mutateAsync.mock.calls[0][0]).toStrictEqual({
+      text: 'Oi equipe', target: { type: 'user', userId: 'u1' },
     });
   });
 
-  it('mostra no diálogo o erro 409 de canal desconectado e não fecha', async () => {
+  it('mostra no diálogo o erro 409 de número desconectado e não fecha', async () => {
     mutateAsync.mockRejectedValue(httpError(409, 'team_whatsapp.channel_disconnected'));
     const { user, onOpenChange } = setup();
     await submit(user);
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'O canal escolhido está desconectado. Reconecte o número ou escolha outro canal.',
+      'Um número deste envio está desconectado. Veja na prévia qual é.',
     );
     expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
 });
 
-const shiftTarget = (userIds: string[] | null, leftOut: { id: string; name: string }[]): SendTarget => ({
+const shiftTarget = (userIds: string[] | null, leftOut: LeftOutPerson[]): SendTarget => ({
   type: 'sector', sectorIds: ['s1'], levelIds: [], withoutLevel: false,
-  label: 'Produção · Noite · 21/10', date: '2026-10-21', shiftId: 'noite',
+  label: 'Produção · Noite · 21/10', date: '2026-10-21', shiftIds: ['noite'],
   includeOff: false, userIds, leftOut, recipients: [{ id: 'joao', name: 'João' }, { id: 'maria', name: 'Maria' }],
 });
-const withOff: SendTarget = { ...shiftTarget(null, []), shiftId: null, includeOff: true };
+const withOff: SendTarget = { ...shiftTarget(null, []), shiftIds: [], includeOff: true };
 
 describe('SendWhatsappDialog: nomes', () => {
   it.each([
-    ['todos do turno', shiftTarget(null, [{ id: 'pedro', name: 'Pedro' }]), { shiftId: 'noite' }, true],
-    ['selecionados', shiftTarget(['joao', 'maria'], []), { shiftId: 'noite', userIds: ['joao', 'maria'] }, false],
+    ['todos do turno', shiftTarget(null, [{ name: 'Pedro', reason: 'no_phone' }]), { shiftIds: ['noite'] }, true],
+    ['selecionados', shiftTarget(['joao', 'maria'], []), { shiftIds: ['noite'], userIds: ['joao', 'maria'] }, false],
     ['todos os turnos com folga', withOff, { includeOff: true }, false],
-  ])('%s: lista quem recebe e quem fica de fora, e manda date/shiftId/includeOff, sem shift', async (_name, target, extra, hasLeftOut) => {
+  ])('%s: lista quem recebe e quem fica de fora, e manda date/shiftIds/includeOff, sem shift', async (_name, target, extra, hasLeftOut) => {
     mutateAsync.mockResolvedValue({ dispatchId: 'd1', queued: 2, skipped: [] });
     const { user } = setup(target);
     expect(screen.getByText('Produção · Noite · 21/10')).toBeInTheDocument();
     expect(within(screen.getByRole('list', { name: 'Vão receber (2)' })).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['João', 'Maria']);
-    expect(screen.queryByText('Ficam de fora (sem telefone)') !== null).toBe(hasLeftOut);
+    expect(screen.queryByText('Ficam de fora (1)') !== null).toBe(hasLeftOut);
     if (hasLeftOut) {
-      expect(within(screen.getByRole('list', { name: 'Ficam de fora (sem telefone)' })).getByText('Pedro')).toBeInTheDocument();
+      expect(within(screen.getByRole('list', { name: 'Ficam de fora (1)' })).getByText('Pedro · sem telefone')).toBeInTheDocument();
     }
     await submit(user);
     expect(mutateAsync).toHaveBeenCalledWith({
-      channelId: 'ch1', text: 'Oi equipe', target: { type: 'sector', sectorIds: ['s1'], date: '2026-10-21', ...extra },
+      text: 'Oi equipe', target: { type: 'sector', sectorIds: ['s1'], date: '2026-10-21', ...extra },
     });
     expect(mutateAsync.mock.calls[0][0].target).not.toHaveProperty('shift');
+  });
+});
+
+describe('SendWhatsappDialog: vários turnos e quem fica de fora', () => {
+  it('Dia e Noite marcados: o corpo leva shiftIds [dia, noite], sem includeOff', async () => {
+    mutateAsync.mockResolvedValue({ dispatchId: 'd1', queued: 2, skipped: [] });
+    const { user } = setup({ ...shiftTarget(null, []), shiftIds: ['dia', 'noite'], label: 'Produção · Dia, Noite · 21/10' });
+    await submit(user);
+    expect(mutateAsync.mock.calls[0][0].target).toStrictEqual({
+      type: 'sector', sectorIds: ['s1'], date: '2026-10-21', shiftIds: ['dia', 'noite'],
+    });
+  });
+
+  it('seleção parcial lista Ficam de fora (2) com o motivo de cada um', () => {
+    const left: LeftOutPerson[] = [{ name: 'Ana', reason: 'unselected' }, { name: 'Bruno', reason: 'no_phone' }];
+    setup(shiftTarget(['joao'], left));
+    const list = within(screen.getByRole('list', { name: 'Ficam de fora (2)' }));
+    expect(list.getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      'Ana · não selecionado', 'Bruno · sem telefone',
+    ]);
   });
 });
 
@@ -254,7 +324,7 @@ describe('SendWhatsappDialog: nomes', () => {
     });
     await submit(user);
     expect(mutateAsync.mock.calls[0][0].target).toEqual({
-      type: 'sector', sectorIds: ['ti', 'op'], levelIds: ['level_coordinator'], date: '2026-10-21', shiftId: 'noite',
+      type: 'sector', sectorIds: ['ti', 'op'], levelIds: ['level_coordinator'], date: '2026-10-21', shiftIds: ['noite'],
     });
   });
 
@@ -298,7 +368,7 @@ describe('SendWhatsappDialog: agendar no início do turno', () => {
   const STARTS_AT = '2026-10-22T02:00:00.000Z';
   const scheduledTarget: SendTarget = {
     ...(sector as Extract<SendTarget, { type: 'sector' }>),
-    label: 'Produção · Noite · 21/10', shiftId: 'noite', shiftStart: { startsAt: STARTS_AT, startTime: '22:00' },
+    label: 'Produção · Noite · 21/10', shiftIds: ['noite'], shiftStart: { startsAt: STARTS_AT, startTime: '22:00' },
   };
 
   afterEach(() => vi.useRealTimers());
@@ -309,8 +379,16 @@ describe('SendWhatsappDialog: agendar no início do turno', () => {
   }
 
   it('No início do turno não aparece em Todos os turnos', () => {
-    setup({ ...scheduledTarget, shiftId: null });
+    setup({ ...scheduledTarget, shiftIds: [] });
     expect(screen.queryByRole('button', { name: 'No início do turno' })).not.toBeInTheDocument();
+  });
+
+  it('com dois turnos No início do turno fica desabilitado, mesmo com texto e início conhecido', async () => {
+    setNow('2026-10-21T15:00:00Z');
+    const { user } = setup({ ...scheduledTarget, shiftIds: ['dia', 'noite'] });
+    await user.type(screen.getByRole('textbox'), 'Oi');
+    expect(screen.getByRole('button', { name: 'No início do turno' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Enviar agora' })).toBeEnabled();
   });
 
   it('fica desabilitado com o motivo quando o início do turno já passou', async () => {
@@ -327,7 +405,7 @@ describe('SendWhatsappDialog: agendar no início do turno', () => {
     const { user, onOpenChange } = setup(scheduledTarget);
     await user.type(screen.getByRole('textbox'), 'Oi equipe');
     await user.click(screen.getByRole('button', { name: 'No início do turno' }));
-    expect(mutateAsync.mock.calls[0][0]).toMatchObject({ when: 'shift_start', target: { shiftId: 'noite' } });
+    expect(mutateAsync.mock.calls[0][0]).toMatchObject({ when: 'shift_start', target: { shiftIds: ['noite'] } });
     expect(toastSuccess.mock.calls[0][0]).toBe('Agendado para 21/10 às 22:00');
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });

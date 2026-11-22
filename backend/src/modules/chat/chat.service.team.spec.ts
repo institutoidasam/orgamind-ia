@@ -50,6 +50,8 @@ beforeEach(() => {
   svc = new ChatService(repo, events, wa, prisma, mockDeep<AuditService>());
 });
 
+const convOfC9 = { ...conv, contactId: 'c9' };
+
 const prepareArgs = {
   instanceId: 'ch1',
   contactId: 'c1',
@@ -58,19 +60,22 @@ const prepareArgs = {
   authorUserId: 'u-admin',
 };
 
-describe('ChatService.prepareTeamMessage', () => {
-  beforeEach(() => {
-    vi.mocked(resolveConversationForOutbound).mockResolvedValue({
-      id: 'conv1',
-      contactId: 'c1',
-      lastMessageAt: null,
-    });
-    repo.createOutboundMessage.mockResolvedValue('m1');
+function primePrepare(): void {
+  vi.mocked(resolveConversationForOutbound).mockResolvedValue({
+    id: 'conv1',
+    contactId: 'c1',
+    lastMessageAt: null,
   });
+  repo.createOutboundMessage.mockResolvedValue('m1');
+}
+
+describe('ChatService.prepareTeamMessage', () => {
+  beforeEach(primePrepare);
 
   it('resolve a conversa, grava QUEUED com authorUserId e pausa o bot, sem chamar o provedor', async () => {
     await expect(svc.prepareTeamMessage(prepareArgs)).resolves.toEqual({
       messageId: 'm1',
+      contactId: 'c1',
     });
     expect(resolveConversationForOutbound).toHaveBeenCalledWith(prisma, {
       instanceId: 'ch1',
@@ -89,6 +94,17 @@ describe('ChatService.prepareTeamMessage', () => {
     expect(wa.sendChatText.mock.calls).toHaveLength(0);
     expect(wa.sendChatTextVia.mock.calls).toHaveLength(0);
     expect(events.publish.mock.calls).toHaveLength(0);
+  });
+
+  it('devolve o contactId que a Message recebeu (o da conversa, não o do argumento)', async () => {
+    repo.getConversationForSend.mockResolvedValue(convOfC9 as never);
+    await expect(svc.prepareTeamMessage(prepareArgs)).resolves.toEqual({
+      messageId: 'm1',
+      contactId: 'c9',
+    });
+    expect(repo.createOutboundMessage.mock.calls).toContainEqual([
+      expect.objectContaining({ contactId: 'c9' }),
+    ]);
   });
 
   it('canal sem chat recusa antes de gravar', async () => {

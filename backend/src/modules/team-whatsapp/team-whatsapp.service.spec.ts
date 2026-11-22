@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import type { TeamChannel, TeamMember } from './team-whatsapp.repository';
+import type { TeamMember } from './team-whatsapp.repository';
 import type { CreateTeamDispatchInput } from './dto/create-team-dispatch.dto';
 import {
   ADMIN,
@@ -8,10 +8,11 @@ import {
   PHONE,
   SHIFT_FIRST,
   SUPPRESSED,
-  channel,
   createHarness,
+  givenNumber,
   givenSector,
   member,
+  numberRow,
   onShift,
   sector,
   type Harness,
@@ -19,12 +20,10 @@ import {
 
 const TEXT = 'Reunião às 15h na sala 2';
 const toUser = (userId = 'u1'): CreateTeamDispatchInput => ({
-  channelId: 'c1',
   text: TEXT,
   target: { type: 'user', userId },
 });
 const toSector = (sectorId = 's1'): CreateTeamDispatchInput => ({
-  channelId: 'c1',
   text: TEXT,
   target: { type: 'sector', sectorIds: [sectorId], date: '2026-10-21' },
 });
@@ -36,6 +35,9 @@ const FIRST = { shiftId: SHIFT_FIRST.id, shiftName: SHIFT_FIRST.name };
 let h: Harness;
 beforeEach(() => {
   h = createHarness();
+  // Toda área tem o número `c1`; a pessoa do alvo pessoa atua em `s1` (D8).
+  givenNumber(h);
+  h.repo.findSector.mockResolvedValue(sector());
 });
 
 async function expectRejected(
@@ -81,11 +83,11 @@ describe('TeamWhatsappService.dispatch — remetente fora da política (403)', (
     await expectForbidden(toUser());
   });
 
-  it('política vem antes do canal: não consulta o canal de quem não pode', async () => {
+  it('política vem antes do número: não consulta número nem provedor de quem não pode', async () => {
     h.repo.findActor.mockResolvedValue(null);
-    h.repo.findChannel.mockResolvedValue(null);
     await expectForbidden(toUser());
-    expect(h.repo.findChannel.mock.calls).toHaveLength(0);
+    expect(h.repo.findSectorChannels.mock.calls).toHaveLength(0);
+    expect(h.live.checkMany.mock.calls).toHaveLength(0);
   });
 });
 
@@ -122,38 +124,6 @@ describe('TeamWhatsappService.dispatch — alvo fora da política (403)', () => 
     await expectForbidden(toUser());
     h.repo.findSector.mockResolvedValueOnce(null);
     await expectForbidden(toSector('nope'));
-  });
-});
-
-describe('TeamWhatsappService.dispatch — canal (422/409)', () => {
-  beforeEach(() => {
-    h.repo.findActor.mockResolvedValue(ADMIN);
-    h.repo.findTargetUser.mockResolvedValue(member());
-  });
-
-  it.each<[string, TeamChannel | null]>([
-    ['outro provedor', channel({ provider: 'META' })],
-    ['inativo', channel({ isActive: false })],
-    ['inexistente', null],
-  ])('canal %s → 422 team_whatsapp.channel_invalid', async (_label, found) => {
-    h.repo.findChannel.mockResolvedValue(found);
-    await expectRejected(toUser(), 'team_whatsapp.channel_invalid', 422);
-  });
-
-  it('último estado close → 409 team_whatsapp.channel_disconnected', async () => {
-    h.repo.findChannel.mockResolvedValue(
-      channel({ connectionEvents: [{ state: 'close' }] }),
-    );
-    await expectRejected(toUser(), 'team_whatsapp.channel_disconnected', 409);
-  });
-
-  it('canal sem evento de conexão conhecido é aceito', async () => {
-    h.repo.findChannel.mockResolvedValue(
-      channel({ provider: 'EVOLUTION', connectionEvents: [] }),
-    );
-    await expect(h.service.dispatch('a', toUser())).resolves.toMatchObject({
-      queued: 1,
-    });
   });
 });
 
@@ -241,6 +211,12 @@ const FIN_SNAPSHOT = {
   sectorName: 'Financeiro',
   levelName: null,
 };
+// T8 (D3): o número da área, em cada destinatário (inclusive o pulado).
+const NUMBER = {
+  channelId: 'c1',
+  channelName: numberRow().name,
+  channelPhoneE164: numberRow().phoneE164,
+};
 
 describe('TeamWhatsappService.dispatch — setor grava o envio', () => {
   beforeEach(() => {
@@ -268,6 +244,7 @@ describe('TeamWhatsappService.dispatch — setor grava o envio', () => {
         status: 'QUEUED',
         skipReason: null,
         ...FIN_SNAPSHOT,
+        ...NUMBER,
       },
       {
         userId: 'u2',
@@ -276,6 +253,7 @@ describe('TeamWhatsappService.dispatch — setor grava o envio', () => {
         status: 'SKIPPED',
         skipReason: 'NO_PHONE',
         ...FIN_SNAPSHOT,
+        ...NUMBER,
       },
       {
         userId: 'u3',
@@ -284,6 +262,7 @@ describe('TeamWhatsappService.dispatch — setor grava o envio', () => {
         status: 'SKIPPED',
         skipReason: 'SUPPRESSED',
         ...FIN_SNAPSHOT,
+        ...NUMBER,
       },
     ]);
   });
@@ -316,7 +295,7 @@ describe('TeamWhatsappService.dispatch — setor audita contagens', () => {
         targetType: 'SECTOR',
         targetId: 's1',
         sectorIds: ['s1'],
-        channelId: 'c1',
+        channelIds: ['c1'],
         queued: 1,
         skipped: 2,
       },
@@ -328,11 +307,9 @@ describe('TeamWhatsappService.dispatch — setor audita contagens', () => {
 });
 
 describe('TeamWhatsappService.dispatch — ADMIN e falha da fila', () => {
-  it('ADMIN envia a um usuário sem setor', async () => {
+  it('ADMIN envia a um usuário', async () => {
     h.repo.findActor.mockResolvedValue(ADMIN);
-    h.repo.findTargetUser.mockResolvedValue(
-      member({ sectorId: null, sector: null }),
-    );
+    h.repo.findTargetUser.mockResolvedValue(member());
     await expect(h.service.dispatch('a', toUser())).resolves.toEqual({
       dispatchId: 'd1',
       queued: 1,

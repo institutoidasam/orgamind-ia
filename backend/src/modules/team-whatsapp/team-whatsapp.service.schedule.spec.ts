@@ -18,8 +18,9 @@ import {
   MANAGER,
   SHIFT_FIRST,
   SHIFT_SECOND,
-  channel,
   createHarness,
+  givenNumber,
+  givenNumbers,
   givenSector,
   member,
   onShift,
@@ -54,6 +55,7 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date('2026-10-21T20:00:00Z'));
   h = createHarness();
+  givenNumber(h);
   h.repo.findActor.mockResolvedValue(ADMIN);
   h.repo.listActiveShifts.mockResolvedValue([SHIFT_FIRST, SHIFT_SECOND, NOITE]);
   givenSector(h, [ana, bia, caio]);
@@ -75,7 +77,7 @@ const schedule = (extra: Partial<SectorTarget> = {}) =>
       type: 'sector',
       sectorIds: ['s1'],
       date: DATE,
-      shiftId: NOITE.id,
+      shiftIds: [NOITE.id],
       ...extra,
     },
   });
@@ -132,7 +134,9 @@ describe('início já passou → 422 schedule_in_past sem efeito', () => {
   ])('1º turno de 21/10, agora %s', async (_label, now) => {
     vi.setSystemTime(new Date(now));
     givenSector(h, [member({ id: 'caio', ...onShift(SHIFT_FIRST) })]);
-    await expect(schedule({ shiftId: SHIFT_FIRST.id })).rejects.toMatchObject({
+    await expect(
+      schedule({ shiftIds: [SHIFT_FIRST.id] }),
+    ).rejects.toMatchObject({
       code: 'team_whatsapp.schedule_in_past',
       status: 422,
     });
@@ -142,7 +146,7 @@ describe('início já passou → 422 schedule_in_past sem efeito', () => {
   it('1º turno de 21/10 às 09:59Z (05:59 em Manaus) → aceita para 10:00Z', async () => {
     vi.setSystemTime(new Date('2026-10-21T09:59:00Z'));
     givenSector(h, [member({ id: 'caio', ...onShift(SHIFT_FIRST) })]);
-    const out = await schedule({ shiftId: SHIFT_FIRST.id });
+    const out = await schedule({ shiftIds: [SHIFT_FIRST.id] });
     expect(out.scheduledFor).toBe('2026-10-21T10:00:00.000Z');
   });
 });
@@ -156,13 +160,10 @@ describe('agendar valida como o envio imediato (sem efeito)', () => {
       { code: 'team_whatsapp.invalid_selection', status: 422 },
     ],
     [
-      'canal desconectado → 409 (D7)',
-      () =>
-        h.repo.findChannel.mockResolvedValue(
-          channel({ connectionEvents: [{ state: 'close' }] }),
-        ),
+      'área sem número → 422 sector_without_number (D7: o agendado não consulta o provedor)',
+      () => givenNumbers(h, {}),
       {},
-      { code: 'team_whatsapp.channel_disconnected', status: 409 },
+      { code: 'team_whatsapp.sector_without_number', status: 422 },
     ],
     [
       'só quem não tem telefone → 422 no_recipients (D9)',
@@ -173,6 +174,18 @@ describe('agendar valida como o envio imediato (sem efeito)', () => {
   ])('%s', async (_label, arrange, extra, error) => {
     arrange();
     await expect(schedule(extra)).rejects.toMatchObject(error);
+    expectNothingCreated();
+  });
+});
+
+describe('agendar exige exatamente um turno (D9)', () => {
+  it('dois turnos chegando direto ao serviço → 422 invalid_shift sem efeito', async () => {
+    await expect(
+      schedule({ shiftIds: [NOITE.id, SHIFT_FIRST.id] }),
+    ).rejects.toMatchObject({
+      code: 'team_whatsapp.invalid_shift',
+      status: 422,
+    });
     expectNothingCreated();
   });
 });
@@ -342,11 +355,16 @@ const scheduledRow = (over: Partial<ScheduledRow> = {}): ScheduledRow => ({
   ...over,
 });
 
+const PAGE = { page: 1, pageSize: 20 };
+
 describe('listScheduled', () => {
   let s: ScheduleHarness;
   beforeEach(() => {
     s = scheduleHarness();
-    s.repo.listScheduled.mockResolvedValue([scheduledRow()]);
+    s.repo.listScheduled.mockResolvedValue({
+      rows: [scheduledRow()],
+      total: 1,
+    });
   });
 
   it.each<[string, TeamActor, string[] | null]>([
@@ -354,13 +372,13 @@ describe('listScheduled', () => {
     ['gestor só os setores que gerencia', MANAGER, ['s1']],
   ])('%s', async (_label, actor, onlySectorIds) => {
     s.repo.findActor.mockResolvedValue(actor);
-    await s.service.listScheduled(actor.id);
-    expect(s.repo.listScheduled.mock.calls).toEqual([[onlySectorIds]]);
+    await s.service.listScheduled(actor.id, PAGE);
+    expect(s.repo.listScheduled.mock.calls).toEqual([[onlySectorIds, PAGE]]);
   });
 
   it('quem não é ADMIN nem gestor → 403', async () => {
     s.repo.findActor.mockResolvedValue({ ...MANAGER, managedSectorIds: [] });
-    await expect(s.service.listScheduled('x')).rejects.toMatchObject({
+    await expect(s.service.listScheduled('x', PAGE)).rejects.toMatchObject({
       status: 403,
     });
     expect(s.repo.listScheduled.mock.calls).toHaveLength(0);
@@ -372,7 +390,7 @@ describe('listScheduled', () => {
       { ...NOITE, startTime: '23:00' },
     ]);
     const out = teamScheduledListResponseSchema.parse(
-      await s.service.listScheduled(ADMIN.id),
+      await s.service.listScheduled(ADMIN.id, PAGE),
     );
     expect(out.items).toEqual([
       {

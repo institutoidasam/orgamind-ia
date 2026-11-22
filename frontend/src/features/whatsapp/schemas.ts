@@ -1,5 +1,9 @@
 import { z } from 'zod';
 
+/** C1: uma área que o número atende (por nome). */
+export const channelSectorSchema = z.object({ id: z.string(), name: z.string() });
+export type ChannelSector = z.infer<typeof channelSectorSchema>;
+
 export const instanceSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -38,6 +42,8 @@ export const instanceSchema = z.object({
   sendWindowEndHour: z.number().int().min(0).max(23).optional(),
   sendWindowEnabled: z.boolean().optional(),
   lastConnectionState: z.enum(['open', 'connecting', 'close']).nullable(),
+  /** As áreas ativas que o número atende (C1). Opcional como no contrato do back. */
+  sectors: z.array(channelSectorSchema).optional(),
 });
 export type Instance = z.infer<typeof instanceSchema>;
 
@@ -45,6 +51,7 @@ export const createInstanceInputSchema = z.object({
   name: z.string().min(2, 'Nome muito curto').max(80),
   ownerUserId: z.string().cuid().nullable().optional(),
   isDefault: z.boolean().optional(),
+  sectorIds: z.array(z.string()).max(100).optional(),
 });
 export type CreateInstanceInput = z.infer<typeof createInstanceInputSchema>;
 

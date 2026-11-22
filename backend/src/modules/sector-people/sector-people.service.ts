@@ -4,6 +4,7 @@ import type {
   SectorPeopleCandidatesResponse,
   SectorPeopleResponse,
 } from '../../schemas/contracts/sector-people.schema';
+import { toSectorChannel } from '../internal-sectors/sector-channel-view';
 import { LevelsRepository } from '../levels/levels.repository';
 import { ShiftsRepository } from '../shifts/shifts.repository';
 import {
@@ -68,6 +69,7 @@ export class SectorPeopleService {
         code: sector.code,
         isActive: sector.isActive,
         manager: sector.manager,
+        channel: toSectorChannel(sector.channel),
       },
       people: rows.map((row) => toSectorPerson(row, viewer)),
       options: {

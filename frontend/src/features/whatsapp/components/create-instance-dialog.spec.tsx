@@ -1,8 +1,9 @@
 // create-instance-dialog.spec.tsx
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { HTTPError } from 'ky';
 import { CreateInstanceDialog, QrPane } from './create-instance-dialog';
 
 // Mutable state so individual tests can override the QR response.
@@ -13,11 +14,14 @@ let mockCreatedInstance: { id: string; name: string } = { id: 'new-id', name: 'T
 // is disabled (id === undefined) once the dialog closes.
 const qrIdCalls: (string | undefined)[] = [];
 
+const createMock = vi.fn();
+const sectorList = vi.hoisted(() => ({ items: [] as unknown[] }));
+vi.mock('@/features/internal-admin/api', () => ({
+  useSectors: () => ({ data: { items: sectorList.items }, isLoading: false }),
+}));
+
 vi.mock('../api', () => ({
-  useCreateInstance: () => ({
-    mutateAsync: vi.fn().mockImplementation(() => Promise.resolve(mockCreatedInstance)),
-    isPending: false,
-  }),
+  useCreateInstance: () => ({ mutateAsync: createMock, isPending: false }),
   useInstanceQr: (id?: string) => {
     qrIdCalls.push(id);
     return { data: mockQrData };
@@ -30,6 +34,23 @@ function wrap(ui: React.ReactElement) {
       {ui}
     </QueryClientProvider>,
   );
+}
+
+beforeEach(() => {
+  createMock.mockReset();
+  createMock.mockImplementation(() => Promise.resolve(mockCreatedInstance));
+  sectorList.items = [
+    { id: 'log', name: 'Logística', channel: null },
+    { id: 'exp', name: 'Expedição', channel: null },
+  ];
+});
+
+// A recusa como o ky 2 entrega: o corpo já parseado em `HTTPError.data`.
+function problem(status: number, code: string, title: string) {
+  const body = { title, code, status };
+  const error = new HTTPError(new Response(JSON.stringify(body), { status }), new Request('https://x'), {} as never);
+  error.data = body;
+  return error;
 }
 
 describe('CreateInstanceDialog', () => {
@@ -61,6 +82,14 @@ describe('CreateInstanceDialog', () => {
       expect(img).toBeInTheDocument();
       expect(img).toHaveAttribute('src', 'data:image/png;base64,ABCD');
     });
+  });
+});
+
+describe('CreateInstanceDialog', () => {
+  beforeEach(() => {
+    mockQrData = undefined;
+    mockCreatedInstance = { id: 'new-id', name: 'Test' };
+    qrIdCalls.length = 0;
   });
 
   it('does not poll the QR endpoint while the dialog is closed', () => {
@@ -101,6 +130,90 @@ describe('CreateInstanceDialog', () => {
     // never with the created instance id.
     expect(qrIdCalls).not.toContain('i1');
     expect(qrIdCalls.every((id) => id === undefined)).toBe(true);
+  });
+});
+
+async function fillName() {
+  await userEvent.type(screen.getByLabelText('Nome de exibição'), 'Loja 1');
+}
+
+describe('CreateInstanceDialog — áreas do número', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('marcar Logística e Expedição envia sectorIds no input', async () => {
+    wrap(<CreateInstanceDialog open={true} onOpenChange={() => {}} onCreated={() => {}} />);
+    await fillName();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Logística' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Expedição' }));
+    fireEvent.click(screen.getByRole('button', { name: /Criar e gerar QR/i }));
+
+    await waitFor(() =>
+      expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ name: 'Loja 1', sectorIds: ['log', 'exp'] })),
+    );
+  });
+
+  it('área em outro número pede confirmação: Cancelar não cria e Mover cria', async () => {
+    sectorList.items = [{ id: 'log', name: 'Logística', channel: { id: 'c9', name: 'Loja 9', phoneE164: '+5592911111111' } }];
+    wrap(<CreateInstanceDialog open={true} onOpenChange={() => {}} onCreated={() => {}} />);
+    await fillName();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Logística' }));
+    fireEvent.click(screen.getByRole('button', { name: /Criar e gerar QR/i }));
+
+    expect(await screen.findByText('Logística sai do número +5592911111111 e passa para este.')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Cancelar' }));
+    expect(createMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: /Criar e gerar QR/i }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Mover' }));
+    await waitFor(() =>
+      expect(createMock).toHaveBeenCalledWith(expect.objectContaining({ sectorIds: ['log'] })),
+    );
+  });
+});
+
+describe('CreateInstanceDialog — áreas do número', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('fechar sozinho depois do QR conectado limpa as áreas: ao reabrir não há confirmação de mover', async () => {
+    sectorList.items = [{ id: 'log', name: 'Logística', channel: { id: 'c9', name: 'Loja 9', phoneE164: '+5592911111111' } }];
+    mockQrData = { state: 'close', qrBase64: 'ABCD' };
+    mockCreatedInstance = { id: 'i1', name: 'Loja 1' };
+    const onOpenChange = vi.fn();
+    const onCreated = vi.fn();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const dialog = (open: boolean) => (
+      <QueryClientProvider client={client}>
+        <CreateInstanceDialog open={open} onOpenChange={onOpenChange} onCreated={onCreated} />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(dialog(true));
+    await fillName();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Logística' }));
+    fireEvent.click(screen.getByRole('button', { name: /Criar e gerar QR/i }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Mover' }));
+    await screen.findByAltText('QR code para parear o WhatsApp');
+
+    vi.useFakeTimers();
+    mockQrData = { state: 'open' };
+    rerender(dialog(true));
+    act(() => { vi.advanceTimersByTime(800); });
+    vi.useRealTimers();
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+
+    rerender(dialog(false));
+    rerender(dialog(true));
+    expect(screen.queryByRole('button', { name: 'Mover' })).not.toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Logística' })).not.toBeChecked();
+  });
+
+  it('recusa do back (channel.sectors_not_team) aparece no alerta do formulário', async () => {
+    const title = 'Este número não serve para o WhatsApp da equipe.';
+    createMock.mockRejectedValue(problem(422, 'channel.sectors_not_team', title));
+    wrap(<CreateInstanceDialog open={true} onOpenChange={() => {}} onCreated={() => {}} />);
+    await fillName();
+    fireEvent.click(screen.getByRole('button', { name: /Criar e gerar QR/i }));
+
+    expect(await screen.findByText(title)).toBeInTheDocument();
   });
 });
 

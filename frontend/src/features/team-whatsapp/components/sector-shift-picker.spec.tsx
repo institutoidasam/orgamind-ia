@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { SectorShiftPicker } from './sector-shift-picker';
@@ -8,19 +8,24 @@ const sectors = [
   { id: 'op', name: 'Operação', code: 'OP' },
 ];
 const levels = [{ id: 'l1', name: 'Coordenador' }, { id: 'l2', name: 'Funcionário' }];
+const shifts = [
+  { id: 'dia', name: 'Dia', startTime: '06:00', endTime: '18:00' },
+  { id: 'noite', name: 'Noite', startTime: '18:00', endTime: '06:00' },
+];
 
 function setup(props: Partial<React.ComponentProps<typeof SectorShiftPicker>> = {}) {
   const onSectorsChange = vi.fn();
   const onLevelsChange = vi.fn();
+  const onShiftsChange = vi.fn();
   render(
     <SectorShiftPicker
-      sectors={sectors} levels={levels} shifts={[]} sectorIds={[]} levelIds={[]} withoutLevel={false}
-      date="2026-10-21" choice={null}
-      onSectorsChange={onSectorsChange} onLevelsChange={onLevelsChange} onDateChange={vi.fn()} onChoiceChange={vi.fn()}
+      sectors={sectors} levels={levels} shifts={shifts} sectorIds={[]} levelIds={[]} withoutLevel={false}
+      date="2026-10-21" shiftIds={[]} shiftsPicked={false}
+      onSectorsChange={onSectorsChange} onLevelsChange={onLevelsChange} onDateChange={vi.fn()} onShiftsChange={onShiftsChange}
       {...props}
     />,
   );
-  return { user: userEvent.setup(), onSectorsChange, onLevelsChange };
+  return { user: userEvent.setup(), onSectorsChange, onLevelsChange, onShiftsChange };
 }
 
 describe('SectorShiftPicker', () => {
@@ -64,5 +69,45 @@ describe('SectorShiftPicker', () => {
   it('sem níveis cadastrados não mostra o filtro de nível', () => {
     setup({ levels: [] });
     expect(screen.queryByRole('group', { name: 'Níveis' })).not.toBeInTheDocument();
+  });
+
+});
+
+describe('SectorShiftPicker: turnos', () => {
+  it('marcar Dia e depois Noite emite os turnos na ordem dos turnos, e Todos os turnos emite lista vazia', async () => {
+    const first = setup();
+    await first.user.click(screen.getByRole('checkbox', { name: 'Dia' }));
+    expect(first.onShiftsChange).toHaveBeenLastCalledWith(['dia']);
+    cleanup();
+    const second = setup({ shiftIds: ['dia'], shiftsPicked: true });
+    await second.user.click(screen.getByRole('checkbox', { name: 'Noite' }));
+    expect(second.onShiftsChange).toHaveBeenLastCalledWith(['dia', 'noite']);
+    cleanup();
+    const all = setup();
+    await all.user.click(screen.getByRole('checkbox', { name: 'Todos os turnos' }));
+    expect(all.onShiftsChange).toHaveBeenLastCalledWith([]);
+  });
+
+  it('Todos os turnos só vem marcado depois de escolhido; desmarcar o último turno ou Todos volta a não escolhido', async () => {
+    const none = setup();
+    expect(screen.getByRole('checkbox', { name: 'Todos os turnos' })).not.toBeChecked();
+    cleanup();
+    const all = setup({ shiftsPicked: true });
+    expect(screen.getByRole('checkbox', { name: 'Todos os turnos' })).toBeChecked();
+    await all.user.click(screen.getByRole('checkbox', { name: 'Todos os turnos' }));
+    expect(all.onShiftsChange).toHaveBeenLastCalledWith(null);
+    cleanup();
+    const one = setup({ shiftIds: ['noite'], shiftsPicked: true });
+    expect(screen.getByRole('checkbox', { name: 'Noite' })).toBeChecked();
+    await one.user.click(screen.getByRole('checkbox', { name: 'Noite' }));
+    expect(one.onShiftsChange).toHaveBeenLastCalledWith(null);
+    expect(none.onShiftsChange).not.toHaveBeenCalled();
+  });
+
+  it('avisa que os filtros do quadro da escala não mudam quem recebe', () => {
+    setup();
+    expect(
+      screen.getByText('Os filtros do quadro da escala não mudam quem recebe: o envio usa só as escolhas abaixo.'),
+    ).toBeVisible();
   });
 });

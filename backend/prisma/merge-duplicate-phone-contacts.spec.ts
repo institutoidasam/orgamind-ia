@@ -43,6 +43,7 @@ function armaParSemEvidencia(
 ) {
   db.contact.findMany.mockResolvedValue(contatos as never);
   db.importItem.count.mockResolvedValue(0);
+  db.teamWhatsappRecipient.count.mockResolvedValue(0);
   db.message.count.mockResolvedValue(mensagens);
   db.conversation.findMany.mockResolvedValue([] as never);
   db.conversation.findFirst.mockResolvedValue(null);
@@ -495,6 +496,7 @@ describe('mergeDuplicatePhoneContacts — quem sobrevive é quem ENTREGA', () =>
     db = mockDeep<PrismaClient>();
     db.contact.findMany.mockResolvedValue([NOVE, OITO] as never);
     db.importItem.count.mockResolvedValue(0 as never);
+    db.teamWhatsappRecipient.count.mockResolvedValue(0);
     db.conversation.findMany.mockResolvedValue([] as never);
     db.conversation.findFirst.mockResolvedValue(null as never);
     db.message.count.mockImplementation(countByWhere({}) as never);
@@ -665,6 +667,7 @@ describe('mergeDuplicatePhoneContacts — a colisão com "uma linha viva por (ca
     db.contact.findMany.mockResolvedValue([NOVE, OITO] as never);
     db.message.count.mockResolvedValue(0 as never);
     db.importItem.count.mockResolvedValue(0 as never);
+    db.teamWhatsappRecipient.count.mockResolvedValue(0);
     db.conversation.findMany.mockResolvedValue([] as never);
     db.conversation.findFirst.mockResolvedValue(null as never);
     armaTransacaoEColisoes(db);
@@ -809,6 +812,7 @@ describe('mergeDuplicatePhoneContacts — falha de um par não mata o lote', () 
     ] as never);
     db.message.count.mockResolvedValue(0 as never);
     db.importItem.count.mockResolvedValue(0 as never);
+    db.teamWhatsappRecipient.count.mockResolvedValue(0);
     db.conversation.findMany.mockResolvedValue([] as never);
     db.conversation.findFirst.mockResolvedValue(null as never);
     armaTransacaoEColisoes(db);
@@ -885,6 +889,50 @@ describe('mergeDuplicatePhoneContacts — usuário ligado ao contato descartado'
     const r = await mergeDuplicatePhoneContacts(db, { apply: false });
     expect(r.conflicts[0]?.fields).toContain('user');
     expect(db.user.updateMany.mock.calls).toHaveLength(0);
+  });
+});
+
+/**
+ * `TeamWhatsappRecipient.contactId` é o snapshot do contato da conversa no envio
+ * (coluna SEM FK — nada o reaponta sozinho, nem o cascade o apaga). O tracking de
+ * respostas casa a resposta por canal + esse contactId: se o merge não o
+ * reapontar para o sobrevivente, a resposta de quem teve o contato fundido deixa
+ * de marcar "Respondeu". O script roda com --apply em todo deploy.
+ */
+describe('mergeDuplicatePhoneContacts — destinatários de envio da equipe do contato descartado', () => {
+  let db: DeepMockProxy<PrismaClient>;
+
+  beforeEach(() => {
+    db = mockDeep<PrismaClient>();
+    armaParSemEvidencia(db, [
+      P('c9', '+5592991234567'),
+      P('c8', '+559291234567'),
+    ]);
+    db.teamWhatsappRecipient.count.mockResolvedValue(2);
+  });
+
+  it('reaponta TeamWhatsappRecipient.contactId do perdedor para o sobrevivente antes de apagar o contato', async () => {
+    const r = await mergeDuplicatePhoneContacts(db, { apply: true });
+
+    expect(r.merges[0]).toMatchObject({ survivorId: 'c9', deletedId: 'c8' });
+    expect(db.teamWhatsappRecipient.updateMany.mock.calls).toContainEqual([
+      {
+        where: { contactId: 'c8' },
+        data: { contactId: 'c9' },
+      },
+    ]);
+    expect(
+      db.teamWhatsappRecipient.updateMany.mock.invocationCallOrder[0],
+    ).toBeLessThan(db.contact.delete.mock.invocationCallOrder[0]);
+    expect(r.teamRecipientsMoved).toBe(2);
+  });
+
+  it('no dry-run conta os destinatários, mas não escreve em TeamWhatsappRecipient', async () => {
+    const r = await mergeDuplicatePhoneContacts(db, { apply: false });
+
+    expect(r.teamRecipientsMoved).toBe(2);
+    expect(db.teamWhatsappRecipient.updateMany.mock.calls).toHaveLength(0);
+    expect(db.contact.delete.mock.calls).toHaveLength(0);
   });
 });
 

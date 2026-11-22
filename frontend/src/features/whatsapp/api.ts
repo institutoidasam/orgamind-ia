@@ -1,7 +1,14 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { z } from 'zod';
 import { api } from '@/lib/api-client';
-import { instanceSchema, instanceQrSchema, type Instance, type CreateInstanceInput } from './schemas';
+import { sectorsKey } from '@/features/internal-admin/api';
+import {
+  channelSectorSchema,
+  instanceSchema,
+  instanceQrSchema,
+  type Instance,
+  type CreateInstanceInput,
+} from './schemas';
 
 export type WhatsappLabel = {
   id: string;
@@ -9,6 +16,17 @@ export type WhatsappLabel = {
   /** Evolution can return either a string-encoded code or a number. */
   color: string | number;
 };
+
+/**
+ * Criar ou remover um número muda o número de áreas (criar associa; remover as
+ * deixa sem número): a lista do número e os setores (selo e aviso) recarregam.
+ */
+function refreshWithSectors(qc: QueryClient, key: readonly string[]) {
+  return Promise.all([
+    qc.invalidateQueries({ queryKey: key }),
+    qc.invalidateQueries({ queryKey: sectorsKey }),
+  ]);
+}
 
 export function useWhatsappLabels() {
   return useQuery({
@@ -44,7 +62,7 @@ export function useCreateInstance() {
       const json = await api.post('whatsapp/instances', { json: input }).json();
       return instanceSchema.parse(json);
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['whatsapp', 'instances'] }),
+    onSuccess: () => refreshWithSectors(qc, ['whatsapp', 'instances']),
   });
 }
 
@@ -75,7 +93,7 @@ export function useDeleteInstance() {
     mutationFn: async (id: string) => {
       await api.delete(`whatsapp/instances/${id}`);
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['whatsapp', 'instances'] }),
+    onSuccess: () => refreshWithSectors(qc, ['whatsapp', 'instances']),
   });
 }
 
@@ -176,6 +194,8 @@ const channelSummarySchema = z.object({
    * tratar ausência como "desconectado".
    */
   connectionState: z.enum(['open', 'connecting', 'close']).nullable().optional(),
+  /** As áreas ativas que o número atende (C1); o back sempre preenche em GoZap/Evolution. */
+  sectors: z.array(channelSectorSchema).optional(),
 });
 export type ChannelSummary = z.infer<typeof channelSummarySchema>;
 
@@ -444,7 +464,7 @@ export function useCreateChannel() {
 
 /**
  * Creates a GOZAP channel — POST /whatsapp/channels with `{ provider: 'GOZAP',
- * name }` only. Deliberately NOT built on top of `useCreateChannel`'s
+ * name, sectorIds? }` only. Deliberately NOT built on top of `useCreateChannel`'s
  * `CreateChannelInput` (which carries optional phoneE164/zernioAccountId for
  * the no-provisioning cloud providers): that shape would let a caller pass
  * fields the backend already rejects for GOZAP, for no benefit here. The
@@ -453,13 +473,49 @@ export function useCreateChannel() {
 export function useCreateGozapChannel() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (input: { name: string }) => {
+    mutationFn: async (input: { name: string; sectorIds?: string[] }) => {
       const json = await api
-        .post('whatsapp/channels', { json: { provider: 'GOZAP', name: input.name } })
+        .post('whatsapp/channels', {
+          json: {
+            provider: 'GOZAP',
+            name: input.name,
+            ...(input.sectorIds ? { sectorIds: input.sectorIds } : {}),
+          },
+        })
         .json();
       return channelSummarySchema.parse(json);
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['whatsapp', 'providers'] }),
+    onSuccess: () => refreshWithSectors(qc, ['whatsapp', 'providers']),
+  });
+}
+
+const channelSectorsResultSchema = z.object({
+  channelId: z.string(),
+  sectors: z.array(channelSectorSchema),
+  moved: z.array(z.object({ sectorId: z.string(), fromChannelId: z.string() })),
+});
+export type ChannelSectorsResult = z.infer<typeof channelSectorsResultSchema>;
+
+/**
+ * Define as áreas que o número atende — PUT /whatsapp/channels/:id/sectors
+ * `{ sectorIds }` (só o ADMIN; GoZap e Evolution). A lista é o conjunto final:
+ * área fora dela que estava neste número fica sem número. Invalida as listas de
+ * conexões (as duas) e os setores, que mostram o número de cada área.
+ */
+export function useUpdateChannelSectors() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ channelId, sectorIds }: { channelId: string; sectorIds: string[] }) => {
+      const json = await api.put(`whatsapp/channels/${channelId}/sectors`, { json: { sectorIds } }).json();
+      return channelSectorsResultSchema.parse(json);
+    },
+    onSuccess: () =>
+      Promise.all([
+        qc.invalidateQueries({ queryKey: ['whatsapp', 'providers'] }),
+        qc.invalidateQueries({ queryKey: ['whatsapp', 'instances'] }),
+        qc.invalidateQueries({ queryKey: sectorsKey }),
+        qc.invalidateQueries({ queryKey: ['sector-people'] }),
+      ]),
   });
 }
 
@@ -495,7 +551,7 @@ export function useDeleteGozapChannel() {
     mutationFn: async (id: string) => {
       await api.delete(`whatsapp/channels/${id}`);
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['whatsapp', 'providers'] }),
+    onSuccess: () => refreshWithSectors(qc, ['whatsapp', 'providers']),
   });
 }
 

@@ -97,30 +97,31 @@ export function dayMembers(input: {
     );
 }
 
-/** Filtro do alvo setor (C5): turno (ausente = todos), folga e nível. */
+/** Filtro do alvo setor (C5/D9): turnos (null = todos), folga e nível. */
 export type DispatchFilter = {
-  shiftId?: string;
+  shiftIds: ReadonlySet<string> | null;
   includeOff: boolean;
   level?: LevelFilter;
 };
 
 /**
- * Quem o filtro alcança (D2): com turno, só WORK nesse turno; "Todos os turnos",
- * todo WORK (sem NONE); `includeOff` (só sem turno) acrescenta os OFF do setor;
- * por fim o nível (C5, `passesLevel`; sem filtro = todos).
+ * Quem o filtro alcança (D2): com turnos, só WORK em um deles; "Todos os turnos"
+ * (`shiftIds` null), todo WORK (sem NONE); `includeOff` (só em todos os turnos)
+ * acrescenta os OFF do setor; por fim o nível (C5, `passesLevel`; sem filtro =
+ * todos).
  */
 export function eligibleFor(
   members: readonly DayMember[],
   filter: DispatchFilter,
 ): DayMember[] {
-  const { shiftId, includeOff, level = null } = filter;
+  const { shiftIds, includeOff, level = null } = filter;
   return members.filter((m) => {
     if (!passesLevel(m, level)) return false;
     const { situation, fromOtherSector } = m;
     if (situation.kind === 'WORK')
-      return shiftId === undefined || situation.shiftId === shiftId;
+      return shiftIds === null || shiftIds.has(situation.shiftId);
     const offHere = situation.kind === 'OFF' && !fromOtherSector;
-    return offHere && includeOff && shiftId === undefined;
+    return offHere && includeOff && shiftIds === null;
   });
 }
 
@@ -273,8 +274,13 @@ function compactNames(names: readonly string[]): string {
   return names.length > 2 ? `${head} +${names.length - 2}` : head;
 }
 
+/** D9: rótulo dos turnos do envio, na ordem recebida; nenhum → null ("todos os turnos"). */
+export function shiftsLabel(names: readonly string[]): string | null {
+  return names.length > 0 ? compactNames(names) : null;
+}
+
 /**
- * GC12: `<setores> · <níveis>? · <turno | todos os turnos> · dd/MM · seleção de N?`.
+ * GC12: `<setores> · <níveis>? · <turnos | todos os turnos> · dd/MM · seleção de N?`.
  * Nomes já ordenados pelo chamador: setores por nome (pt-BR), níveis pelo
  * sortOrder com `Sem nível` no fim; sem filtro de nível a parte some. Um setor
  * sem nível = rótulo de antes: "Produção · Noite · 21/10 · seleção de 2".

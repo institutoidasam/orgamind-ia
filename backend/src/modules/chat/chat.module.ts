@@ -12,6 +12,7 @@ import { ChatSyncController } from './chat-sync.controller';
 import { ZernioInboxSyncService } from './zernio-inbox-sync.service';
 import { ZernioInboxSyncController } from './zernio-inbox-sync.controller';
 import { ZernioSyncRunsService } from './zernio-sync-runs.service';
+import { TeamTrackingModule } from '../team-whatsapp/tracking/team-tracking.module';
 
 // NOTE: The CHAT_MEDIA_DOWNLOAD and CHAT_HISTORY_SYNC queues are registered
 // (with their defaultJobOptions, incl. attempts) in the @Global QueueModule.
@@ -21,6 +22,8 @@ import { ZernioSyncRunsService } from './zernio-sync-runs.service';
 @Module({
   imports: [
     WhatsappProvidersModule,
+    // T10 — "respondeu" do envio da equipe (D10: módulo sem imports, sem ciclo).
+    TeamTrackingModule,
   ],
   controllers: [ChatController, ChatMediaController, ChatSyncController, ZernioInboxSyncController],
   providers: [ChatService, ChatRepository, ChatEventsService, ChatIngestService, ChatMediaService, ChatHistorySyncService, ZernioInboxSyncService, ZernioSyncRunsService],

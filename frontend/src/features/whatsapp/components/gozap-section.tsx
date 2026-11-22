@@ -1,9 +1,11 @@
 import { useState } from 'react';
 import { Plus } from 'lucide-react';
 import { type ChannelSummary } from '../api';
+import { areasLabel } from '../sector-moves';
 import { Button } from '@/components/ui/button';
 import { CreateGozapChannelDialog } from './create-gozap-channel-dialog';
 import { GozapQrDialog } from './gozap-qr-dialog';
+import { EditChannelSectorsDialog } from './edit-channel-sectors-dialog';
 import { RemoveGozapChannelDialog } from './remove-gozap-channel-dialog';
 import { ConnectionStateBadge } from '../provider-scope';
 
@@ -15,6 +17,9 @@ import { ConnectionStateBadge } from '../provider-scope';
  * EVOLUTION's local Baileys session). That difference is why this is its
  * own section instead of folding into EvolutionSection — see connect.tsx's
  * routing comment. Reavaliar unificação na F-B.
+ *
+ * Cada linha mostra as áreas que o número atende (`Áreas: …` ou `Nenhuma área`)
+ * e, só para o ADMIN, o botão `Áreas` que as edita.
  *
  * `channels` comes straight from `useProviders()` (via connect.tsx) — this
  * section renders only what the GOZAP provider actually reports, never a
@@ -30,6 +35,16 @@ import { ConnectionStateBadge } from '../provider-scope';
  * exatamente o "Remover conexão não remove" relatado pelo cliente: o clique
  * funcionava (a instância caía no GoZap), só a TELA nunca refletia.
  */
+type Target = { id: string; name: string };
+
+function useGozapDialogs() {
+  const [createOpen, setCreateOpen] = useState(false);
+  const [connect, setConnect] = useState<Target | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<Target | null>(null);
+  const [sectorsTarget, setSectorsTarget] = useState<ChannelSummary | null>(null);
+  return { createOpen, setCreateOpen, connect, setConnect, removeTarget, setRemoveTarget, sectorsTarget, setSectorsTarget };
+}
+
 export function GozapSection({
   role,
   channels,
@@ -38,16 +53,14 @@ export function GozapSection({
   channels: ChannelSummary[];
 }) {
   const visibleChannels = channels.filter((ch) => ch.isActive);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [connect, setConnect] = useState<{ id: string; name: string } | null>(null);
-  const [removeTarget, setRemoveTarget] = useState<{ id: string; name: string } | null>(null);
+  const dialogs = useGozapDialogs();
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="ds-display !text-3xl">Conexões</h2>
         {role === 'ADMIN' && (
-          <Button onClick={() => setCreateOpen(true)}>
+          <Button onClick={() => dialogs.setCreateOpen(true)}>
             <Plus className="mr-2 size-4" /> Nova conexão
           </Button>
         )}
@@ -60,53 +73,76 @@ export function GozapSection({
       ) : (
         <div className="space-y-2">
           {visibleChannels.map((ch) => (
-            <div
-              key={ch.id}
-              className="flex items-center gap-3 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-3"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <strong className="truncate text-sm">{ch.name}</strong>
-                  {ch.isDefault && (
-                    <span className="rounded bg-[var(--surface-sunken)] px-1.5 py-0.5 text-[10px] uppercase tracking-wider">
-                      default
-                    </span>
-                  )}
-                </div>
-                <div className="truncate text-xs text-[var(--foreground-muted)]">
-                  {ch.phoneE164 ?? '—'}
-                </div>
-                <ConnectionStateBadge state={ch.connectionState} />
-              </div>
-
-              <button
-                type="button"
-                className="rounded border border-[var(--border)] px-2 py-1 text-xs"
-                onClick={() => setConnect({ id: ch.id, name: ch.name })}
-              >
-                Conectar
-              </button>
-
-              {role === 'ADMIN' && (
-                <button
-                  type="button"
-                  className="rounded border border-[var(--border)] px-2 py-1 text-xs text-destructive"
-                  onClick={() => setRemoveTarget({ id: ch.id, name: ch.name })}
-                  title="Remove a conexão de forma definitiva — pede confirmação"
-                >
-                  Remover
-                </button>
-              )}
-            </div>
+            <GozapChannelRow key={ch.id} channel={ch} isAdmin={role === 'ADMIN'} dialogs={dialogs} />
           ))}
         </div>
       )}
 
+      <GozapDialogs dialogs={dialogs} isAdmin={role === 'ADMIN'} />
+    </div>
+  );
+}
+
+type Dialogs = ReturnType<typeof useGozapDialogs>;
+
+function GozapChannelRow({ channel: ch, isAdmin, dialogs }: { channel: ChannelSummary; isAdmin: boolean; dialogs: Dialogs }) {
+  return (
+    <div className="flex items-center gap-3 rounded-md border border-[var(--border)] bg-[var(--surface)] px-3 py-3">
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <strong className="truncate text-sm">{ch.name}</strong>
+          {ch.isDefault && (
+            <span className="rounded bg-[var(--surface-sunken)] px-1.5 py-0.5 text-[10px] uppercase tracking-wider">
+              default
+            </span>
+          )}
+        </div>
+        <div className="truncate text-xs text-[var(--foreground-muted)]">{ch.phoneE164 ?? '—'}</div>
+        <div className="truncate text-xs text-[var(--foreground-muted)]">{areasLabel(ch.sectors)}</div>
+        <ConnectionStateBadge state={ch.connectionState} />
+      </div>
+
+      <button
+        type="button"
+        className="rounded border border-[var(--border)] px-2 py-1 text-xs"
+        onClick={() => dialogs.setConnect({ id: ch.id, name: ch.name })}
+      >
+        Conectar
+      </button>
+
+      {isAdmin && (
+        <button
+          type="button"
+          className="rounded border border-[var(--border)] px-2 py-1 text-xs"
+          onClick={() => dialogs.setSectorsTarget(ch)}
+        >
+          Áreas
+        </button>
+      )}
+
+      {isAdmin && (
+        <button
+          type="button"
+          className="rounded border border-[var(--border)] px-2 py-1 text-xs text-destructive"
+          onClick={() => dialogs.setRemoveTarget({ id: ch.id, name: ch.name })}
+          title="Remove a conexão de forma definitiva — pede confirmação"
+        >
+          Remover
+        </button>
+      )}
+    </div>
+  );
+}
+
+function GozapDialogs({ dialogs, isAdmin }: { dialogs: Dialogs; isAdmin: boolean }) {
+  const { connect, setConnect, removeTarget, setRemoveTarget, sectorsTarget, setSectorsTarget } = dialogs;
+  return (
+    <>
       <CreateGozapChannelDialog
-        open={createOpen}
-        onOpenChange={setCreateOpen}
+        open={dialogs.createOpen}
+        onOpenChange={dialogs.setCreateOpen}
         onCreated={(channel) => {
-          setCreateOpen(false);
+          dialogs.setCreateOpen(false);
           // Cria e já abre o QR: sem isto o operador criaria o canal e não
           // teria caminho nenhum na tela para de fato parear o número.
           setConnect({ id: channel.id, name: channel.name });
@@ -125,6 +161,14 @@ export function GozapSection({
         open={!!removeTarget}
         onOpenChange={(open) => { if (!open) setRemoveTarget(null); }}
       />
-    </div>
+
+      {isAdmin && (
+        <EditChannelSectorsDialog
+          channel={sectorsTarget}
+          open={!!sectorsTarget}
+          onOpenChange={(open) => { if (!open) setSectorsTarget(null); }}
+        />
+      )}
+    </>
   );
 }

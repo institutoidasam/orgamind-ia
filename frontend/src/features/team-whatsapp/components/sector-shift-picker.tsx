@@ -1,8 +1,6 @@
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { ALL_SHIFTS, type ShiftChoice } from '../member-filter';
 import type { TeamLevel, TeamSector, TeamTargets } from '../schemas';
 
 type Props = {
@@ -13,12 +11,18 @@ type Props = {
   levelIds: string[];
   withoutLevel: boolean;
   date: string;
-  choice: ShiftChoice | null;
+  /** Turnos marcados; vazio = "Todos os turnos" (se `shiftsPicked`). */
+  shiftIds: string[];
+  /** Falso até o primeiro clique: nada marcado, nem "Todos os turnos". */
+  shiftsPicked: boolean;
   onSectorsChange: (ids: string[]) => void;
   onLevelsChange: (levelIds: string[], withoutLevel: boolean) => void;
   onDateChange: (date: string) => void;
-  onChoiceChange: (choice: ShiftChoice) => void;
+  /** `null` = desmarcou tudo (volta a não escolhido); `[]` = "Todos os turnos". */
+  onShiftsChange: (shiftIds: string[] | null) => void;
 };
+
+const BOARD_FILTER_HINT = 'Os filtros do quadro da escala não mudam quem recebe: o envio usa só as escolhas abaixo.';
 
 type OptionProps = { id: string; label: string; checked: boolean; onChange: (on: boolean) => void };
 
@@ -86,31 +90,51 @@ function LevelChoice({ levels, levelIds, withoutLevel, onLevelsChange }: LevelCh
   );
 }
 
+type ShiftChoiceProps = Pick<Props, 'shifts' | 'shiftIds' | 'shiftsPicked'> & { onChange: Props['onShiftsChange'] };
+
+/** Vários turnos ou "Todos os turnos" (lista vazia); folga só vale com todos (D9). */
+function ShiftChoice({ shifts, shiftIds, shiftsPicked, onChange }: ShiftChoiceProps) {
+  const toggle = (id: string, on: boolean) => {
+    const next = shifts.filter((s) => (s.id === id ? on : shiftIds.includes(s.id))).map((s) => s.id);
+    onChange(next.length > 0 ? next : null);
+  };
+  return (
+    <div role="group" aria-label="Turnos" className="space-y-1">
+      <p className="text-sm font-medium">Turnos</p>
+      <div className="flex flex-wrap gap-x-4 gap-y-2">
+        <CheckOption
+          id="team-whatsapp-shift-all" label="Todos os turnos" checked={shiftsPicked && shiftIds.length === 0}
+          onChange={(on) => onChange(on ? [] : null)}
+        />
+        {shifts.map((s) => (
+          <CheckOption
+            key={s.id} id={`team-whatsapp-shift-${s.id}`} label={s.name} checked={shiftIds.includes(s.id)}
+            onChange={(on) => toggle(s.id, on)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function SectorShiftPicker(props: Props) {
-  const { sectors, shifts, date, choice, onDateChange, onChoiceChange } = props;
+  const { sectors, date, onDateChange } = props;
   return (
     <div className="space-y-3">
+      <p className="text-sm text-muted-foreground">{BOARD_FILTER_HINT}</p>
       <SectorChoice sectors={sectors} sectorIds={props.sectorIds} onChange={props.onSectorsChange} />
       <LevelChoice
         levels={props.levels} levelIds={props.levelIds} withoutLevel={props.withoutLevel}
         onLevelsChange={props.onLevelsChange}
       />
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="space-y-1">
-          <Label htmlFor="team-whatsapp-date">Data</Label>
-          <Input id="team-whatsapp-date" type="date" value={date} onChange={(e) => onDateChange(e.target.value)} />
-        </div>
-        <div className="space-y-1">
-          <Label>Turno</Label>
-          <Select value={choice ?? ''} onValueChange={onChoiceChange}>
-            <SelectTrigger aria-label="Turno"><SelectValue placeholder="Escolha o turno" /></SelectTrigger>
-            <SelectContent>
-              {shifts.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
-              <SelectItem value={ALL_SHIFTS}>Todos os turnos</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+      <div className="space-y-1">
+        <Label htmlFor="team-whatsapp-date">Data</Label>
+        <Input id="team-whatsapp-date" type="date" value={date} onChange={(e) => onDateChange(e.target.value)} />
       </div>
+      <ShiftChoice
+        shifts={props.shifts} shiftIds={props.shiftIds} shiftsPicked={props.shiftsPicked}
+        onChange={props.onShiftsChange}
+      />
     </div>
   );
 }

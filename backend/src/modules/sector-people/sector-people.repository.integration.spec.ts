@@ -162,6 +162,7 @@ describe('SectorPeopleRepository — o que a P1 lê', () => {
       isActive: true,
       managerId: ids.tiago,
       manager: { id: ids.tiago, name: 'Tiago' },
+      channel: null,
     });
     await expect(repo.findSector('sector_ghost')).resolves.toBeNull();
   });

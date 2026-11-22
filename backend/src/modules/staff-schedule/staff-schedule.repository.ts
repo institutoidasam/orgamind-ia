@@ -192,10 +192,12 @@ export class StaffScheduleRepository {
     });
   }
 
-  /** Ativos cujo setor principal é `sectorId`. */
-  listSectorPeople(sectorId: string): Promise<BoardPersonRow[]> {
+  /** Ativos cujo setor principal é `sectorId`, por nome; no máximo `take` (D13). */
+  listSectorPeople(sectorId: string, take: number): Promise<BoardPersonRow[]> {
     return this.prisma.user.findMany({
       where: { sectorId, isActive: true },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      take,
       select: boardPersonSelect,
     });
   }
@@ -204,15 +206,20 @@ export class StaffScheduleRepository {
   listPeopleByIds(ids: readonly string[]): Promise<BoardPersonRow[]> {
     return this.prisma.user.findMany({
       where: { id: { in: [...ids] }, isActive: true },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
       select: boardPersonSelect,
     });
   }
 
-  /** Ativos de fora do setor (ou sem setor) com OTHER_SECTOR para ele no período. */
+  /**
+   * Ativos de fora do setor (ou sem setor) com OTHER_SECTOR para ele no
+   * período; `take` limita (D13), sem ele traz todos.
+   */
   async listVisitorIds(
     sectorId: string,
     from: CivilDate,
     to: CivilDate,
+    take?: number,
   ): Promise<string[]> {
     const users = await this.prisma.user.findMany({
       where: {
@@ -222,9 +229,41 @@ export class StaffScheduleRepository {
           some: { kind: 'OTHER_SECTOR', sectorId, ...overlaps(from, to) },
         },
       },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+      ...(take === undefined ? {} : { take }),
       select: { id: true },
     });
     return users.map((u) => u.id);
+  }
+
+  /**
+   * Os visitantes de vários setores numa consulta só (mesma regra de
+   * `listVisitorIds`): setor → ids, sem repetir. Setor sem visitante fica fora do mapa.
+   */
+  async listVisitorIdsBySector(
+    sectorIds: readonly string[],
+    from: CivilDate,
+    to: CivilDate,
+  ): Promise<Map<string, string[]>> {
+    const rows = await this.prisma.staffScheduleException.findMany({
+      where: {
+        kind: 'OTHER_SECTOR',
+        sectorId: { in: [...sectorIds] },
+        user: { isActive: true },
+        ...overlaps(from, to),
+      },
+      select: {
+        userId: true,
+        sectorId: true,
+        user: { select: { sectorId: true } },
+      },
+    });
+    const bySector = new Map<string, Set<string>>();
+    for (const { userId, sectorId, user } of rows) {
+      if (sectorId === null || user.sectorId === sectorId) continue;
+      bySector.set(sectorId, (bySector.get(sectorId) ?? new Set()).add(userId));
+    }
+    return new Map([...bySector].map(([id, users]) => [id, [...users]]));
   }
 
   /** Toda id pedida tem entrada; sem escala nem exceção = vazia. */

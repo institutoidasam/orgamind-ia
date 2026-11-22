@@ -7,7 +7,11 @@ import {
 import { deployMigrations } from '../../../test/migrations';
 import { StaffScheduleRepository } from '../staff-schedule/staff-schedule.repository';
 import { TeamWhatsappRepository } from './team-whatsapp.repository';
-import { NO_SHIFT, NO_SNAPSHOT } from './team-whatsapp.test-fixtures';
+import {
+  NO_CHANNEL,
+  NO_SHIFT,
+  NO_SNAPSHOT,
+} from './team-whatsapp.test-fixtures';
 
 // Última migração antes dos setores do envio (T7).
 const BEFORE_DISPATCH_SECTORS = '20261022100000_user_without_access';
@@ -25,6 +29,8 @@ const OLD_ROSTER = {
   ],
   off: [],
 };
+
+const PAGE = { page: 1, pageSize: 50 };
 
 let postgres: StartedPostgreSqlContainer;
 let prisma: PrismaClient;
@@ -134,8 +140,8 @@ describe('migração 20261022110000_team_dispatch_sectors', () => {
   });
 
   it('agendado antigo de Produção segue com o gestor de Produção (Agendados e cancelar)', async () => {
-    const mine = await repo.listScheduled(['s-prod']);
-    expect(mine.map((r) => r.id)).toEqual(['d-prod']);
+    const mine = await repo.listScheduled(['s-prod'], PAGE);
+    expect(mine.rows.map((r) => r.id)).toEqual(['d-prod']);
     await expect(repo.findDispatchForCancel('d-prod')).resolves.toEqual({
       id: 'd-prod',
       targetType: 'SECTOR',
@@ -220,6 +226,7 @@ async function criarEnvio(opts: {
         sectorId: first.sectorId,
         sectorName: first.sectorName,
         levelName: null,
+        ...NO_CHANNEL,
       },
     ],
     ...(opts.scheduled
@@ -286,7 +293,7 @@ describe('quem vê — Agendados', () => {
     ],
     ['ADMIN × envio de A+B → vê', null, 'A+B', true],
   ])('%s', async (_label, onlySectorIds, key, sees) => {
-    const rows = await repo.listScheduled(onlySectorIds);
+    const { rows } = await repo.listScheduled(onlySectorIds, PAGE);
     expect(rows.some((r) => r.id === ids[key])).toBe(sees);
   });
 
@@ -302,24 +309,24 @@ describe('quem vê — Agendados', () => {
 
 describe('quem vê — Recentes', () => {
   it('gestor autor vê o próprio envio A+B, com os setores', async () => {
-    const rows = await repo.listDispatches(gestor);
+    const { rows } = await repo.listDispatches(gestor, PAGE);
     expect(rows.map((r) => r.id)).toEqual([ids.recenteAB]);
     expect(
       [...rows[0].sectors].sort((x, y) => x.sectorId.localeCompare(y.sectorId)),
     ).toEqual([A, B]);
-    const recipients = await repo.listRecipients([ids.recenteAB]);
-    expect(recipients).toEqual([
+    const recipients = await repo.listDispatchRecipients(ids.recenteAB, PAGE);
+    expect(recipients.rows).toEqual([
       expect.objectContaining({ sectorName: A.sectorName, levelName: null }),
     ]);
   });
 
   it('gestor não vê envio de outro autor', async () => {
-    const rows = await repo.listDispatches(gestor);
+    const { rows } = await repo.listDispatches(gestor, PAGE);
     expect(rows.some((r) => r.id === ids.A)).toBe(false);
   });
 
   it('ADMIN (null) vê todos', async () => {
-    const rows = await repo.listDispatches(null);
+    const { rows } = await repo.listDispatches(null, PAGE);
     expect(rows.map((r) => r.id)).toEqual(
       expect.arrayContaining([...Object.values(ids), 'd-prod', 'd-gone']),
     );

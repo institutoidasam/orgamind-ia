@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma, Role } from '@prisma/client';
 import { PrismaService } from '../../shared/prisma/prisma.service';
+import { SECTOR_CHANNEL_SELECT } from '../team-whatsapp/sector-channel';
 
 export const sectorSummarySelect = {
   id: true,
@@ -12,7 +13,8 @@ export const sectorSummarySelect = {
   createdAt: true,
   updatedAt: true,
   manager: { select: { id: true, name: true, email: true } },
-  _count: { select: { members: true, numbers: true } },
+  channel: { select: SECTOR_CHANNEL_SELECT },
+  _count: { select: { members: true } },
 } satisfies Prisma.SectorSelect;
 export type SectorSummaryRecord = Prisma.SectorGetPayload<{
   select: typeof sectorSummarySelect;
@@ -46,16 +48,6 @@ export class InternalSectorsRepository {
             role: true,
             sectorId: true,
             isActive: true,
-          },
-        },
-        numbers: {
-          select: {
-            id: true,
-            name: true,
-            phone: true,
-            provider: true,
-            channelId: true,
-            routeToSector: true,
           },
         },
       },

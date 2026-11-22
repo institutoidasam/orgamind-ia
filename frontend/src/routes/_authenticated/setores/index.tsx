@@ -1,7 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -14,6 +13,7 @@ import {
 import { QueryErrorFallback } from "@/components/query-error-fallback";
 import { useAuthStore } from "@/stores/auth.store";
 import { useSectors } from "@/features/internal-admin/api";
+import { SectorNumber } from "@/features/internal-admin/components/sector-number";
 import type { Sector } from "@/features/internal-admin/schemas";
 
 const route = createFileRoute("/_authenticated/setores/")({
@@ -94,7 +94,7 @@ function SectorTableContent({ items }: { items: Sector[] }) {
             <TableHead>Setor</TableHead>
             <TableHead>Gestor</TableHead>
             <TableHead>Equipe</TableHead>
-            <TableHead>Números</TableHead>
+            <TableHead>Número</TableHead>
           </TableRow>
         </TableHeader>
         <SectorRows items={items} />
@@ -116,7 +116,7 @@ function SectorRow({ sector }: { sector: Sector }) {
       </TableCell>
       <TableCell>{sector.manager?.name ?? sector.manager?.email ?? "A definir"}</TableCell>
       <TableCell>{sector.memberCount}</TableCell>
-      <TableCell><Badge variant="outline">{sector.numberCount}</Badge></TableCell>
+      <TableCell><SectorNumber channel={sector.channel} /></TableCell>
     </TableRow>
   );
 }

@@ -1,17 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { channelAvailability } from './channel-availability';
+import { liveBlock } from './channel-availability';
 
-const PHONE = '+5592991234567';
-
-describe('channelAvailability', () => {
+describe('liveBlock', () => {
+  // Só `open` libera o envio imediato (D7); `connecting` conta como desconectado, como no servidor.
   it.each([
-    ['open', PHONE, { usable: true }],
-    ['close', PHONE, { usable: false, label: 'Desconectado' }],
-    ['connecting', PHONE, { usable: false, label: 'Aguardando conexão' }],
-    // Estado ausente nunca significa desconectado: o evento expira em 7 dias.
-    [null, PHONE, { usable: true }],
-    [null, null, { usable: false, label: 'Aguardando conexão' }],
-  ] as const)('estado %s com telefone %s', (connectionState, phoneE164, expected) => {
-    expect(channelAvailability({ connectionState, phoneE164 })).toEqual(expected);
+    ['open', null],
+    ['close', 'disconnected'],
+    ['connecting', 'disconnected'],
+    ['unknown', 'unverified'],
+  ] as const)('estado %s → %s', (state, expected) => {
+    expect(liveBlock(state)).toBe(expected);
   });
 });

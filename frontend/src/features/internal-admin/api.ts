@@ -1,16 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import {
-  internalNumberListSchema,
-  internalNumberSchema,
   sectorDetailSchema,
   sectorListSchema,
-  type InternalNumberInput,
   type SectorInput,
 } from "./schemas";
 
-const sectorsKey = ["internal", "sectors"] as const;
-const numbersKey = ["internal", "numbers"] as const;
+/** Prefixo de toda query de setores (`useSectors`, `useSector`): invalidar este invalida as duas. */
+export const sectorsKey = ["internal", "sectors"] as const;
 
 export function useSectors(activeOnly = false) {
   return useQuery({
@@ -43,13 +40,6 @@ export function useUpdateSector(id: string) {
   );
 }
 
-export function useInternalNumbers() {
-  return useQuery({
-    queryKey: numbersKey,
-    queryFn: listAllNumbers,
-  });
-}
-
 async function listAllSectors(activeOnly: boolean) {
   const first = await api
     .get("internal/sectors", {
@@ -75,20 +65,6 @@ async function listAllSectors(activeOnly: boolean) {
   );
 }
 
-async function listAllNumbers() {
-  const first = internalNumberListSchema.parse(
-    await api
-      .get("internal/numbers", { searchParams: { page: 1, pageSize: 100 } })
-      .json(),
-  );
-  return collectPages(first, (page) =>
-    api
-      .get("internal/numbers", { searchParams: { page, pageSize: 100 } })
-      .json()
-      .then((data) => internalNumberListSchema.parse(data)),
-  );
-}
-
 async function collectPages<
   Item,
   T extends { items: Item[]; total: number; pageSize: number },
@@ -102,30 +78,6 @@ async function collectPages<
     ...first,
     items: [...first.items, ...rest.flatMap((page) => page.items)],
   };
-}
-
-export function useCreateInternalNumber() {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: (input: InternalNumberInput) =>
-      api
-        .post("internal/numbers", { json: input })
-        .json()
-        .then((data) => internalNumberSchema.parse(data)),
-    onSuccess: () => client.invalidateQueries({ queryKey: numbersKey }),
-  });
-}
-
-export function useUpdateInternalNumber(id: string) {
-  const client = useQueryClient();
-  return useMutation({
-    mutationFn: (input: Partial<InternalNumberInput>) =>
-      api
-        .patch(`internal/numbers/${id}`, { json: input })
-        .json()
-        .then((data) => internalNumberSchema.parse(data)),
-    onSuccess: () => client.invalidateQueries({ queryKey: numbersKey }),
-  });
 }
 
 function useSectorMutation<T>(mutationFn: (input: T) => Promise<unknown>) {

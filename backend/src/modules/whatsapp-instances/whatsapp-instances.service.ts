@@ -2,14 +2,25 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import type { Channel } from '@prisma/client';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { AuditService } from '../../shared/audit/audit.service';
-import { EvolutionApiAdapter } from '../whatsapp-providers/adapters/evolution-api.adapter';
+import {
+  EvolutionApiAdapter,
+  type EvolutionInstanceSnapshot,
+} from '../whatsapp-providers/adapters/evolution-api.adapter';
 import { warmupInfo } from './warmup.helper';
 import { ChannelNotEvolutionError } from '../../shared/errors/domain.error';
+import {
+  SectorChannelService,
+  assignToCreatedChannel,
+  type ChannelSector,
+} from '../whatsapp-providers/sector-channel.service';
 
 // A5: read responses never expose the per-instance Evolution apiKey. be-gozap:
 // nor the (encrypted-at-rest) GoZap instance token — same rationale, kept in
 // lockstep with the repository's own SafeWhatsappInstance / omit clauses.
 type SafeWhatsappInstance = Omit<Channel, 'apiKey' | 'gozapInstanceToken'>;
+type InstanceWithState = SafeWhatsappInstance & {
+  lastConnectionState: string | null;
+};
 import { WhatsappInstancesRepository } from './whatsapp-instances.repository';
 import {
   InstanceCreationFailedError,
@@ -40,6 +51,11 @@ export class WhatsappInstancesService {
     private readonly audit: AuditService,
   ) {}
 
+  // Injetado por propriedade: o construtor de DI já passava do limite de
+  // parâmetros do gate (5) e cada parâmetro novo o piora.
+  @Inject(SectorChannelService)
+  private readonly sectorChannel!: SectorChannelService;
+
   /**
    * List instances with their connection state AND device profile reconciled
    * against Evolution.
@@ -58,8 +74,24 @@ export class WhatsappInstancesService {
    * can't blank stored fields) and any field drifted, persist the fresh
    * profile and serve it immediately.
    */
-  async list(opts: { activeOnly: boolean }): Promise<Array<SafeWhatsappInstance & { lastConnectionState: string | null }>> {
+  async list(opts: {
+    activeOnly: boolean;
+  }): Promise<Array<InstanceWithState & { sectors: ChannelSector[] }>> {
     const rows = await (opts.activeOnly ? this.repo.listActiveWithState() : this.repo.listAllWithState());
+    const [reconciled, sectorsByChannel] = await Promise.all([
+      this.reconcileWithEvolution(rows),
+      this.sectorChannel.sectorsByChannel(rows.map((r) => r.id)),
+    ]);
+    // Áreas que cada número atende (C1), por nome.
+    return reconciled.map((r) => ({
+      ...r,
+      sectors: sectorsByChannel.get(r.id) ?? [],
+    }));
+  }
+
+  private async reconcileWithEvolution(
+    rows: InstanceWithState[],
+  ): Promise<InstanceWithState[]> {
     const now = new Date();
     // Never throws — an unreachable Evolution yields an empty map and the
     // DB-stored state is served as-is.
@@ -75,50 +107,71 @@ export class WhatsappInstancesService {
         const live = liveStates.get(row.evolutionInstanceName);
         if (live === undefined) return this.attachWarmup(row, now);
 
-        let out = row;
-
-        if (live.state !== row.lastConnectionState) {
-          try {
-            await this.repo.recordConnectionEvent(row.id, live.state);
-          } catch (err) {
-            this.logger.warn(
-              `healing connection-event write failed for instance=${row.id} (state=${live.state}); serving live state anyway: ${(err as Error).message}`,
-            );
-          }
-          out = { ...out, lastConnectionState: live.state };
-        }
-
-        if (live.ownerJid) {
-          const phoneE164 = `+${live.ownerJid.split('@')[0]}`;
-          // Null live name/photo means "unknown" (e.g. a closing session still
-          // reports ownerJid) — preserve stored values, never blank them.
-          const profileName = live.profileName ?? row.profileName;
-          const profilePictureUrl = live.profilePicUrl ?? row.profilePictureUrl;
-          // A changed phone number = a (re)pairing → restart the warm-up ramp.
-          // A name/photo-only drift must NOT reset warm-up (the number would
-          // never graduate).
-          const numberChanged = phoneE164 !== row.phoneE164;
-          if (
-            numberChanged ||
-            profileName !== row.profileName ||
-            profilePictureUrl !== row.profilePictureUrl
-          ) {
-            const warmupStartedAt = numberChanged ? now : undefined;
-            const profile = { phoneE164, profileName, profilePictureUrl };
-            try {
-              await this.repo.updateDeviceProfile(row.id, { ...profile, warmupStartedAt });
-            } catch (err) {
-              this.logger.warn(
-                `healing device-profile write failed for instance=${row.id}; serving live profile anyway: ${(err as Error).message}`,
-              );
-            }
-            out = { ...out, ...profile, ...(warmupStartedAt ? { warmupStartedAt } : {}) };
-          }
-        }
-
-        return this.attachWarmup(out, now);
+        const healed = await this.healConnectionState(row, live);
+        return this.attachWarmup(
+          await this.healDeviceProfile(healed, live, now),
+          now,
+        );
       }),
     );
+  }
+
+  /** Serve (and persist) the live connection state when it drifted from the stored one. */
+  private async healConnectionState(
+    row: InstanceWithState,
+    live: EvolutionInstanceSnapshot,
+  ): Promise<InstanceWithState> {
+    if (live.state === row.lastConnectionState) return row;
+    try {
+      await this.repo.recordConnectionEvent(row.id, live.state);
+    } catch (err) {
+      this.logger.warn(
+        `healing connection-event write failed for instance=${row.id} (state=${live.state}); serving live state anyway: ${(err as Error).message}`,
+      );
+    }
+    return { ...row, lastConnectionState: live.state };
+  }
+
+  /** Serve (and persist) the device profile Evolution reports when it drifted. */
+  private async healDeviceProfile(
+    row: InstanceWithState,
+    live: EvolutionInstanceSnapshot,
+    now: Date,
+  ): Promise<InstanceWithState> {
+    if (!live.ownerJid) return row;
+    const phoneE164 = `+${live.ownerJid.split('@')[0]}`;
+    // Null live name/photo means "unknown" (e.g. a closing session still
+    // reports ownerJid) — preserve stored values, never blank them.
+    const profileName = live.profileName ?? row.profileName;
+    const profilePictureUrl = live.profilePicUrl ?? row.profilePictureUrl;
+    // A changed phone number = a (re)pairing → restart the warm-up ramp.
+    // A name/photo-only drift must NOT reset warm-up (the number would
+    // never graduate).
+    const numberChanged = phoneE164 !== row.phoneE164;
+    if (
+      !numberChanged &&
+      profileName === row.profileName &&
+      profilePictureUrl === row.profilePictureUrl
+    ) {
+      return row;
+    }
+    const warmupStartedAt = numberChanged ? now : undefined;
+    const profile = { phoneE164, profileName, profilePictureUrl };
+    try {
+      await this.repo.updateDeviceProfile(row.id, {
+        ...profile,
+        warmupStartedAt,
+      });
+    } catch (err) {
+      this.logger.warn(
+        `healing device-profile write failed for instance=${row.id}; serving live profile anyway: ${(err as Error).message}`,
+      );
+    }
+    return {
+      ...row,
+      ...profile,
+      ...(warmupStartedAt ? { warmupStartedAt } : {}),
+    };
   }
 
   /**
@@ -148,16 +201,19 @@ export class WhatsappInstancesService {
     name: string;
     ownerUserId?: string | null;
     isDefault?: boolean;
-  }): Promise<SafeWhatsappInstance> {
+    sectorIds?: readonly string[];
+    actorId: string;
+  }): Promise<SafeWhatsappInstance & { sectors?: ChannelSector[] }> {
     const evolutionInstanceName = this.slugify(input.name);
     const existing = await this.repo.findByEvolutionName(evolutionInstanceName);
     if (existing) throw new InstanceNameConflictError(evolutionInstanceName);
+    // As áreas são conferidas ANTES de criar a instância na Evolution: uma área
+    // inválida não pode deixar uma sessão criada sem canal.
+    const sectorIds = await this.sectorChannel.assertAssignable(
+      input.sectorIds ?? [],
+    );
 
-    try {
-      await this.evo.createInstance({ instanceName: evolutionInstanceName });
-    } catch (err) {
-      throw new InstanceCreationFailedError((err as Error).message);
-    }
+    await this.provisionSession(evolutionInstanceName);
 
     // be-whatsapp-003: never persist a real per-instance Evolution apiKey. All
     // sends authenticate with the global EVOLUTION_API_KEY, so the per-instance
@@ -171,21 +227,57 @@ export class WhatsappInstancesService {
       ownerUserId: input.ownerUserId ?? null,
     });
 
-    // F6: instance lifecycle is audited (AuditService swallows its own errors).
-    await this.audit.log('instance.create', 'WhatsappInstance', inst.id, {
-      name: inst.name,
-      evolutionInstanceName: inst.evolutionInstanceName,
-    });
+    const sectors = await this.registerCreation(inst, sectorIds, input.actorId);
 
+    // O setDefault pedido vale mesmo se as áreas falharam: o número já existe.
     if (input.isDefault) {
       await this.repo.setDefault(inst.id);
-      return this.findById(inst.id);
+      return this.withSectors(await this.findById(inst.id), sectors);
     }
     // A5 / be-gozap: never return the per-instance Evolution apiKey (this row
     // never has a GOZAP token either, but stripped for type-consistency with
     // SafeWhatsappInstance and defense in depth).
     const { apiKey: _apiKey, gozapInstanceToken: _gzToken, ...safe } = inst;
-    return safe;
+    return this.withSectors(safe, sectors);
+  }
+
+  /** Só devolve `sectors` quando áreas foram pedidas na criação. */
+  private withSectors<T extends object>(
+    channel: T,
+    sectors: ChannelSector[] | undefined,
+  ): T & { sectors?: ChannelSector[] } {
+    return sectors ? { ...channel, sectors } : channel;
+  }
+
+  /**
+   * Audita a criação (F6) e associa as áreas pedidas ao canal já gravado.
+   * Devolve as áreas associadas (`[]` se a associação falhou — ver
+   * `assignToCreatedChannel`) ou `undefined` quando nenhuma área foi pedida.
+   */
+  private async registerCreation(
+    inst: Pick<Channel, 'id' | 'name' | 'evolutionInstanceName'>,
+    sectorIds: string[],
+    actorId: string,
+  ): Promise<ChannelSector[] | undefined> {
+    // F6: instance lifecycle is audited (AuditService swallows its own errors).
+    await this.audit.log('instance.create', 'WhatsappInstance', inst.id, {
+      name: inst.name,
+      evolutionInstanceName: inst.evolutionInstanceName,
+    });
+    if (sectorIds.length === 0) return undefined;
+    return assignToCreatedChannel(this.sectorChannel, this.logger, {
+      channelId: inst.id,
+      sectorIds,
+      actorId,
+    });
+  }
+
+  private async provisionSession(instanceName: string): Promise<void> {
+    try {
+      await this.evo.createInstance({ instanceName });
+    } catch (err) {
+      throw new InstanceCreationFailedError((err as Error).message);
+    }
   }
 
   async setDefault(id: string): Promise<void> {

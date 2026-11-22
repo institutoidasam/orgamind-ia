@@ -8,10 +8,22 @@ const mutateAsync = vi.fn();
 vi.mock('../api', () => ({
   useCreateGozapChannel: () => ({ mutateAsync, isPending: false }),
 }));
+const sectorList = vi.hoisted(() => ({ items: [] as unknown[] }));
+vi.mock('@/features/internal-admin/api', () => ({
+  useSectors: () => ({ data: { items: sectorList.items }, isLoading: false }),
+}));
+
+const FREE = [
+  { id: 'log', name: 'Logística', channel: null },
+  { id: 'exp', name: 'Expedição', channel: null },
+];
 
 beforeEach(() => {
   mutateAsync.mockReset();
+  sectorList.items = FREE;
 });
+
+const riskBox = () => screen.getByRole('checkbox', { name: /Entendo o risco/ });
 
 /**
  * A recusa como o ky 2 entrega de verdade: o corpo (ProblemDetails do
@@ -41,7 +53,7 @@ function renderDialog(onCreated: OnCreated = () => {}) {
 
 async function fillAndSubmit(name: string) {
   await userEvent.type(screen.getByLabelText('Nome de exibição'), name);
-  await userEvent.click(screen.getByRole('checkbox'));
+  await userEvent.click(riskBox());
   fireEvent.click(screen.getByRole('button', { name: /Criar canal/i }));
 }
 
@@ -58,18 +70,18 @@ describe('CreateGozapChannelDialog', () => {
     const submit = screen.getByRole('button', { name: /Criar canal/i });
     expect(submit).toBeDisabled();
 
-    await userEvent.click(screen.getByRole('checkbox'));
+    await userEvent.click(riskBox());
     expect(submit).toBeEnabled();
   });
 
-  it('submits ONLY { name } — GOZAP has no phone/account fields to send', async () => {
+  it('submits ONLY { name, sectorIds } — GOZAP has no phone/account fields to send', async () => {
     mutateAsync.mockResolvedValue({ id: 'ch1', name: 'Loja 1' });
     const onCreated = vi.fn();
     renderDialog(onCreated);
 
     await fillAndSubmit('Loja 1');
 
-    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith({ name: 'Loja 1' }));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith({ name: 'Loja 1', sectorIds: [] }));
     await waitFor(() => expect(onCreated).toHaveBeenCalledWith({ id: 'ch1', name: 'Loja 1' }));
   });
 
@@ -121,12 +133,53 @@ describe('CreateGozapChannelDialog — fechar', () => {
     render(
       <CreateGozapChannelDialog open={true} onOpenChange={onOpenChange} onCreated={() => {}} />,
     );
-    await userEvent.click(screen.getByRole('checkbox'));
-    expect(screen.getByRole('checkbox')).toBeChecked();
+    await userEvent.click(riskBox());
+    expect(riskBox()).toBeChecked();
 
     await userEvent.click(screen.getByRole('button', { name: 'Cancelar' }));
 
     expect(onOpenChange).toHaveBeenCalledWith(false);
-    expect(screen.getByRole('checkbox')).not.toBeChecked();
+    expect(riskBox()).not.toBeChecked();
+  });
+});
+
+describe('CreateGozapChannelDialog — áreas do número', () => {
+  it('marcar Logística e Expedição envia sectorIds com as duas', async () => {
+    mutateAsync.mockResolvedValue({ id: 'ch1', name: 'Loja 1' });
+    renderDialog();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Logística' }));
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Expedição' }));
+    await fillAndSubmit('Loja 1');
+
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith({ name: 'Loja 1', sectorIds: ['log', 'exp'] }));
+  });
+
+  it('área em outro número pede confirmação: Cancelar não cria e Mover cria', async () => {
+    sectorList.items = [{ id: 'log', name: 'Logística', channel: { id: 'c9', name: 'Loja 9', phoneE164: '+5592911111111' } }];
+    mutateAsync.mockResolvedValue({ id: 'ch1', name: 'Loja 1' });
+    renderDialog();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Logística' }));
+    await fillAndSubmit('Loja 1');
+
+    expect(await screen.findByText('Logística sai do número +5592911111111 e passa para este.')).toBeInTheDocument();
+    expect(mutateAsync).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Cancelar' }));
+    expect(mutateAsync).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Nome de exibição')).toHaveValue('Loja 1');
+
+    fireEvent.click(screen.getByRole('button', { name: /Criar canal/i }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Mover' }));
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledWith({ name: 'Loja 1', sectorIds: ['log'] }));
+  });
+
+  it('recusa de área (channel.sector_invalid) aparece no alerta e volta ao formulário', async () => {
+    const title = 'Área inválida ou inativa. Atualize a página e tente de novo.';
+    mutateAsync.mockRejectedValue(await ky2Error(422, 'channel.sector_invalid', title));
+    renderDialog();
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Logística' }));
+    await fillAndSubmit('Loja 1');
+
+    expect(await screen.findByText(title)).toBeInTheDocument();
   });
 });

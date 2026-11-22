@@ -44,7 +44,7 @@ describe('NAV manifest', () => {
       'Demandas', 'Comunicados',
     ]);
     expect(navSection('admin', 'ADMIN').map((item) => item.label)).toEqual([
-      'Setores', 'Turnos', 'Níveis', 'Usuários', 'Números e canais',
+      'Setores', 'Turnos', 'Níveis', 'Usuários', 'Conexões',
     ]);
   });
 

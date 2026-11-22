@@ -69,11 +69,15 @@ describe('WhatsappInstancesController', () => {
 
   it('POST /whatsapp/instances delegates to service.create', async () => {
     svc.create.mockResolvedValue({ id: 'new', lastConnectionState: null } as any);
-    const res = await ctrl.create({ name: 'Vendas' } as any);
+    const res = await ctrl.create({ name: 'Vendas', sectorIds: ['s1'] }, {
+      user: { sub: 'admin-1' },
+    } as never);
     expect(svc.create).toHaveBeenCalledWith({
       name: 'Vendas',
       ownerUserId: undefined,
       isDefault: undefined,
+      sectorIds: ['s1'],
+      actorId: 'admin-1',
     });
     expect(res).toEqual({ id: 'new', lastConnectionState: null });
   });

@@ -14,6 +14,14 @@ const inbound = (over: Partial<InboundChatMessage> = {}): InboundChatMessage => 
   isGroup: false, fromMe: false, pushName: 'Maria', kind: 'TEXT', text: 'Olá', receivedAt: new Date(), transcript: null, ...over,
 });
 
+const TRACK_RECEIVED_AT = new Date('2026-11-10T14:00:00Z');
+// @lid ainda sem telefone mapeado: sem contato, a ingestão não rastreia.
+const TRACK_LID = inbound({
+  remoteJid: '1051@lid',
+  phoneE164: null,
+  altJid: null,
+});
+
 describe('ChatIngestService', () => {
   let prisma: MockProxy<PrismaService>;
   let wa: MockProxy<WhatsappProvidersService>;
@@ -22,6 +30,7 @@ describe('ChatIngestService', () => {
   let mediaAdd: ReturnType<typeof vi.fn>;
   let consent: MockProxy<ConsentService>;
   let links: MockProxy<OptInLinkService>;
+  let tracking: { applyReply: ReturnType<typeof vi.fn> };
   let svc: ChatIngestService;
 
   beforeEach(() => {
@@ -37,7 +46,9 @@ describe('ChatIngestService', () => {
     const botQueue = { add: vi.fn() } as never;
     links = mockDeep<OptInLinkService>();
     links.matchInbound.mockResolvedValue(null);
+    tracking = { applyReply: vi.fn().mockResolvedValue(null) };
     svc = new ChatIngestService(prisma, wa, events, redis as never, mediaQueue, botQueue, consent, links);
+    Object.assign(svc, { teamTracking: tracking });
     consent.record.mockResolvedValue({ eventId: 'ev1', created: true });
     prisma.contact.findMany.mockResolvedValue([]);
     prisma.message.findFirst.mockResolvedValue(null);
@@ -46,6 +57,57 @@ describe('ChatIngestService', () => {
     prisma.message.create.mockResolvedValue({ id: 'msg1', media: null } as never);
     prisma.conversation.update.mockResolvedValue({} as never);
   });
+
+  // T10 — a mensagem recebida marca o "respondeu" do envio da equipe (D11).
+  // O padrão `expect(mock.método)` do resto do arquivo dispara unbound-method.
+  /* eslint-disable @typescript-eslint/unbound-method */
+  describe('resposta ao envio da equipe (T10)', () => {
+    const mocked = (fn: unknown) => fn as ReturnType<typeof vi.fn>;
+    const contacts = (rows: unknown[]) =>
+      mocked(prisma.contact.findMany).mockResolvedValue(rows);
+
+    it('inbound ao vivo → applyReply com o canal, o contato e os gêmeos (9º dígito) e receivedAt', async () => {
+      wa.parseInboundChatMessages.mockReturnValue([
+        inbound({
+          remoteJid: '559295550101@s.whatsapp.net',
+          phoneE164: '+559295550101',
+          receivedAt: TRACK_RECEIVED_AT,
+        }),
+      ]);
+      contacts([
+        { id: 'ct-a', phoneE164: '+5592995550101' },
+        { id: 'ct-b', phoneE164: '+559295550101' },
+      ]);
+      await svc.ingestFromWebhook({}, 'i1');
+      expect(tracking.applyReply).toHaveBeenCalledWith({
+        channelId: 'i1',
+        contactIds: ['ct-a', 'ct-b'],
+        receivedAt: TRACK_RECEIVED_AT,
+      });
+    });
+
+    it.each([
+      ['backfill', inbound(), { backfill: true }],
+      ['fromMe', inbound({ fromMe: true, providerMessageId: 'OUT3' }), {}],
+      ['sem contato (@lid sem telefone)', TRACK_LID, {}],
+    ] as const)('%s → não chama applyReply', async (_name, message, opts) => {
+      contacts([{ id: 'ct-a', phoneE164: '+5592999999999' }]);
+      await svc.ingestMessages([message], 'i1', opts);
+      expect(tracking.applyReply).not.toHaveBeenCalled();
+    });
+
+    it('applyReply lança → a mensagem é gravada e publicada', async () => {
+      wa.parseInboundChatMessages.mockReturnValue([inbound()]);
+      contacts([{ id: 'ct-a', phoneE164: '+5592999999999' }]);
+      tracking.applyReply.mockRejectedValue(new Error('db fora'));
+      const result = await svc.ingestFromWebhook({}, 'i1');
+      expect(result).toMatchObject({ persisted: 1 });
+      expect(events.publish).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'message.created' }),
+      );
+    });
+  });
+  /* eslint-enable @typescript-eslint/unbound-method */
 
   it('ignores group messages', async () => {
     wa.parseInboundChatMessages.mockReturnValue([inbound({ isGroup: true })]);

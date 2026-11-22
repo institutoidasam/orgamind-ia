@@ -31,6 +31,29 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.11.10',
+    date: '2026-11-10',
+    title: 'Número próprio por área e envio mais rastreável no WhatsApp da equipe',
+    items: [
+      {
+        text: 'Cada área tem o próprio número de WhatsApp. Escolha o número de cada área em Conexões. Área sem número fica bloqueada e marcada, até você escolher um.',
+        where: '/connect',
+      },
+      {
+        text: 'No envio, o sistema escolhe o número da área sozinho e confere se ele está conectado antes de mandar.',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'Na tela de resultado, cada mensagem mostra a situação: "Aceito pelo WhatsApp", "Entregue", "Lido" ou "Respondeu". Nas falhas, use "Repetir" para tentar de novo.',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'Um mesmo envio pode ter vários turnos. O histórico agora é paginado, para navegar pelos envios antigos.',
+        where: '/whatsapp-equipe',
+      },
+    ],
+  },
+  {
     version: '2026.10.23',
     date: '2026-10-23',
     title: 'Aviso de plano cheio ao criar conexão GoZap',

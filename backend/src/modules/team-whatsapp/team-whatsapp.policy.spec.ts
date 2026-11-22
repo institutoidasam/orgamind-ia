@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   canSendToSector,
+  canViewDispatch,
   canSendToUser,
   isTeamProvider,
   isTeamSender,
@@ -95,5 +96,17 @@ describe('team-whatsapp policy — remetente', () => {
         isTeamProvider,
       ),
     ).toEqual([true, true, false, false, false]);
+  });
+});
+
+describe('canViewDispatch (GC5)', () => {
+  it.each<[string, TeamActor, string | null, boolean]>([
+    ['ADMIN vê envio de outro autor', admin, 'x', true],
+    ['ADMIN vê envio sem autor (apagado)', admin, null, true],
+    ['gestor vê o próprio', manager, 'm', true],
+    ['gestor não vê o de outro autor', manager, 'x', false],
+    ['gestor não vê envio sem autor', manager, null, false],
+  ])('%s', (_label, actor, authorId, esperado) => {
+    expect(canViewDispatch(actor, { authorId })).toBe(esperado);
   });
 });

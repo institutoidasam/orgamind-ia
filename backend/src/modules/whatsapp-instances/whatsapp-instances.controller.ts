@@ -7,12 +7,13 @@ import { WhatsappInstancesRepository } from './whatsapp-instances.repository';
 import { EvolutionApiAdapter } from '../whatsapp-providers/adapters/evolution-api.adapter';
 import { describeDisconnectReason } from '../whatsapp-providers/adapters/baileys-disconnect-reason';
 import { Roles } from '../auth/decorators/roles.decorator';
+import type { JwtPayload } from '../auth/jwt.strategy';
 import { CreateInstanceDto } from './dto/create-instance.dto';
 import { UpdateInstanceDto } from './dto/update-instance.dto';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { ChannelNotEvolutionError } from '../../shared/errors/domain.error';
 
-type AuthedRequest = Request & { user: { id: string; role: 'ADMIN' | 'OPERATOR' } };
+type AuthedRequest = Request & { user: JwtPayload };
 
 // Baileys behavioral flags that live in Evolution, not our DB. On update they
 // must be pushed to Evolution via /settings/set; the DB columns are a
@@ -88,11 +89,13 @@ export class WhatsappInstancesController {
 
   @Roles('ADMIN')
   @Post()
-  create(@Body() body: CreateInstanceDto) {
+  create(@Body() body: CreateInstanceDto, @Req() req: AuthedRequest) {
     return this.svc.create({
       name: body.name,
       ownerUserId: body.ownerUserId,
       isDefault: body.isDefault,
+      sectorIds: body.sectorIds,
+      actorId: req.user.sub,
     });
   }
 

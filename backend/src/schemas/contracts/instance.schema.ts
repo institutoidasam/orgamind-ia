@@ -14,6 +14,21 @@ export { channelProviderEnum, type ChannelProviderContract };
 const e164Regex = /^\+\d{8,15}$/;
 
 /**
+ * As áreas (setores) que um número atende — C1. Repetidos contam uma vez no
+ * servidor; o teto de 100 acompanha o das demais listas de áreas.
+ */
+export const channelSectorIdsSchema = z
+  .array(z.string().min(1).max(64))
+  .max(100);
+
+/** Uma área como as listas de conexões a mostram. */
+export const channelSectorSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+});
+export type ChannelSectorContract = z.infer<typeof channelSectorSchema>;
+
+/**
  * POST /whatsapp/channels — creates a cloud-provider (TWILIO/ZERNIO/META)
  * channel row directly, with no external provisioning. `provider` accepts
  * the FULL ChannelProvider enum (including EVOLUTION) on purpose: an
@@ -37,6 +52,9 @@ export const createChannelSchema = z
     // Required only for provider === 'ZERNIO' (see superRefine below) — the
     // Zernio account identifier for the number being registered.
     zernioAccountId: z.string().min(1).optional(),
+    // GOZAP — áreas que o número atende, validadas ANTES de criar a instância
+    // no provedor e gravadas depois. Outro provedor com áreas dá 422.
+    sectorIds: channelSectorIdsSchema.optional(),
   })
   .superRefine((data, ctx) => {
     if (data.provider === 'ZERNIO') {
@@ -99,6 +117,27 @@ export const updateChannelSettingsSchema = z.object({
 });
 export type UpdateChannelSettings = z.infer<typeof updateChannelSettingsSchema>;
 
+/**
+ * PUT /whatsapp/channels/:id/sectors — o número passa a atender exatamente estas
+ * áreas (lista vazia tira todas). Só o ADMIN; vale para GoZap e Evolution.
+ */
+export const updateChannelSectorsSchema = z
+  .object({ sectorIds: channelSectorIdsSchema })
+  .strict();
+export type UpdateChannelSectorsInput = z.infer<
+  typeof updateChannelSectorsSchema
+>;
+
+/** Resposta do PUT: as áreas do número e as que vieram de outro número. */
+export const channelSectorsResultSchema = z.object({
+  channelId: z.string(),
+  sectors: z.array(channelSectorSchema),
+  moved: z.array(z.object({ sectorId: z.string(), fromChannelId: z.string() })),
+});
+export type ChannelSectorsResultContract = z.infer<
+  typeof channelSectorsResultSchema
+>;
+
 /** One channel row as summarized for GET /whatsapp/providers. */
 export const channelSummarySchema = z.object({
   id: z.string(),
@@ -159,6 +198,12 @@ export const channelSummarySchema = z.object({
    * "sei que está desconectado".
    */
   connectionState: z.enum(['open', 'connecting', 'close']).nullable().optional(),
+  /**
+   * As áreas ativas que o número atende, por nome (vazio = nenhuma). Opcional no
+   * contrato como os demais campos novos (cliente antigo não quebra), mas o
+   * service que monta `GET /whatsapp/providers` SEMPRE o preenche.
+   */
+  sectors: z.array(channelSectorSchema).optional(),
 });
 export type ChannelSummary = z.infer<typeof channelSummarySchema>;
 

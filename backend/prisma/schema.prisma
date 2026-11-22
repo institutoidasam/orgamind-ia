@@ -158,9 +158,15 @@ model Sector {
   recipientLinks      InternalRecipient[]
   numbers             SectorNumber[]
   staffExceptions     StaffScheduleException[]
+  // Número da área (C1): o canal pelo qual a equipe dela recebe os recados. Só
+  // vale se o canal estiver ativo e for GOZAP/EVOLUTION (effectiveChannel).
+  // SetNull: remover o canal deixa a área sem número, sem apagar a área.
+  channelId           String?
+  channel             Channel?                @relation("SectorChannel", fields: [channelId], references: [id], onDelete: SetNull)
 
   @@index([isActive, name])
   @@index([managerId])
+  @@index([channelId])
 }
 
 /// Parent entity for both internal demands and announcements. Author and
@@ -1334,6 +1340,10 @@ model Channel {
   zernioSnapshots    ZernioAnalyticsSnapshot[]
   // Recados da equipe enviados por este canal (SetNull: remover o canal não apaga o histórico).
   teamWhatsappDispatches TeamWhatsappDispatch[]
+  // Áreas que recebem os recados da equipe por este canal (C1).
+  sectors            Sector[] @relation("SectorChannel")
+  // Destinatários de recados da equipe enviados por este canal (C4).
+  teamWhatsappRecipients TeamWhatsappRecipient[] @relation("TeamRecipientChannel")
 
   botId String?
   bot   Bot?    @relation(fields: [botId], references: [id], onDelete: SetNull)
@@ -1630,6 +1640,10 @@ enum TeamWhatsappRecipientStatus {
   SKIPPED
   SCHEDULED
   CANCELLED
+  DELIVERED
+  READ
+  REPLIED
+  UNCERTAIN
 }
 
 // INACTIVE = usuário inativo ou apagado na hora do disparo agendado (T9).
@@ -1714,10 +1728,28 @@ model TeamWhatsappRecipient {
   // Gravado ANTES do envio (fase 1 do processor); a retentativa reaproveita a mesma Message.
   messageId  String?
   errorCode  String?
+  // Número pelo qual a pessoa recebe (C4/D3) + snapshot do nome e do telefone:
+  // o histórico sobrevive à remoção do canal (SetNull).
+  channelId        String?
+  channel          Channel?                    @relation("TeamRecipientChannel", fields: [channelId], references: [id], onDelete: SetNull)
+  channelName      String?
+  channelPhoneE164 String?
+  // Contato da Message do envio (D11), sem FK: casa a resposta por canal + contato.
+  contactId        String?
+  // attempts = tentativas de envio; manualRetries = repetições pedidas na tela.
+  attempts         Int                         @default(0)
+  manualRetries    Int                         @default(0)
+  // Rastreio (D5/D11): aceito pelo WhatsApp, entregue, lido e respondeu.
+  acceptedAt       DateTime?
+  deliveredAt      DateTime?
+  readAt           DateTime?
+  repliedAt        DateTime?
   createdAt  DateTime                    @default(now())
   updatedAt  DateTime                    @updatedAt
 
   @@index([dispatchId, status])
+  @@index([messageId])
+  @@index([channelId, contactId, acceptedAt])
 }
 
 enum StaffScheduleTemplate {

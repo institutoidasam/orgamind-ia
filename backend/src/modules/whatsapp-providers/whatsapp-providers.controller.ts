@@ -1,8 +1,29 @@
-import { Body, Controller, Delete, Get, Logger, Param, Patch, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Inject,
+  Logger,
+  Param,
+  Patch,
+  Post,
+  Put,
+  Query,
+  Req,
+} from '@nestjs/common';
 import type { Channel, ChannelProvider } from '@prisma/client';
 import { WhatsappProvidersService } from './whatsapp-providers.service';
 import { CreateChannelDto } from './dto/create-channel.dto';
 import { UpdateChannelSettingsDto } from './dto/update-channel-settings.dto';
+import { UpdateChannelSectorsDto } from './dto/update-channel-sectors.dto';
+import {
+  SectorChannelService,
+  assignToCreatedChannel,
+  type ChannelSector,
+  type ChannelSectorsResult,
+} from './sector-channel.service';
+import type { JwtPayload } from '../auth/jwt.strategy';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { WhatsappInstancesRepository } from '../whatsapp-instances/whatsapp-instances.repository';
 import { InstanceNotFoundError } from '../whatsapp-instances/errors/instance.errors';
@@ -27,6 +48,11 @@ import type {
   ChannelHealthResponse,
 } from '../../schemas/contracts/instance.schema';
 import { PROVIDER_TRAITS } from '../../schemas/contracts/channel-provider.schema';
+
+type AuthRequest = { user: JwtPayload };
+type ChannelRow = Awaited<
+  ReturnType<WhatsappInstancesRepository['listAll']>
+>[number];
 
 /**
  * Uma conta Zernio como uma linha legível na mensagem de erro — o operador
@@ -53,6 +79,11 @@ export class WhatsappProvidersController {
     private readonly gozapInstances: GozapInstancesService,
     private readonly providersRepo: WhatsappProvidersRepository,
   ) {}
+
+  // Injetado por propriedade: o construtor de DI já passava do limite de
+  // parâmetros do gate (8) e cada parâmetro novo o piora.
+  @Inject(SectorChannelService)
+  private readonly sectorChannel!: SectorChannelService;
 
   /**
    * List the WhatsApp Business labels available on the connected number.
@@ -106,9 +137,12 @@ export class WhatsappProvidersController {
     // Estado de conexão mais recente de cada canal, num round trip só — ver o
     // comentário de `lastStateByInstanceIds`. Some (ou nunca escreveu evento)
     // = a tela não mostra o dot, em vez de inventar "desconectado".
-    const lastStates = await this.providersRepo.lastStateByInstanceIds(
-      channels.map((c) => c.id),
-    );
+    const ids = channels.map((c) => c.id);
+    // Áreas de cada número também num round trip só (lista vazia = nenhuma).
+    const [lastStates, sectorsByChannel] = await Promise.all([
+      this.providersRepo.lastStateByInstanceIds(ids),
+      this.sectorChannel.sectorsByChannel(ids),
+    ]);
     const byProvider = new Map<ChannelProvider, ChannelSummary[]>(
       configured.map((provider) => [provider, []]),
     );
@@ -119,33 +153,9 @@ export class WhatsappProvidersController {
     for (const ch of channels) {
       const bucket = byProvider.get(ch.provider);
       if (!bucket) continue; // provider not configured on this deploy — exclude
-      // T15 — a quota de hoje vale para TODO provedor, não só EVOLUTION
-      // (GET /whatsapp/instances). `warmupInfo` é a ÚNICA fonte de verdade da
-      // rampa de aquecimento (warmup.helper.ts) — aqui só se lê o resultado
-      // dela, nunca se reimplementa a conta.
-      const warmup = warmupInfo(ch.warmupStartedAt, now, ch.dailySendLimit);
-      bucket.push({
-        id: ch.id,
-        name: ch.name,
-        phoneE164: ch.phoneE164,
-        isActive: ch.isActive,
-        isDefault: ch.isDefault,
-        provider: ch.provider,
-        // Sem isto a tela Canais não teria como MOSTRAR o estado do broadcast — e
-        // ligá-lo seguiria exigindo SQL direto em produção.
-        zernioBroadcastEnabled: ch.zernioBroadcastEnabled,
-        zernioBroadcastChunk: ch.zernioBroadcastChunk,
-        // Deixa o form de cadastro marcar as contas Zernio que já têm canal —
-        // o operador vê "já cadastrada" na lista em vez do erro pós-submit.
-        zernioAccountId: ch.zernioAccountId,
-        dailySendLimit: ch.dailySendLimit,
-        sentToday: ch.sentToday,
-        sentTodayResetAt: ch.sentTodayResetAt ? ch.sentTodayResetAt.toISOString() : null,
-        warmupEffectiveCap: warmup.effectiveCap,
-        warming: warmup.warming,
-        warmupDay: warmup.day,
-        connectionState: (lastStates.get(ch.id) as ConnectionState | undefined) ?? null,
-      });
+      bucket.push(
+        this.channelSummary(ch, { now, lastStates, sectorsByChannel }),
+      );
     }
     return {
       providers: configured.map((provider) => {
@@ -350,19 +360,12 @@ export class WhatsappProvidersController {
    */
   @Roles('ADMIN')
   @Post('channels')
-  async createChannel(@Body() body: CreateChannelDto) {
-    if (body.provider === 'EVOLUTION') {
-      throw new DomainError({
-        code: 'channel.evolution_via_instance_flow',
-        message:
-          'Canais EVOLUTION são criados pelo fluxo de instância existente (conectar via QR Code), não por este endpoint.',
-        status: 400,
-        detail: 'POST /whatsapp/instances',
-      });
-    }
+  async createChannel(@Body() body: CreateChannelDto, @Req() req: AuthRequest) {
+    this.assertNotEvolution(body);
     if (!this.wa.isProviderConfigured(body.provider)) {
       throw new ProviderNotConfiguredError(body.provider);
     }
+    this.assertSectorsOnlyForGozap(body);
 
     // GOZAP: ao contrário dos outros provedores cloud (TWILIO/ZERNIO/META,
     // que só persistem uma row — o número já está vivo do lado do provedor),
@@ -372,7 +375,7 @@ export class WhatsappProvidersController {
     // porque os guardas de duplicata abaixo (phoneE164/zernioAccountId) não
     // se aplicam: o número só é conhecido depois do pareamento por QR.
     if (body.provider === 'GOZAP') {
-      return this.gozapInstances.createChannel({ name: body.name });
+      return this.createGozapChannel(body, req.user.sub);
     }
 
     // App-level duplicate guard (no DB-level unique constraint on
@@ -477,6 +480,121 @@ export class WhatsappProvidersController {
     // (GOZAP branched out above) — stripped anyway as defense in depth.
     const { apiKey: _apiKey, gozapInstanceToken: _t, ...safe } = channel;
     return safe;
+  }
+
+  /**
+   * Resumo de um canal para `GET /whatsapp/providers`. Um `now` só para a
+   * requisição inteira: todo canal usa o MESMO instante para calcular a rampa.
+   */
+  private channelSummary(
+    ch: ChannelRow,
+    ctx: {
+      now: Date;
+      lastStates: Map<string, string>;
+      sectorsByChannel: Map<string, ChannelSector[]>;
+    },
+  ): ChannelSummary {
+    // T15 — a quota de hoje vale para TODO provedor, não só EVOLUTION
+    // (GET /whatsapp/instances). `warmupInfo` é a ÚNICA fonte de verdade da
+    // rampa de aquecimento (warmup.helper.ts) — aqui só se lê o resultado
+    // dela, nunca se reimplementa a conta.
+    const warmup = warmupInfo(ch.warmupStartedAt, ctx.now, ch.dailySendLimit);
+    return {
+      id: ch.id,
+      name: ch.name,
+      phoneE164: ch.phoneE164,
+      isActive: ch.isActive,
+      isDefault: ch.isDefault,
+      provider: ch.provider,
+      // Sem isto a tela Canais não teria como MOSTRAR o estado do broadcast — e
+      // ligá-lo seguiria exigindo SQL direto em produção.
+      zernioBroadcastEnabled: ch.zernioBroadcastEnabled,
+      zernioBroadcastChunk: ch.zernioBroadcastChunk,
+      // Deixa o form de cadastro marcar as contas Zernio que já têm canal —
+      // o operador vê "já cadastrada" na lista em vez do erro pós-submit.
+      zernioAccountId: ch.zernioAccountId,
+      dailySendLimit: ch.dailySendLimit,
+      sentToday: ch.sentToday,
+      sentTodayResetAt: ch.sentTodayResetAt
+        ? ch.sentTodayResetAt.toISOString()
+        : null,
+      warmupEffectiveCap: warmup.effectiveCap,
+      warming: warmup.warming,
+      warmupDay: warmup.day,
+      connectionState:
+        (ctx.lastStates.get(ch.id) as ConnectionState | undefined) ?? null,
+      sectors: ctx.sectorsByChannel.get(ch.id) ?? [],
+    };
+  }
+
+  /** EVOLUTION nasce pelo fluxo de instância (QR Code), nunca por aqui. */
+  private assertNotEvolution(body: CreateChannelDto): void {
+    if (body.provider === 'EVOLUTION') {
+      throw new DomainError({
+        code: 'channel.evolution_via_instance_flow',
+        message:
+          'Canais EVOLUTION são criados pelo fluxo de instância existente (conectar via QR Code), não por este endpoint.',
+        status: 400,
+        detail: 'POST /whatsapp/instances',
+      });
+    }
+  }
+
+  /**
+   * Áreas só fazem sentido num número da equipe (GOZAP/EVOLUTION). Pedir áreas
+   * para TWILIO/ZERNIO/META é recusado ANTES de criar qualquer coisa, em vez de
+   * ignorar o pedido em silêncio.
+   */
+  private assertSectorsOnlyForGozap(body: CreateChannelDto): void {
+    if (body.provider !== 'GOZAP' && body.sectorIds?.length) {
+      throw new DomainError({
+        code: 'channel.sectors_not_team',
+        message:
+          'Só um número do GoZap ou da Evolution pode atender áreas da equipe.',
+        status: 422,
+      });
+    }
+  }
+
+  /**
+   * GOZAP com áreas: valida as áreas ANTES de provisionar a instância no GoZap
+   * (uma área inválida não pode deixar uma conexão paga órfã) e grava a
+   * associação depois, com o canal já criado.
+   */
+  private async createGozapChannel(body: CreateChannelDto, actorId: string) {
+    if (!body.sectorIds?.length) {
+      return this.gozapInstances.createChannel({ name: body.name });
+    }
+    const sectorIds = await this.sectorChannel.assertAssignable(body.sectorIds);
+    const channel = await this.gozapInstances.createChannel({
+      name: body.name,
+    });
+    const sectors = await assignToCreatedChannel(
+      this.sectorChannel,
+      this.logger,
+      { channelId: channel.id, sectorIds, actorId },
+    );
+    return { ...channel, sectors };
+  }
+
+  /**
+   * Associa o número às áreas que ele atende (só ADMIN, como conectar número).
+   * A lista é o estado final: áreas ausentes saem do número e a que já estava
+   * em outro número é movida (a confirmação é do front — D16). Vale para GoZap e
+   * Evolution; outro canal ou inativo dá 422 `channel.sectors_not_team`.
+   */
+  @Roles('ADMIN')
+  @Put('channels/:id/sectors')
+  async setChannelSectors(
+    @Param('id') id: string,
+    @Body() body: UpdateChannelSectorsDto,
+    @Req() req: AuthRequest,
+  ): Promise<ChannelSectorsResult> {
+    return this.sectorChannel.assign({
+      channelId: id,
+      sectorIds: body.sectorIds,
+      actorId: req.user.sub,
+    });
   }
 
   /**

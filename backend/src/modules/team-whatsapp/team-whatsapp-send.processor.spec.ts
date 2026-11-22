@@ -16,6 +16,8 @@ import { DelayedError, type Job } from 'bullmq';
 import { Logger } from '@nestjs/common';
 import type Redis from 'ioredis';
 import { TeamWhatsappSendProcessor } from './team-whatsapp-send.processor';
+import { TeamWhatsappRepository } from './team-whatsapp.repository';
+import { ChannelLiveStateService } from '../whatsapp-providers/channel-live-state.service';
 import {
   ChatService,
   ChatProviderNoReplyError,
@@ -49,21 +51,38 @@ const failed = (
   retryable: boolean,
 ): TeamSendResult => ({ messageId: 'm1', sent: false, errorCode, retryable });
 
+const channelOf = (id: string, over: Record<string, unknown> = {}) => ({
+  id,
+  provider: 'GOZAP',
+  isActive: true,
+  evolutionInstanceName: null,
+  ...over,
+});
+const CH1 = channelOf('ch1');
+
+/** Destinatário de um envio com um número só: o do destinatário e o do envio coincidem. */
 function makeRecipient(over: Record<string, unknown> = {}) {
   return {
     id: 'r1',
     status: 'QUEUED',
     messageId: null,
     user: { phoneE164: PHONE, contact: { id: 'c1', phoneE164: PHONE } },
+    channel: CH1,
     dispatch: {
       id: 'd1',
       authorId: 'u-admin',
       text: TEXT,
-      channel: { id: 'ch1', provider: 'GOZAP', isActive: true },
+      channel: CH1,
     },
     ...over,
   };
 }
+
+const live = (state: string) => ({
+  channelId: 'ch1',
+  state,
+  checkedAt: new Date(),
+});
 
 function makeJob(attemptsMade = 0, moveToDelayed = vi.fn()) {
   return {
@@ -74,10 +93,15 @@ function makeJob(attemptsMade = 0, moveToDelayed = vi.fn()) {
   } as unknown as Job<TeamWhatsappSendJob>;
 }
 
+/** Classificação REAL do ChatService (o `chat` deste spec é mock). */
+const realChat = Object.create(ChatService.prototype) as ChatService;
+
 let prisma: DeepMockProxy<PrismaService>;
 let chat: MockProxy<ChatService>;
 let consent: MockProxy<ConsentService>;
 let redis: DeepMockProxy<Redis>;
+let repo: MockProxy<TeamWhatsappRepository>;
+let liveState: MockProxy<ChannelLiveStateService>;
 let proc: TeamWhatsappSendProcessor;
 const LOCK_KEY = 'pacing:send:lock:ch1';
 
@@ -96,11 +120,22 @@ beforeEach(() => {
   prisma.teamWhatsappRecipient.updateMany.mockResolvedValue({
     count: 1,
   });
-  chat.prepareTeamMessage.mockResolvedValue({ messageId: 'm1' });
+  chat.prepareTeamMessage.mockResolvedValue({
+    messageId: 'm1',
+    contactId: 'c1',
+  });
   chat.sendTeamMessage.mockResolvedValue(SENT_OK);
+  chat.isRedispatchableFailure.mockImplementation((c) =>
+    realChat.isRedispatchableFailure(c),
+  );
+  repo = mockDeep<TeamWhatsappRepository>();
+  liveState = mockDeep<ChannelLiveStateService>();
+  liveState.check.mockResolvedValue(live('open') as never);
   redis = mockDeep<Redis>();
   redis.del.mockResolvedValue(1);
   proc = new TeamWhatsappSendProcessor(prisma, chat, consent, redis);
+  // Injetados por propriedade (o construtor tem 4 dependências, o limite do GC2).
+  Object.assign(proc, { repo, liveState });
 });
 
 type RecipientWrite = {
@@ -113,6 +148,12 @@ const writes = () =>
   );
 const statusWrites = () => writes().filter((w) => 'status' in w.data);
 const lastData = () => writes().at(-1)?.data;
+const ANY_DATE = expect.any(Date) as Date;
+const UNCERTAIN_DATA = {
+  status: 'UNCERTAIN',
+  errorCode: 'team_whatsapp.indeterminate',
+};
+const SENT_DATA = { status: 'SENT', acceptedAt: ANY_DATE };
 const withPrior = (
   row: { status: string; errorCode: string | null } | null,
 ) => {
@@ -168,16 +209,14 @@ describe('TeamWhatsappSendProcessor — pré-checagens (telefone)', () => {
 
 describe('TeamWhatsappSendProcessor — pré-checagens (canal)', () => {
   it.each([
-    ['desativado', { id: 'ch1', provider: 'GOZAP', isActive: false }],
+    ['desativado', channelOf('ch1', { isActive: false })],
     ['removido', null],
-    [
-      'fora de TEAM_PROVIDERS',
-      { id: 'ch1', provider: 'TWILIO', isActive: true },
-    ],
+    ['fora de TEAM_PROVIDERS', channelOf('ch1', { provider: 'TWILIO' })],
   ])('canal %s vira FAILED channel_invalid', async (_n, channel) => {
     const r = makeRecipient();
     prisma.teamWhatsappRecipient.findUnique.mockResolvedValue({
       ...r,
+      channel,
       dispatch: { ...r.dispatch, channel },
     } as never);
     await proc.process(makeJob());
@@ -186,6 +225,7 @@ describe('TeamWhatsappSendProcessor — pré-checagens (canal)', () => {
       errorCode: 'team_whatsapp.channel_invalid',
     });
     expect(chat.sendTeamMessage.mock.calls).toHaveLength(0);
+    expect(liveState.check.mock.calls).toHaveLength(0);
     expect(acquirePacingLock).not.toHaveBeenCalled();
   });
 });
@@ -207,7 +247,7 @@ describe('TeamWhatsappSendProcessor — envio e retentativa', () => {
     expect(upd.calls[0]).toEqual([
       {
         where: { id: 'r1', status: 'QUEUED', messageId: null },
-        data: { messageId: 'm1' },
+        data: { messageId: 'm1', contactId: 'c1' },
       },
     ]);
     expect(upd.invocationCallOrder[0]).toBeLessThan(
@@ -219,7 +259,7 @@ describe('TeamWhatsappSendProcessor — envio e retentativa', () => {
     expect(upd.calls[1]).toEqual([
       {
         where: { id: 'r1', status: 'QUEUED' },
-        data: { status: 'SENT', messageId: 'm1' },
+        data: { status: 'SENT', messageId: 'm1', acceptedAt: ANY_DATE },
       },
     ]);
     expect(acquirePacingLock).toHaveBeenCalledWith(expect.anything(), 'ch1');
@@ -272,18 +312,15 @@ describe('TeamWhatsappSendProcessor — pacing e retentativa', () => {
 });
 
 describe('TeamWhatsappSendProcessor — falha final', () => {
-  it.each([['gozap.invalid_recipient'], ['gozap.timeout']])(
-    'erro não retentável (%s) marca FAILED sem relançar',
-    async (code) => {
-      chat.sendTeamMessage.mockResolvedValue(failed(code, false));
-      await expect(proc.process(makeJob(0))).resolves.toBeUndefined();
-      expect(lastData()).toEqual({
-        status: 'FAILED',
-        errorCode: code,
-        messageId: 'm1',
-      });
-    },
-  );
+  it.each([
+    ['gozap.invalid_recipient', 'FAILED'],
+    ['gozap.not_on_whatsapp', 'FAILED'],
+    ['gozap.timeout', 'UNCERTAIN'],
+  ])('erro não retentável (%s) marca %s sem relançar', async (code, status) => {
+    chat.sendTeamMessage.mockResolvedValue(failed(code, false));
+    await expect(proc.process(makeJob(0))).resolves.toBeUndefined();
+    expect(lastData()).toEqual({ status, errorCode: code, messageId: 'm1' });
+  });
 
   it('falha sem código marca FAILED send_failed sem relançar', async () => {
     chat.sendTeamMessage.mockResolvedValue(failed(null, false));
@@ -309,7 +346,11 @@ describe('TeamWhatsappSendProcessor — idempotência por priorOutcome', () => {
     expect(chat.sendTeamMessage.mock.calls).toContainEqual([
       { messageId: 'm1', text: TEXT },
     ]);
-    expect(lastData()).toEqual({ status: 'SENT', messageId: 'm1' });
+    expect(lastData()).toEqual({
+      status: 'SENT',
+      messageId: 'm1',
+      acceptedAt: ANY_DATE,
+    });
   });
 
   it.each([['gozap.timeout'], [null]])(
@@ -318,10 +359,7 @@ describe('TeamWhatsappSendProcessor — idempotência por priorOutcome', () => {
       withPrior({ status: 'FAILED', errorCode: code });
       chat.isRedispatchableFailure.mockReturnValue(false);
       await proc.process(makeJob(1));
-      expect(lastData()).toEqual({
-        status: 'FAILED',
-        errorCode: 'team_whatsapp.indeterminate',
-      });
+      expect(lastData()).toEqual(UNCERTAIN_DATA);
       expect(chat.sendTeamMessage.mock.calls).toHaveLength(0);
       expect(acquirePacingLock).not.toHaveBeenCalled();
     },
@@ -336,11 +374,9 @@ describe('TeamWhatsappSendProcessor — idempotência por priorOutcome', () => {
   ])('retentativa com Message %s não reenvia', async (status) => {
     withPrior({ status, errorCode: null });
     await proc.process(makeJob(1));
-    expect(lastData()).toEqual({
-      status: 'FAILED',
-      errorCode: 'team_whatsapp.indeterminate',
-    });
+    expect(lastData()).toEqual(UNCERTAIN_DATA);
     expect(chat.sendTeamMessage.mock.calls).toHaveLength(0);
+    expect(repo.countAttempt.mock.calls).toHaveLength(0);
   });
 });
 
@@ -350,9 +386,11 @@ describe('TeamWhatsappSendProcessor — priorOutcome entregue ou sumido', () => 
     async (status) => {
       withPrior({ status, errorCode: null });
       await proc.process(makeJob(1));
-      expect(lastData()).toEqual({ status: 'SENT' });
+      expect(lastData()).toEqual(SENT_DATA);
       expect(chat.sendTeamMessage.mock.calls).toHaveLength(0);
       expect(acquirePacingLock).not.toHaveBeenCalled();
+      expect(liveState.check.mock.calls).toHaveLength(0);
+      expect(repo.countAttempt.mock.calls).toHaveLength(0);
     },
   );
 
@@ -392,7 +430,7 @@ describe('TeamWhatsappSendProcessor — idempotência entre execuções', () => 
     vi.mocked(acquirePacingLock).mockClear();
     withPrior({ status: 'SENT', errorCode: null });
     await proc.process(makeJob(1));
-    expect(lastData()).toEqual({ status: 'SENT' });
+    expect(lastData()).toEqual(SENT_DATA);
     expect(chat.sendTeamMessage.mock.calls).toHaveLength(1);
     expect(acquirePacingLock).not.toHaveBeenCalled();
   });
@@ -418,7 +456,7 @@ describe('TeamWhatsappSendProcessor — idempotência entre execuções', () => 
     expect(writes()).toEqual([
       {
         where: { id: 'r1', status: 'QUEUED', messageId: null },
-        data: { messageId: 'm1' },
+        data: { messageId: 'm1', contactId: 'c1' },
       },
     ]);
   });
@@ -473,8 +511,8 @@ describe('TeamWhatsappSendProcessor — exceções na última tentativa', () => 
 
 describe('TeamWhatsappSendProcessor — exceção com Message já gravada', () => {
   it.each([
-    ['SENT', { status: 'SENT' }],
-    ['SENDING', { status: 'FAILED', errorCode: 'team_whatsapp.indeterminate' }],
+    ['SENT', SENT_DATA],
+    ['SENDING', UNCERTAIN_DATA],
   ])(
     'exceção na última tentativa com Message já %s não rebaixa o envio',
     async (status, expected) => {
@@ -526,22 +564,13 @@ describe('TeamWhatsappSendProcessor — log', () => {
   });
 });
 
-/** Classificação REAL do ChatService (o `chat` deste spec é mock). */
-const realChat = Object.create(ChatService.prototype) as ChatService;
-
 describe('TeamWhatsappSendProcessor — código que nunca reenvia', () => {
   it.each([['evolution.timeout'], ['evolution.unknown'], ['sending_stuck']])(
-    'retentativa com Message FAILED (%s) vira FAILED sem chamar o provedor',
+    'retentativa com Message FAILED (%s) vira UNCERTAIN sem chamar o provedor',
     async (code) => {
       withPrior({ status: 'FAILED', errorCode: code });
-      chat.isRedispatchableFailure.mockImplementation((c) =>
-        realChat.isRedispatchableFailure(c),
-      );
       await proc.process(makeJob(1));
-      expect(lastData()).toEqual({
-        status: 'FAILED',
-        errorCode: 'team_whatsapp.indeterminate',
-      });
+      expect(lastData()).toEqual(UNCERTAIN_DATA);
       expect(chat.prepareTeamMessage.mock.calls).toHaveLength(0);
       expect(chat.sendTeamMessage.mock.calls).toHaveLength(0);
       expect(acquirePacingLock).not.toHaveBeenCalled();
@@ -613,10 +642,136 @@ describe('TeamWhatsappSendProcessor — envio provado e supressão posterior', (
     consent.isSuppressed.mockResolvedValue(true);
     await proc.process(makeJob(1));
     expect(statusWrites()).toEqual([
-      { where: { id: 'r1', status: 'QUEUED' }, data: { status: 'SENT' } },
+      { where: { id: 'r1', status: 'QUEUED' }, data: SENT_DATA },
     ]);
     expect(chat.prepareTeamMessage.mock.calls).toHaveLength(0);
     expect(chat.sendTeamMessage.mock.calls).toHaveLength(0);
     expect(acquirePacingLock).not.toHaveBeenCalled();
+  });
+});
+
+describe('TeamWhatsappSendProcessor — conferência do número (D7)', () => {
+  it.each([['close'], ['connecting']])(
+    'número %s: FAILED channel_disconnected, sem Message, sem tentativa, sem envio',
+    async (state) => {
+      liveState.check.mockResolvedValue(live(state) as never);
+      await expect(proc.process(makeJob(0))).resolves.toBeUndefined();
+      expect(lastData()).toEqual({
+        status: 'FAILED',
+        errorCode: 'team_whatsapp.channel_disconnected',
+      });
+      expect(chat.prepareTeamMessage.mock.calls).toHaveLength(0);
+      expect(repo.countAttempt.mock.calls).toHaveLength(0);
+      expect(chat.sendTeamMessage.mock.calls).toHaveLength(0);
+      expect(redis.del.mock.calls).toEqual([[LOCK_KEY]]);
+    },
+  );
+
+  it('unknown fora da última tentativa relança para a fila, sem gravar nem enviar', async () => {
+    liveState.check.mockResolvedValue(live('unknown') as never);
+    await expect(proc.process(makeJob(0))).rejects.toThrow(
+      'team_whatsapp.channel_unverified',
+    );
+    expect(writes()).toEqual([]);
+    expect(repo.countAttempt.mock.calls).toHaveLength(0);
+    expect(chat.sendTeamMessage.mock.calls).toHaveLength(0);
+  });
+
+  it('unknown na última tentativa vira FAILED channel_unverified', async () => {
+    liveState.check.mockResolvedValue(live('unknown') as never);
+    await expect(proc.process(makeJob(2))).resolves.toBeUndefined();
+    expect(lastData()).toEqual({
+      status: 'FAILED',
+      errorCode: 'team_whatsapp.channel_unverified',
+    });
+    expect(chat.prepareTeamMessage.mock.calls).toHaveLength(0);
+    expect(chat.sendTeamMessage.mock.calls).toHaveLength(0);
+  });
+});
+
+describe('TeamWhatsappSendProcessor — tentativas (D6)', () => {
+  it('open: confere o número, conta a tentativa imediatamente antes do provedor e grava SENT com acceptedAt', async () => {
+    await proc.process(makeJob(0));
+    expect(liveState.check.mock.calls).toEqual([[CH1]]);
+    const order = [
+      liveState.check.mock.invocationCallOrder[0],
+      chat.prepareTeamMessage.mock.invocationCallOrder[0],
+      repo.countAttempt.mock.invocationCallOrder[0],
+      chat.sendTeamMessage.mock.invocationCallOrder[0],
+    ];
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(repo.countAttempt.mock.calls).toEqual([['r1']]);
+    expect(lastData()).toEqual({
+      status: 'SENT',
+      messageId: 'm1',
+      acceptedAt: ANY_DATE,
+    });
+  });
+
+  it('cada retentativa que chama o provedor conta uma tentativa', async () => {
+    chat.sendTeamMessage.mockResolvedValue(
+      failed('evolution.not_connected', true),
+    );
+    await expect(proc.process(makeJob(0))).rejects.toThrow();
+    withPrior({ status: 'FAILED', errorCode: 'evolution.not_connected' });
+    await expect(proc.process(makeJob(1))).rejects.toThrow();
+    expect(repo.countAttempt.mock.calls).toEqual([['r1'], ['r1']]);
+  });
+
+  it('prepare grava o contactId devolvido junto com o messageId', async () => {
+    chat.prepareTeamMessage.mockResolvedValue({
+      messageId: 'm1',
+      contactId: 'c-twin',
+    });
+    await proc.process(makeJob(0));
+    expect(writes()[0]).toEqual({
+      where: { id: 'r1', status: 'QUEUED', messageId: null },
+      data: { messageId: 'm1', contactId: 'c-twin' },
+    });
+  });
+});
+
+describe('TeamWhatsappSendProcessor — número do destinatário (D3)', () => {
+  const chB = channelOf('chB');
+
+  it('destinatário no canal B e envio no canal A: Message, conferência e pacing usam B', async () => {
+    const r = makeRecipient({ channel: chB });
+    prisma.teamWhatsappRecipient.findUnique.mockResolvedValue(r as never);
+    await proc.process(makeJob(0));
+    expect(liveState.check.mock.calls).toEqual([[chB]]);
+    expect(chat.prepareTeamMessage.mock.calls[0][0]).toMatchObject({
+      instanceId: 'chB',
+    });
+    expect(acquirePacingLock).toHaveBeenCalledWith(expect.anything(), 'chB');
+  });
+
+  it('linha legada sem canal no destinatário usa o canal do envio', async () => {
+    prisma.teamWhatsappRecipient.findUnique.mockResolvedValue(
+      makeRecipient({ channel: null }) as never,
+    );
+    await proc.process(makeJob(0));
+    expect(chat.prepareTeamMessage.mock.calls[0][0]).toMatchObject({
+      instanceId: 'ch1',
+    });
+  });
+
+  it('envio multi-número: cada destinatário sai pelo seu canal, nunca pelo de outra área', async () => {
+    const chA = channelOf('chA');
+    const row = (id: string, channel: typeof chA) =>
+      makeRecipient({
+        id,
+        channel,
+        dispatch: { ...makeRecipient().dispatch, channel: null },
+      });
+    prisma.teamWhatsappRecipient.findUnique
+      .mockResolvedValueOnce(row('r1', chA) as never)
+      .mockResolvedValueOnce(row('r2', chB) as never);
+    await proc.process(makeJob(0));
+    await proc.process({ ...makeJob(0), data: { recipientId: 'r2' } } as never);
+    expect(
+      chat.prepareTeamMessage.mock.calls.map(([a]) => a.instanceId),
+    ).toEqual(['chA', 'chB']);
+    expect(liveState.check.mock.calls).toEqual([[chA], [chB]]);
+    expect(repo.countAttempt.mock.calls).toEqual([['r1'], ['r2']]);
   });
 });

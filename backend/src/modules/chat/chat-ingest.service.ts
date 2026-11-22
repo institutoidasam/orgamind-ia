@@ -10,6 +10,7 @@ import { ConsentAction, ConsentSource, MessageDirection, MessageKind, MessageSta
 import type { ChannelProvider } from '@prisma/client';
 import { ConsentService } from '../consent/consent.service';
 import { OptInLinkService } from '../consent/optin-link.service';
+import { TeamRecipientTrackingService } from '../team-whatsapp/tracking/team-recipient-tracking.service';
 import type { InboundChatMessage } from '../whatsapp-providers/ports/message-provider.port';
 import { QUEUE_NAMES, type ChatMediaDownloadJob, type BotReplyJob } from '../queue/queue.constants';
 import { brazilianPhoneVariants } from '../contacts/phone.util';
@@ -69,6 +70,12 @@ const OPT_IN_ATTRIBUTION_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 @Injectable()
 export class ChatIngestService {
   private readonly logger = new Logger(ChatIngestService.name);
+
+  // T10 — "respondeu" do envio da equipe. Injeção por propriedade (e não no
+  // construtor) para não passar o serviço do teto de parâmetros; o gancho é
+  // best-effort (GC14), então quem monta o serviço à mão pode não definir.
+  @Inject(TeamRecipientTrackingService)
+  private readonly teamTracking?: TeamRecipientTrackingService;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -788,7 +795,7 @@ export class ChatIngestService {
         ...(opts.bumpUnread ? { unreadCount: { increment: 1 } } : {}),
       },
     });
-
+    await this.trackTeamReply(m, instanceId, opts, twinIds);
     await this.events.publish({ type: 'message.created', conversationId: conversation.id, instanceId, messageId: message.id });
 
     // Auto-resposta: só texto entra aqui; imagem/áudio disparam o bot no fim do
@@ -815,6 +822,38 @@ export class ChatIngestService {
     // earlier failure never blocks the Evolution redelivery from retrying.
     await this.redis.set(dedupKey, '1', 'EX', 72 * 3600);
     return true;
+  }
+
+  /**
+   * T10 (D11) — a primeira mensagem que a pessoa manda PARA ESTE NÚMERO depois
+   * de um envio da equipe marca o destinatário como "respondeu". Casa por canal
+   * + contato: `twinIds` são os contatos do titular (cobre o 9º dígito) e vêm
+   * vazios quando não há contato. Eco `fromMe` e backfill (mensagem antiga) não
+   * são resposta.
+   *
+   * Best-effort (GC14): uma falha aqui não pode perder a mensagem nem fazer o
+   * provedor reentregá-la. Log sem telefone nem nome (GC8): só o canal.
+   */
+  private async trackTeamReply(
+    m: InboundChatMessage,
+    instanceId: string,
+    opts: { direction: MessageDirection; backfill?: boolean },
+    twinIds: readonly string[],
+  ): Promise<void> {
+    if (opts.direction !== MessageDirection.INBOUND || opts.backfill) return;
+    if (twinIds.length === 0) return;
+    try {
+      await this.teamTracking?.applyReply({
+        channelId: instanceId,
+        contactIds: twinIds,
+        receivedAt: m.receivedAt,
+      });
+    } catch (err: unknown) {
+      this.logger.warn(
+        { err, instanceId },
+        'T10: falha marcando "respondeu" no envio da equipe (best-effort)',
+      );
+    }
   }
 
   private async ingestInbound(m: InboundChatMessage, instanceId: string, opts: IngestOptions = {}): Promise<boolean> {

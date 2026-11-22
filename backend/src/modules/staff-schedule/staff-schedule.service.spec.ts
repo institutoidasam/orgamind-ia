@@ -213,7 +213,8 @@ describe('StaffScheduleService.board — linhas', () => {
       ['Bia', null, true, false],
     ]);
     const { from, to } = WEEK;
-    expect(repo.listVisitorIds).toHaveBeenCalledWith(PROD.id, from, to);
+    expect(repo.listVisitorIds).toHaveBeenCalledWith(PROD.id, from, to, 501);
+    expect(repo.listSectorPeople).toHaveBeenCalledWith(PROD.id, 501);
     const ids = ['bruno', 'alvaro', 'bia'];
     expect(repo.loadScheduleData).toHaveBeenCalledWith(ids, from, to);
     expect(board.rows[2].days[2]).toEqual({
@@ -252,6 +253,23 @@ function cell({ situation: s, exceptionId }: Day): string {
   if (s.kind === 'WORK') return s.shiftId;
   return s.kind === 'OFF' ? `${s.reason}:${exceptionId ?? '-'}` : 'NONE';
 }
+
+describe('StaffScheduleService.board — limite de pessoas (D13)', () => {
+  const crowd = (n: number) =>
+    Array.from({ length: n }, (_, i) => person(`p${i}`, { name: `P${i}` }));
+
+  it.each<[string, number, number, boolean]>([
+    ['501 pessoas: corta em 500 e avisa', 501, 500, true],
+    ['3 pessoas: sem corte', 3, 3, false],
+  ])('%s', async (_caso, total, linhas, truncated) => {
+    const { service } = harness({ actor: ADMIN, members: crowd(total) });
+
+    const board = await service.board(ADMIN.id, WEEK);
+
+    expect(board.rows).toHaveLength(linhas);
+    expect(board.truncated).toBe(truncated);
+  });
+});
 
 describe('StaffScheduleService.board — células (aceite 2 e 3)', () => {
   it('Maria com VACATION 2026-10-20..2026-10-24 → OFF VACATION com exceptionId; João no rodízio alterna turno e fim de semana OFF', async () => {

@@ -7,10 +7,11 @@ import { Button } from '@/components/ui/button';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
+import { Pagination } from '@/features/internal-communications/components/pagination';
 import { formatDayMonth } from '@/lib/civil-date';
 import { useCancelDispatch } from '../api';
 import { apiErrorCode, cancelErrorMessage } from '../error-messages';
-import type { ScheduledDispatch } from '../schemas';
+import type { Paging, ScheduledDispatch } from '../schemas';
 
 /** Data da escala + hora gravada no turno: não passa por conta de fuso (GC5). */
 function whenText(item: ScheduledDispatch): string {
@@ -42,7 +43,7 @@ function ScheduledRow({ item, onCancel, disabled }: { item: ScheduledDispatch; o
       <TableCell>{whenText(item)}</TableCell>
       <TableCell>{item.label}</TableCell>
       <TableCell>{`${item.recipientCount} pessoa(s)`}</TableCell>
-      <TableCell>{item.channel?.name ?? 'canal removido'}</TableCell>
+      <TableCell>{item.channel?.name ?? '—'}</TableCell>
       <TableCell className="text-right">
         <Button variant="outline" size="sm" disabled={disabled} onClick={onCancel}>Cancelar</Button>
       </TableCell>
@@ -50,8 +51,8 @@ function ScheduledRow({ item, onCancel, disabled }: { item: ScheduledDispatch; o
   );
 }
 
-/** Envios agendados para o início do turno, com Cancelar até o disparo. */
-export function ScheduledDispatches({ items }: { items: ScheduledDispatch[] }) {
+/** Uma página dos envios agendados para o início do turno, com Cancelar até o disparo. */
+export function ScheduledDispatches({ items, paging }: { items: ScheduledDispatch[]; paging: Paging }) {
   const flow = useCancelFlow();
   if (items.length === 0) return null;
   return (
@@ -63,7 +64,7 @@ export function ScheduledDispatches({ items }: { items: ScheduledDispatch[] }) {
           <TableHeader>
             <TableRow>
               <TableHead>Sai em</TableHead><TableHead>Destino</TableHead><TableHead>Pessoas</TableHead>
-              <TableHead>Canal</TableHead><TableHead />
+              <TableHead>Número</TableHead><TableHead />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -73,6 +74,7 @@ export function ScheduledDispatches({ items }: { items: ScheduledDispatch[] }) {
           </TableBody>
         </Table>
       </div>
+      {paging.total > paging.pageSize && <Pagination {...paging} />}
       <AlertDialog open={flow.asking !== null} onOpenChange={(open) => { if (!open) flow.setAsking(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>

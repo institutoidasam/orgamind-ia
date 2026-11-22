@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { contactAuthorizationSchema } from './contact-authorization.schema';
 
 export const userSummarySchema = z.object({
   id: z.string(),
@@ -24,6 +25,10 @@ export const userSummarySchema = z.object({
   shiftId: z.string().nullable(),
   // Função exibida na escala; null = sem função.
   jobTitle: z.string().nullable(),
+  // Matrícula como digitada; null = sem matrícula.
+  registration: z.string().nullable(),
+  // Autorização de contato (C4): sempre presente; sem registro = NAO_AUTORIZADO.
+  contactAuthorization: contactAuthorizationSchema,
   // Nível (StaffLevel); null = sem nível. `level.isActive` false = nível
   // desativado que a pessoa ainda tem.
   levelId: z.string().nullable(),
@@ -39,6 +44,12 @@ export const userListResponseSchema = z.object({
   total: z.number().int().nonnegative(),
   page: z.number().int().positive(),
   pageSize: z.number().int().positive(),
+  // Pessoas ativas da base inteira (não seguem a página nem os filtros):
+  // "origem não verificada" e "sem autorização" (C5/D9).
+  authorizationCounts: z.object({
+    unverified: z.number().int().nonnegative(),
+    notAuthorized: z.number().int().nonnegative(),
+  }),
 });
 
 // POST /users/:id/access: a senha temporária só existe nesta resposta.

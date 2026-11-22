@@ -54,6 +54,7 @@ function PeopleList({ title, lines }: { title: string; lines: string[] }) {
 const LEFT_OUT_REASON: Record<LeftOutPerson['reason'], string> = {
   unselected: 'não selecionado',
   no_phone: 'sem telefone',
+  not_authorized: 'contato não autorizado',
 };
 
 function SectorPeople({ target }: { target: SectorTarget }) {

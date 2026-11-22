@@ -4,6 +4,7 @@ import { UsersRepository } from './users.repository';
 import { UserPhoneService } from './user-phone.service';
 import { AuditService } from '../../shared/audit/audit.service';
 import { RefreshService } from '../auth/refresh.service';
+import { canDeletePerson } from '../../shared/authz/person-actions.policy';
 import {
   ConflictError,
   DomainError,
@@ -14,20 +15,43 @@ import {
   accessSectorError,
   alreadyHasAccess,
   emailTaken,
+  hasHistory,
   invalidLevel,
   nameRequired,
   noAccess,
+  registrationTaken,
 } from './users.errors';
 import type {
+  PersonDeleteTrail,
+  PersonUpdateTrail,
   UserListFilters,
   UserListResult,
   UserSummary,
 } from './users.repository';
-import { Prisma, type Role } from '@prisma/client';
+import {
+  authorizationColumns,
+  normalizeRegistration,
+  rethrowRegistrationConflict,
+  toContactAuthorization,
+  type AuthorizationColumns,
+  type AuthorizationRow,
+} from './person-record';
+import { personAuditChanges, personChangeAction } from './person-audit';
+import type {
+  ContactAuthorization,
+  ContactAuthorizationInput,
+} from '../../schemas/contracts/contact-authorization.schema';
+import { Prisma, type AuditCategory, type Role } from '@prisma/client';
 
-export type UserListResponse = UserListResult & {
+/** A pessoa como a API a devolve (C5): a autorização sai agrupada, não em colunas. */
+export type UserView = Omit<UserSummary, keyof AuthorizationRow> & {
+  contactAuthorization: ContactAuthorization;
+};
+export type UserListResponse = Omit<UserListResult, 'data'> & {
+  data: UserView[];
   page: number;
   pageSize: number;
+  authorizationCounts: { unverified: number; notAuthorized: number };
 };
 type UserPatch = {
   name?: string;
@@ -42,9 +66,27 @@ type UserPatch = {
   jobTitle?: string | null;
   /** Id de StaffLevel. Ausente = mantém; null = limpa. Não é mudança de identidade. */
   levelId?: string | null;
+  /** Matrícula (A1). Ausente = mantém; null ou vazio = limpa. */
+  registration?: string | null;
+  /** Autorização de contato (A2). Ausente = mantém; igual à atual = nada a gravar (D17). */
+  contactAuthorization?: ContactAuthorizationInput;
+};
+/**
+ * Contexto da mudança para a trilha (C5): o motivo (A4) e, para quem edita em
+ * nome de outra tela (setor), a ação e a categoria que substituem as derivadas.
+ */
+export type PersonChangeMeta = {
+  reason: string | null;
+  action?: string;
+  category?: AuditCategory;
+};
+/** Ficha da criação (A1/A2): sem `contactAuthorization` a pessoa nasce NAO_AUTORIZADO. */
+type PersonRecordInput = {
+  registration?: string | null;
+  contactAuthorization?: ContactAuthorizationInput;
 };
 /** Pessoa sem acesso (D1/D12): POST /users com hasAccess false e a T6. */
-type PersonWithoutAccessInput = {
+type PersonWithoutAccessInput = PersonRecordInput & {
   name: string;
   phone: string;
   sectorId: string | null;
@@ -52,7 +94,7 @@ type PersonWithoutAccessInput = {
   jobTitle?: string | null;
   shiftId?: string | null;
 };
-type CreateUserInput = {
+type CreateUserInput = PersonRecordInput & {
   email: string;
   name?: string;
   role: 'ADMIN' | 'OPERATOR' | 'SUPERVISOR' | 'VIEWER';
@@ -66,6 +108,10 @@ type CreateUserInput = {
   levelId?: string | null;
 };
 type PhoneLink = { phoneE164: string; contactId: string };
+/** Matrícula e autorização já resolvidas, prontas para as colunas da criação. */
+type PersonRecord = ReturnType<typeof normalizeRegistration> &
+  Partial<AuthorizationColumns>;
+type LinkedRecord = PhoneLink & { record: PersonRecord };
 
 // P2002 no e-mail ao dar acesso = outro cadastro ficou com o e-mail entre a
 // checagem e o update → o mesmo 409 do convite.
@@ -87,6 +133,15 @@ function rethrowPhoneConflict(error: unknown): never {
     throw new ConflictError('Phone already taken', 'user.phone_taken');
   }
   throw error;
+}
+
+// P2002 do telefone ou da matrícula na edição → o erro próprio de cada um.
+function rethrowUniqueConflict(error: unknown): never {
+  try {
+    rethrowPhoneConflict(error);
+  } catch (mapped) {
+    rethrowRegistrationConflict(mapped);
+  }
 }
 
 function invalidShift(): DomainError {
@@ -117,7 +172,7 @@ function connectIfGiven(id: string | null | undefined) {
 function personWithoutAccessData(
   actorId: string,
   input: PersonWithoutAccessInput,
-  phone: PhoneLink,
+  linked: LinkedRecord,
 ): Prisma.UserCreateInput {
   return {
     name: input.name.trim(),
@@ -126,12 +181,13 @@ function personWithoutAccessData(
     email: null,
     password: null,
     mustChangePassword: false,
-    phoneE164: phone.phoneE164,
-    contact: { connect: { id: phone.contactId } },
+    phoneE164: linked.phoneE164,
+    contact: { connect: { id: linked.contactId } },
     sector: connectIfGiven(input.sectorId),
     level: connectIfGiven(input.levelId),
     workShift: connectIfGiven(input.shiftId),
     jobTitle: normalizeJobTitle(input.jobTitle),
+    ...linked.record,
     createdBy: { connect: { id: actorId } },
   };
 }
@@ -139,7 +195,7 @@ function personWithoutAccessData(
 // Defense-in-depth: strip any unexpected fields that the repo might leak (e.g.
 // if a future change accidentally swaps the allowlisted select back to a full
 // include). The repo already returns UserSummary; this enforces the contract.
-function toUserSummary(u: UserSummary): UserSummary {
+function toUserSummary(u: UserSummary): UserView {
   return {
     id: u.id,
     email: u.email,
@@ -155,6 +211,8 @@ function toUserSummary(u: UserSummary): UserSummary {
     phoneE164: u.phoneE164,
     shiftId: u.shiftId,
     jobTitle: u.jobTitle,
+    registration: u.registration,
+    contactAuthorization: toContactAuthorization(u),
     levelId: u.levelId,
     level: u.level,
     createdAt: u.createdAt,
@@ -187,6 +245,26 @@ function contactNameFor(
   return newName?.trim() || user.name?.trim() || (user.email ?? '');
 }
 
+// Matrícula e autorização da edição: só o que veio no corpo e mudou (A1/A2). A
+// autorização igual à atual não regrava `RecordedAt`/`RecordedById` (D17).
+function recordUpdateData(
+  input: UserPatch,
+  actorId: string,
+  current: UserSummary,
+): Prisma.UserUpdateInput {
+  return {
+    ...(input.registration !== undefined
+      ? normalizeRegistration(input.registration)
+      : {}),
+    ...authorizationColumns(
+      input.contactAuthorization,
+      actorId,
+      new Date(),
+      current,
+    ),
+  };
+}
+
 @Injectable()
 export class UsersService {
   constructor(
@@ -201,19 +279,29 @@ export class UsersService {
     pageSize: number,
     filters: UserListFilters = {},
   ): Promise<UserListResponse> {
-    const { data, total } = await this.repo.findMany(page, pageSize, filters);
-    return { data: data.map(toUserSummary), total, page, pageSize };
+    const [{ data, total }, authorizationCounts] = await Promise.all([
+      this.repo.findMany(page, pageSize, filters),
+      this.repo.countAuthorizationPending(),
+    ]);
+    return {
+      data: data.map(toUserSummary),
+      total,
+      page,
+      pageSize,
+      authorizationCounts,
+    };
   }
 
   async createUser(
     input: CreateUserInput,
     createdById: string,
-  ): Promise<{ user: UserSummary | null; temporaryPassword: string }> {
+  ): Promise<{ user: UserView; temporaryPassword: string }> {
     const phoneE164 = this.phones.normalize(input.phone);
     const existing = await this.repo.findByEmail(input.email);
     await this.assertCreatable(input, existing);
     await this.assertAssignableShift(input.shiftId);
     await this.assertAssignableLevel(input.levelId, null);
+    const record = await this.personRecord(input, createdById);
     await this.phones.assertAvailable(phoneE164);
     const temporaryPassword = UsersRepository.generateTempPassword();
     const passwordHash = await argon2.hash(temporaryPassword, {
@@ -230,21 +318,63 @@ export class UsersService {
       input,
       createdById,
       passwordHash,
-      {
-        phoneE164,
-        contactId,
-      },
+      { phoneE164, contactId, record },
     );
+    return { user: toUserSummary(created), temporaryPassword };
+  }
 
-    await this.audit.log('user.invited', 'User', created.id, {
-      email: created.email,
-      role: created.role,
-      invitedBy: createdById,
-    });
+  /**
+   * Matrícula e autorização da criação, antes de qualquer gravação (inclusive a
+   * do Contato): data futura e matrícula já usada (sem diferenciar maiúsculas)
+   * recusam sem deixar rastro. A corrida que passa daqui estoura o P2002 da
+   * chave no `createWithAudit` (`rethrowRegistrationConflict`).
+   */
+  private async personRecord(
+    input: PersonRecordInput,
+    actorId: string,
+  ): Promise<PersonRecord> {
+    const registration = normalizeRegistration(input.registration);
+    const authorization = authorizationColumns(
+      input.contactAuthorization,
+      actorId,
+      new Date(),
+    );
+    const { registrationKey } = registration;
+    if (
+      registrationKey &&
+      (await this.repo.findIdByRegistrationKey(registrationKey))
+    ) {
+      throw registrationTaken();
+    }
+    return { ...registration, ...authorization };
+  }
 
-    // Re-read via findById to get the password-free UserSummary shape.
-    const user = await this.repo.findById(created.id);
-    return { user: user ? toUserSummary(user) : null, temporaryPassword };
+  /**
+   * Grava a pessoa e a trilha da criação na mesma transação (GC1): `action` é
+   * `user.invited` (com acesso) ou `user.person_created`. A trilha leva o
+   * retrato da pessoa com telefone e e-mail mascarados (GC2), sem senha e sem
+   * metadata com e-mail.
+   */
+  private createWithTrail(
+    data: Prisma.UserCreateInput,
+    action: 'user.invited' | 'user.person_created',
+    actorId: string,
+  ): Promise<UserSummary> {
+    return this.repo
+      .createWithAudit(data, (tx, row, userId) =>
+        this.audit.recordChange(tx, {
+          action,
+          entity: 'User',
+          entityId: userId,
+          category: 'PERSON',
+          subjectUserId: userId,
+          reason: null,
+          changes: personAuditChanges(null, row),
+          actorId,
+        }),
+      )
+      .catch(rethrowPhoneConflict)
+      .catch(rethrowRegistrationConflict);
   }
 
   private async assertCreatable(
@@ -268,10 +398,10 @@ export class UsersService {
     input: CreateUserInput,
     createdById: string,
     password: string,
-    phone: PhoneLink,
+    linked: LinkedRecord,
   ) {
-    return this.repo
-      .create({
+    return this.createWithTrail(
+      {
         email: input.email,
         name: input.name ?? null,
         role: input.role,
@@ -280,16 +410,19 @@ export class UsersService {
           : {}),
         password,
         mustChangePassword: true,
-        phoneE164: phone.phoneE164,
-        contact: { connect: { id: phone.contactId } },
+        phoneE164: linked.phoneE164,
+        contact: { connect: { id: linked.contactId } },
         jobTitle: normalizeJobTitle(input.jobTitle),
         ...(input.shiftId
           ? { workShift: { connect: { id: input.shiftId } } }
           : {}),
         level: connectIfGiven(input.levelId),
+        ...linked.record,
         createdBy: { connect: { id: createdById } },
-      })
-      .catch(rethrowPhoneConflict);
+      },
+      'user.invited',
+      createdById,
+    );
   }
 
   /**
@@ -300,27 +433,26 @@ export class UsersService {
   async createPersonWithoutAccess(
     actorId: string,
     input: PersonWithoutAccessInput,
-  ): Promise<UserSummary> {
+  ): Promise<UserView> {
     const phoneE164 = this.phones.normalize(input.phone);
     await this.assertActiveSectorIfGiven(input.sectorId);
     await this.assertAssignableShift(input.shiftId);
     await this.assertAssignableLevel(input.levelId, null);
+    const record = await this.personRecord(input, actorId);
     await this.phones.assertAvailable(phoneE164);
     const contactId = await this.phones.resolveContactId(
       phoneE164,
       input.name.trim(),
     );
-    const user = await this.repo
-      .createSummary(
-        personWithoutAccessData(actorId, input, { phoneE164, contactId }),
-      )
-      .catch(rethrowPhoneConflict);
-    // GC8: sem nome, e-mail ou telefone na auditoria.
-    await this.audit.log('user.person_created', 'User', user.id, {
+    const user = await this.createWithTrail(
+      personWithoutAccessData(actorId, input, {
+        phoneE164,
+        contactId,
+        record,
+      }),
+      'user.person_created',
       actorId,
-      sectorId: user.sectorId,
-      hasAccess: false,
-    });
+    );
     return toUserSummary(user);
   }
 
@@ -333,7 +465,7 @@ export class UsersService {
     actorId: string,
     userId: string,
     input: { email: string; role: Role },
-  ): Promise<{ user: UserSummary; temporaryPassword: string }> {
+  ): Promise<{ user: UserView; temporaryPassword: string }> {
     const user = await this.repo.findById(userId);
     if (!user) throw new NotFoundError('User', userId);
     if (user.hasAccess) throw alreadyHasAccess();
@@ -345,21 +477,46 @@ export class UsersService {
       type: argon2.argon2id,
     });
     const granted = await this.repo
-      .grantAccess(userId, {
-        email,
-        role: input.role,
-        password,
-        mustChangePassword: true,
-        hasAccess: true,
-      })
+      .grantAccess(
+        userId,
+        {
+          email,
+          role: input.role,
+          password,
+          mustChangePassword: true,
+          hasAccess: true,
+        },
+        this.grantTrail(userId, actorId, input.role),
+      )
       .catch(rethrowEmailConflict);
     // Null = outro pedido deu acesso entre a leitura e o update.
     if (!granted) throw alreadyHasAccess();
-    await this.audit.log('user.access_granted', 'User', userId, {
-      actorId,
-      role: input.role,
-    });
     return { user: toUserSummary(granted), temporaryPassword };
+  }
+
+  /**
+   * Trilha da concessão de acesso, no tx do update (GC1/GC2): só os campos que
+   * mudaram (acesso, e-mail mascarado, papel se mudou); senha e hash nunca
+   * entram. O papel concedido vai também em `metadata`, porque `changes` omite
+   * o papel quando ele não muda (VIEWER → VIEWER).
+   */
+  private grantTrail(
+    userId: string,
+    actorId: string,
+    role: Role,
+  ): PersonUpdateTrail {
+    return (tx, before, after) =>
+      this.audit.recordChange(tx, {
+        action: 'user.access_granted',
+        entity: 'User',
+        entityId: userId,
+        category: 'PERSON',
+        subjectUserId: userId,
+        reason: null,
+        changes: personAuditChanges(before, after),
+        metadata: { role },
+        actorId,
+      });
   }
 
   /** Papel ≠ ADMIN exige setor ativo (regra do convite), com o 422 de C2. */
@@ -373,10 +530,18 @@ export class UsersService {
       throw accessSectorError('user.sector_invalid');
   }
 
+  /**
+   * Edita a pessoa e grava a trilha na mesma transação (GC1). O motivo (A4) é
+   * cobrado por quem expõe a rota (`requireReason`); sem `meta` a trilha segue
+   * sem motivo (chamadores do setor, que passam a informá-lo na T7). Quem pode
+   * inativar ou alterar a autorização é decidido antes, por quem chama
+   * (`/users` é só ADMIN; o setor usa `person-actions.policy`).
+   */
   async updateUser(
     id: string,
     input: UserPatch,
     actorId: string,
+    meta: PersonChangeMeta = { reason: null },
   ): Promise<void> {
     const user = await this.repo.findById(id);
     if (!user) throw new NotFoundError('User', id);
@@ -385,9 +550,11 @@ export class UsersService {
     assertNameKept(user, input.name);
     await this.assertValidAssignment(user, input);
     await this.assertAssignableShift(input.shiftId);
+    await this.assertRegistrationFree(id, input.registration);
     const changesIdentity = this.changesIdentity(input);
     const data = {
       ...this.toUpdateData(input, changesIdentity),
+      ...recordUpdateData(input, actorId, user),
       ...(await this.phoneUpdate(user, input.phone, input.name)),
     };
 
@@ -395,7 +562,11 @@ export class UsersService {
     // the only two admins would otherwise both pass a separate countAdmins
     // check; the serializable transaction prevents that race.
     const result = await this.lastAdminGuard(() =>
-      this.repo.updateWithLastAdminGuard(id, data),
+      this.repo.updateWithLastAdminGuard(
+        id,
+        data,
+        this.updateTrail(id, actorId, meta),
+      ),
     );
     if ('lastAdmin' in result) {
       throw new ForbiddenError(
@@ -404,21 +575,47 @@ export class UsersService {
       );
     }
 
-    if (changesIdentity) {
-      // A privilege change must not leave the old role cached in a live access
-      // token (valid up to 15min): force re-login so the new role takes effect.
-      await this.refresh.revokeAllForUser(id);
-      await this.audit.log('user.role_changed', 'User', id, {
-        newRole: input.role,
-        sectorId: input.sectorId,
-        isActive: input.isActive,
-        changedBy: actorId,
+    // A privilege change must not leave the old role cached in a live access
+    // token (valid up to 15min): force re-login so the new role takes effect.
+    if (changesIdentity) await this.refresh.revokeAllForUser(id);
+  }
+
+  /**
+   * Trilha da edição, no tx do update (GC1/GC2/GC3): só os campos que mudaram,
+   * com telefone e e-mail mascarados; nada mudou, nada grava. O autor é o
+   * `actorId` explícito, não o do CLS (C2).
+   */
+  private updateTrail(
+    id: string,
+    actorId: string,
+    meta: PersonChangeMeta,
+  ): PersonUpdateTrail {
+    return async (tx, before, after) => {
+      const changes = personAuditChanges(before, after);
+      if (changes.length === 0) return;
+      await this.audit.recordChange(tx, {
+        action: meta.action ?? personChangeAction(changes),
+        entity: 'User',
+        entityId: id,
+        category: meta.category ?? 'PERSON',
+        subjectUserId: id,
+        reason: meta.reason,
+        changes,
+        actorId,
       });
-    } else {
-      await this.audit.log('user.profile_updated', 'User', id, {
-        changedBy: actorId,
-      });
-    }
+    };
+  }
+
+  /** Matrícula já usada por outra pessoa → 422 antes de gravar; a própria não conflita (A1). */
+  private async assertRegistrationFree(
+    id: string,
+    registration: string | null | undefined,
+  ): Promise<void> {
+    if (registration === undefined) return;
+    const { registrationKey } = normalizeRegistration(registration);
+    if (!registrationKey) return;
+    const owner = await this.repo.findIdByRegistrationKey(registrationKey);
+    if (owner && owner !== id) throw registrationTaken();
   }
 
   private assertSelfChangeAllowed(
@@ -559,11 +756,27 @@ export class UsersService {
           'user.concurrent_admin_change',
         );
       }
-      rethrowPhoneConflict(error);
+      rethrowUniqueConflict(error);
     }
   }
 
-  async deleteUser(id: string, actorId: string): Promise<void> {
+  /**
+   * Exclusão física: só quem `canDeletePerson` autoriza (decidido antes de ler
+   * a pessoa), nunca a si mesmo, nunca o último ADMIN e só quem não deixou
+   * histórico (A3/D7; com histórico, 409 e a saída é inativar). O repositório
+   * confere o histórico, apaga e grava a trilha na mesma transação serializável.
+   */
+  async deleteUser(
+    id: string,
+    actorId: string,
+    actorRole: Role,
+  ): Promise<void> {
+    if (!canDeletePerson({ id: actorId, role: actorRole })) {
+      throw new ForbiddenError(
+        'Só o administrador pode excluir uma pessoa.',
+        'user.delete_forbidden',
+      );
+    }
     const user = await this.repo.findById(id);
     if (!user) throw new NotFoundError('User', id);
 
@@ -576,7 +789,7 @@ export class UsersService {
 
     // Transactional delete with last-admin guard against concurrent races.
     const result = await this.lastAdminGuard(() =>
-      this.repo.deleteWithLastAdminGuard(id),
+      this.repo.deleteWithLastAdminGuard(id, this.deleteTrail(id, actorId)),
     );
     if ('lastAdmin' in result) {
       throw new ForbiddenError(
@@ -584,15 +797,30 @@ export class UsersService {
         'user.last_admin',
       );
     }
+    if ('hasHistory' in result) throw hasHistory();
 
     // Burn any lingering refresh families so a deleted user's token can't keep
     // rotating until the 7-day family TTL lapses.
     await this.refresh.revokeAllForUser(id);
+  }
 
-    await this.audit.log('user.deleted', 'User', id, {
-      email: user.email,
-      deletedBy: actorId,
-    });
+  /**
+   * Trilha da exclusão, no tx do delete (GC1/GC2): o retrato da pessoa como
+   * estava (telefone e e-mail mascarados, sem senha) e nenhum "depois". O
+   * evento fica depois que a pessoa some: `subjectUserId` não tem FK.
+   */
+  private deleteTrail(id: string, actorId: string): PersonDeleteTrail {
+    return (tx, before) =>
+      this.audit.recordChange(tx, {
+        action: 'user.deleted',
+        entity: 'User',
+        entityId: id,
+        category: 'PERSON',
+        subjectUserId: id,
+        reason: null,
+        changes: personAuditChanges(before, null),
+        actorId,
+      });
   }
 
   async resetPassword(
@@ -613,9 +841,13 @@ export class UsersService {
     // Same reasoning as self-service change: invalidate every existing session
     // so the old credential's refresh tokens stop rotating.
     await this.refresh.revokeAllForUser(id);
-    await this.audit.log('user.password_reset', 'User', id, {
-      resetBy: actorId,
-    });
+    await this.audit.log(
+      'user.password_reset',
+      'User',
+      id,
+      { resetBy: actorId },
+      { subjectUserId: id },
+    );
 
     return { temporaryPassword };
   }

@@ -105,6 +105,21 @@ const ROUTES: [string, Call][] = [
   ['DELETE exception', (h, id) => h.service.deleteException(id, 'ex-old')],
 ];
 
+describe('StaffScheduleEditService — pessoa afetada na trilha (A5)', () => {
+  it.each(ROUTES)(
+    'aponta a pessoa afetada no 5º argumento do registro (%s)',
+    async (_route, call) => {
+      const h = harness();
+
+      await call(h, ADMIN.id);
+
+      expect(h.audit.log).toHaveBeenCalledTimes(1);
+      const [, , , , opts] = h.audit.log.mock.calls[0] as unknown[];
+      expect(opts).toEqual({ subjectUserId: 'joao' });
+    },
+  );
+});
+
 describe('StaffScheduleEditService — quem edita (GC8)', () => {
   it.each(ROUTES)(
     'gestor não edita pessoa de setor que não gerencia → 403 e nada gravado (%s)',
@@ -253,6 +268,7 @@ describe('StaffScheduleEditService — createException (GC10)', () => {
         userId: 'joao',
         adjusted: 2,
       },
+      { subjectUserId: 'joao' },
     );
     expect(JSON.stringify(h.audit.log.mock.calls)).not.toContain('Ana');
   });

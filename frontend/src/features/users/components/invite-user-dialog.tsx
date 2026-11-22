@@ -5,6 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { AuthorizationField } from "@/features/people-record/components/authorization-field";
+import { RegistrationField } from "@/features/people-record/components/registration-field";
 import { useSectors } from "@/features/internal-admin/api";
 import { useShifts } from "@/features/shifts/api";
 import { useActiveLevels, useInviteUser } from "../api";
@@ -21,7 +23,7 @@ import { TemporaryPasswordModal } from "./temporary-password-modal";
 
 type Props = { open: boolean; onOpenChange: (open: boolean) => void };
 type Form = UseFormReturn<InviteUserOutput>;
-const EMPTY_INVITE: InviteUserOutput = { hasAccess: true, email: "", name: "", phone: "", role: "OPERATOR", sectorId: null, shiftId: null, jobTitle: "", levelId: null };
+const EMPTY_INVITE: InviteUserOutput = { hasAccess: true, email: "", name: "", phone: "", role: "OPERATOR", sectorId: null, shiftId: null, jobTitle: "", levelId: null, registration: "", authorization: null };
 
 export function InviteUserDialog({ open, onOpenChange }: Props) {
   const [tmpPwd, setTmpPwd] = useState<string | null>(null);
@@ -77,10 +79,11 @@ function useInviteForm(open: boolean, onOpenChange: Props["onOpenChange"], setTm
 
 function InviteForm({ state, onCancel }: { state: State; onCancel: () => void }) {
   return (
-    <form onSubmit={state.form.handleSubmit(state.submit)} className="space-y-4 py-2">
+    <form onSubmit={state.form.handleSubmit(state.submit)} noValidate className="space-y-4 py-2">
       <AccessSelect value={state.hasAccess} onChange={(value) => state.form.setValue("hasAccess", value)} />
       <InviteIdentity form={state.form} hasAccess={state.hasAccess} />
       <InviteAssignment state={state} />
+      <InviteRecord form={state.form} />
       <DialogFooter>
         <Button type="button" variant="ghost" onClick={onCancel}>Cancelar</Button>
         <Button type="submit" disabled={state.pending}>{state.pending ? "Cadastrando..." : "Cadastrar"}</Button>
@@ -110,6 +113,20 @@ function InviteIdentity({ form, hasAccess }: { form: Form; hasAccess: boolean })
         <FieldError message={errors.name?.message} />
       </div>
       <PhoneField id="invite-phone" registration={form.register("phone")} error={errors.phone?.message} />
+    </>
+  );
+}
+
+/** Matrícula (opcional) e autorização de contato (obrigatória, sem pré-marcado): cadastro novo não pede motivo. */
+function InviteRecord({ form }: { form: Form }) {
+  const registration = useField(form, "registration");
+  const authorization = useField(form, "authorization");
+  const revalidate = { shouldValidate: form.formState.isSubmitted };
+  const { errors } = form.formState;
+  return (
+    <>
+      <RegistrationField value={registration ?? ""} onChange={(value) => form.setValue("registration", value, revalidate)} error={errors.registration?.message} />
+      <AuthorizationField value={authorization ?? null} onChange={(value) => form.setValue("authorization", value, revalidate)} error={errors.authorization?.message} />
     </>
   );
 }

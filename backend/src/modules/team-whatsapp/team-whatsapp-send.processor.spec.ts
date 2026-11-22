@@ -66,7 +66,11 @@ function makeRecipient(over: Record<string, unknown> = {}) {
     id: 'r1',
     status: 'QUEUED',
     messageId: null,
-    user: { phoneE164: PHONE, contact: { id: 'c1', phoneE164: PHONE } },
+    user: {
+      phoneE164: PHONE,
+      contact: { id: 'c1', phoneE164: PHONE },
+      contactAuthorization: 'AUTORIZADO',
+    },
     channel: CH1,
     dispatch: {
       id: 'd1',
@@ -162,6 +166,42 @@ const withPrior = (
   );
   prisma.message.findUnique.mockResolvedValue(row as never);
 };
+
+describe('TeamWhatsappSendProcessor — autorização de contato', () => {
+  const asUser = (over: Record<string, unknown>) =>
+    prisma.teamWhatsappRecipient.findUnique.mockResolvedValue(
+      makeRecipient({
+        user: { ...makeRecipient().user, ...over },
+      }) as never,
+    );
+
+  it('retirada depois de enfileirar vira SKIPPED/NOT_AUTHORIZED, sem Message nem envio', async () => {
+    asUser({ contactAuthorization: 'NAO_AUTORIZADO' });
+    await proc.process(makeJob());
+    expect(prisma.teamWhatsappRecipient.updateMany.mock.calls).toContainEqual([
+      {
+        where: { id: 'r1', status: 'QUEUED' },
+        data: { status: 'SKIPPED', skipReason: 'NOT_AUTHORIZED' },
+      },
+    ]);
+    expect(chat.prepareTeamMessage.mock.calls).toHaveLength(0);
+    expect(chat.sendTeamMessage.mock.calls).toHaveLength(0);
+    expect(acquirePacingLock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['sem telefone', { phoneE164: null, contact: null }, 'NO_PHONE', false],
+    ['suprimido', {}, 'SUPPRESSED', true],
+  ])(
+    'NAO_AUTORIZADO e %s: o motivo anterior da ordem C8 prevalece',
+    async (_n, user, reason, suppressed) => {
+      asUser({ ...user, contactAuthorization: 'NAO_AUTORIZADO' });
+      consent.isSuppressed.mockResolvedValue(suppressed);
+      await proc.process(makeJob());
+      expect(lastData()).toEqual({ status: 'SKIPPED', skipReason: reason });
+    },
+  );
+});
 
 describe('TeamWhatsappSendProcessor — pré-checagens', () => {
   it('status diferente de QUEUED não reenvia', async () => {

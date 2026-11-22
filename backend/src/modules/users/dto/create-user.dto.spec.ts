@@ -7,6 +7,51 @@ import { updateUserSchema } from './update-user.dto';
 
 const PHONE = '92991234567';
 
+describe('createUserSchema — matrícula e autorização (C5)', () => {
+  const bodies = [
+    ['convite', { email: 'a@b.com', phone: PHONE }],
+    ['sem acesso', { hasAccess: false, name: 'Ana', phone: PHONE }],
+  ] as const;
+  const signed = {
+    status: 'AUTORIZADO',
+    source: 'TERMO_ASSINADO',
+    date: '2026-11-10',
+  };
+
+  it.each(bodies)(
+    'aceita registration (aparada ou null) e contactAuthorization (%s)',
+    (_ramo, body) => {
+      const parsed = createUserSchema.parse({
+        ...body,
+        registration: ' Ab-12 ',
+        contactAuthorization: signed,
+      });
+      expect(parsed).toMatchObject({
+        registration: 'Ab-12',
+        contactAuthorization: signed,
+      });
+      expect(
+        createUserSchema.parse({ ...body, registration: null }),
+      ).toMatchObject({ registration: null });
+    },
+  );
+
+  it.each(bodies)(
+    'recusa CADASTRO_ANTERIOR como origem e matrícula com mais de 30 caracteres (%s)',
+    (_ramo, body) => {
+      const legacy = { status: 'AUTORIZADO', source: 'CADASTRO_ANTERIOR' };
+      expect(
+        createUserSchema.safeParse({ ...body, contactAuthorization: legacy })
+          .success,
+      ).toBe(false);
+      expect(
+        createUserSchema.safeParse({ ...body, registration: 'x'.repeat(31) })
+          .success,
+      ).toBe(false);
+    },
+  );
+});
+
 describe('createUserSchema.email normalization', () => {
   it('lowercases the email so duplicate accounts cannot be created by case', () => {
     // Regression: without `.trim().toLowerCase()`, `Foo@Bar.com` and

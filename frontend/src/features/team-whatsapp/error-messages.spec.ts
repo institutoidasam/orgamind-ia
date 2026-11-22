@@ -5,6 +5,12 @@ import {
   retryErrorMessage, SKIP_REASON_LABEL, teamErrorMessage,
 } from './error-messages';
 
+describe('motivo NOT_AUTHORIZED', () => {
+  it.each([
+    ['SKIPPED', 'NOT_AUTHORIZED', 'Pulado: Contato não autorizado'],
+  ] as const)('%s %s', (status, reason, label) => expect(recipientStatusLabel(status, reason)).toBe(label));
+});
+
 describe('teamErrorMessage', () => {
   it.each([
     ['team_whatsapp.forbidden', 'Você não tem permissão para enviar a este destino.'],
@@ -70,6 +76,7 @@ describe('rótulos de envio', () => {
   it('traduz o motivo de pulo e fixa a frase de demora', () => {
     expect(SKIP_REASON_LABEL).toEqual({
       NO_PHONE: 'sem telefone', SUPPRESSED: 'pediu para não receber (SAIR)', INACTIVE: 'Usuário inativo',
+      NOT_AUTHORIZED: 'Contato não autorizado',
     });
     expect(PACING_HINT).toMatch(/^Os envios saem aos poucos, no ritmo do canal;/);
   });

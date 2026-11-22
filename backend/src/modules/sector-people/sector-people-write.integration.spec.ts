@@ -6,7 +6,8 @@ import {
 } from '@testcontainers/postgresql';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { deployMigrations } from '../../../test/migrations';
-import type { AuditService } from '../../shared/audit/audit.service';
+import { AuditRepository } from '../../shared/audit/audit.repository';
+import { AuditService } from '../../shared/audit/audit.service';
 import type { RefreshService } from '../auth/refresh.service';
 import { ContactsRepository } from '../contacts/contacts.repository';
 import type { ContactsService } from '../contacts/contacts.service';
@@ -26,6 +27,7 @@ const TESTCONTAINERS_ENABLED = process.env.TESTCONTAINERS_ENABLED === '1';
 let postgres: StartedPostgreSqlContainer;
 let prisma: PrismaClient;
 let service: SectorPeopleWriteService;
+const recordChange = vi.fn();
 const ids = { admin: '', operation: '', hr: '', night: '' };
 
 // Contatos já existentes (como os da tela "Dos contatos"); nenhum ligado a pessoa.
@@ -33,7 +35,12 @@ async function contact(name: string | null, phoneE164: string) {
   return (await prisma.contact.create({ data: { name, phoneE164 } })).id;
 }
 
-function buildService(): SectorPeopleWriteService {
+function buildService(
+  audit: AuditService = {
+    log: vi.fn(),
+    recordChange,
+  } as unknown as AuditService,
+): SectorPeopleWriteService {
   const db = prisma as never;
   const repo = new SectorPeopleRepository(db);
   const usersRepo = new UsersRepository(db);
@@ -42,7 +49,6 @@ function buildService(): SectorPeopleWriteService {
     update: (id: string, data: { name: string }) =>
       prisma.contact.update({ where: { id }, data }),
   } as unknown as ContactsService;
-  const audit = { log: vi.fn() } as unknown as AuditService;
   const users = new UsersService(
     usersRepo,
     audit,
@@ -113,6 +119,162 @@ async function personWithPhone(phoneE164: string): Promise<void> {
   });
 }
 
+/** Trilha de verdade: `AuditService` sobre o banco do teste (CLS ausente). */
+function realTrailService(): SectorPeopleWriteService {
+  const audit = new AuditService(new AuditRepository(prisma as never), {
+    get: () => undefined,
+  } as never);
+  return buildService(audit);
+}
+
+/** Setor com gestora (SUPERVISOR), uma pessoa sem login e uma com login. */
+async function seedStatusScenario() {
+  const manager = await prisma.user.create({
+    data: {
+      name: 'Gestora',
+      email: 'gestora@test.local',
+      password: 'x',
+      role: 'SUPERVISOR',
+    },
+  });
+  const sector = await prisma.sector.create({
+    data: { name: 'Status', code: 'STA', managerId: manager.id },
+  });
+  const inSector = { sectorId: sector.id };
+  const teo = await prisma.user.create({
+    data: { ...inSector, name: 'Téo', hasAccess: false, role: 'VIEWER' },
+  });
+  const login = await prisma.user.create({
+    data: {
+      ...inSector,
+      name: 'Com login',
+      email: 'login@test.local',
+      password: 'x',
+      role: 'OPERATOR',
+    },
+  });
+  return { manager, sector, teo, login };
+}
+
+describe.skipIf(!TESTCONTAINERS_ENABLED)(
+  'SectorPeopleWriteService — inativar e reativar pelo setor (banco real)',
+  () => {
+    it('SUPERVISOR gestor inativa e reativa pessoa sem login, com a trilha e a situação certas; pessoa com login fica intacta', async () => {
+      const { manager, sector, teo, login } = await seedStatusScenario();
+      const status = realTrailService();
+      const set = (userId: string, isActive: boolean, reason: string) =>
+        status.setStatus(manager.id, sector.id, userId, { isActive, reason });
+
+      const off = await set(teo.id, false, 'Desligamento');
+      const inactive = await prisma.user.findUnique({ where: { id: teo.id } });
+      const on = await set(teo.id, true, 'Voltou da licença');
+      await expect(set(login.id, false, 'Tentativa')).rejects.toMatchObject({
+        status: 403,
+        code: 'sector_people.status_forbidden',
+      });
+
+      expect([off.isActive, inactive?.isActive, on.isActive]).toEqual([
+        false,
+        false,
+        true,
+      ]);
+      const trail = await prisma.auditEvent.findMany({
+        where: { subjectUserId: { in: [teo.id, login.id] } },
+        orderBy: { createdAt: 'asc' },
+        select: { action: true, reason: true, category: true, actorId: true },
+      });
+      const event = (action: string, reason: string) => ({
+        action,
+        reason,
+        category: 'PERSON',
+        actorId: manager.id,
+      });
+      expect(trail).toEqual([
+        event('user.deactivated', 'Desligamento'),
+        event('user.reactivated', 'Voltou da licença'),
+      ]);
+      const kept = await prisma.user.findUnique({ where: { id: login.id } });
+      expect(kept?.isActive).toBe(true);
+    });
+  },
+);
+
+const GRANTED_BY_TERM = {
+  status: 'AUTORIZADO',
+  source: 'TERMO_ASSINADO',
+  date: '2026-11-10',
+} as const;
+
+// Setor próprio: a pessoa movida não entra na escala do RH dos outros testes.
+function createSupportSector() {
+  return prisma.sector.create({ data: { name: 'Apoio', code: 'APO' } });
+}
+
+/** Lia, a partir do contato, com matrícula (com espaços) e autorização por termo. */
+async function createLiaWithRegistration() {
+  await contact('Lia', '+5592991110021');
+  return service.create(ids.admin, ids.operation, {
+    shiftId: ids.night,
+    phone: '92991110021',
+    name: 'Lia',
+    registration: ' M-300 ',
+    contactAuthorization: GRANTED_BY_TERM,
+  });
+}
+
+/** Limpa a matrícula com motivo e move a pessoa de setor, também com motivo. */
+async function clearRegistrationThenMove(userId: string, sectorId: string) {
+  const cleared = await service.update(ids.admin, ids.operation, userId, {
+    registration: null,
+    reason: 'Matrícula lançada errada',
+  });
+  await service.move(ids.admin, sectorId, [userId], 'Reforço no Apoio');
+  return cleared;
+}
+
+describe.skipIf(!TESTCONTAINERS_ENABLED)(
+  'SectorPeopleWriteService — ficha e trilha no setor (banco real)',
+  () => {
+    it('grava matrícula e autorização, recusa matrícula repetida, limpa com motivo e move com motivo na trilha', async () => {
+      const support = await createSupportSector();
+      const created = await createLiaWithRegistration();
+      expect(created).toMatchObject({
+        registration: 'M-300',
+        isActive: true,
+        contactAuthorization: GRANTED_BY_TERM,
+      });
+
+      await expect(
+        service.create(ids.admin, ids.operation, {
+          shiftId: ids.night,
+          phone: '92991110022',
+          name: 'Léa',
+          registration: 'm-300',
+        }),
+      ).rejects.toMatchObject({ status: 422, code: 'user.registration_taken' });
+
+      const cleared = await clearRegistrationThenMove(created.id, support.id);
+
+      expect(cleared.registration).toBeNull();
+      expect(
+        await prisma.user.findUnique({
+          where: { id: created.id },
+          select: { sectorId: true, registrationKey: true },
+        }),
+      ).toEqual({ sectorId: support.id, registrationKey: null });
+      expect(recordChange).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          action: 'sector_people.person_moved',
+          category: 'ASSIGNMENT',
+          reason: 'Reforço no Apoio',
+          subjectUserId: created.id,
+        }),
+      );
+    });
+  },
+);
+
 describe.skipIf(!TESTCONTAINERS_ENABLED)(
   'SectorPeopleWriteService — lote real (D10)',
   () => {
@@ -177,6 +339,38 @@ describe.skipIf(!TESTCONTAINERS_ENABLED)(
       expect(
         day.map((p) => [p.id, p.shiftId, p.workShift?.name]).sort(),
       ).toEqual(result.created.map((p) => [p.id, ids.night, 'Noite']).sort());
+    });
+  },
+);
+
+describe.skipIf(!TESTCONTAINERS_ENABLED)(
+  'SectorPeopleWriteService — tirar do setor na trilha (banco real)',
+  () => {
+    it('o registro de lote fica sem categoria e o da pessoa fica em ASSIGNMENT', async () => {
+      const person = await prisma.user.create({
+        data: {
+          sectorId: ids.operation,
+          name: 'Zeca',
+          hasAccess: false,
+          role: 'VIEWER',
+        },
+      });
+
+      await realTrailService().remove(ids.admin, ids.operation, person.id);
+
+      const trail = await prisma.auditEvent.findMany({
+        where: {
+          action: {
+            in: ['sector_people.removed', 'sector_people.person_removed'],
+          },
+        },
+        orderBy: { action: 'asc' },
+        select: { action: true, category: true },
+      });
+      expect(trail).toEqual([
+        { action: 'sector_people.person_removed', category: 'ASSIGNMENT' },
+        { action: 'sector_people.removed', category: null },
+      ]);
     });
   },
 );

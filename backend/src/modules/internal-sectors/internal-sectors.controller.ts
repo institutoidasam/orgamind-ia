@@ -6,9 +6,11 @@ import {
   Patch,
   Post,
   Query,
+  Req,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Roles } from '../auth/decorators/roles.decorator';
+import type { JwtPayload } from '../auth/jwt.strategy';
 import {
   CreateSectorDto,
   ListSectorsDto,
@@ -16,6 +18,7 @@ import {
   UpdateSectorDto,
 } from './dto';
 import { InternalSectorsService } from './internal-sectors.service';
+type AuthRequest = { user: JwtPayload };
 @ApiTags('internal-sectors')
 @Controller('internal/sectors')
 export class InternalSectorsController {
@@ -25,8 +28,11 @@ export class InternalSectorsController {
   ) {
     return this.sectors.list(q.page, q.pageSize, q.activeOnly);
   }
-  @Roles('ADMIN') @Post() create(@Body() dto: CreateSectorDto) {
-    return this.sectors.create(dto);
+  @Roles('ADMIN') @Post() create(
+    @Body() dto: CreateSectorDto,
+    @Req() req: AuthRequest,
+  ) {
+    return this.sectors.create(dto, req.user.sub);
   }
   @Roles('ADMIN') @Get(':id') get(@Param('id') id: string) {
     return this.sectors.get(id);
@@ -34,8 +40,9 @@ export class InternalSectorsController {
   @Roles('ADMIN') @Patch(':id') update(
     @Param('id') id: string,
     @Body() dto: UpdateSectorDto,
+    @Req() req: AuthRequest,
   ) {
-    return this.sectors.update(id, dto);
+    return this.sectors.update(id, dto, req.user.sub);
   }
   @Roles('ADMIN', 'SUPERVISOR', 'OPERATOR', 'VIEWER')
   @Get(':id/members')

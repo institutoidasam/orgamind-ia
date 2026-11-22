@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { contactAuthorizationInputSchema } from '../../../schemas/contracts/contact-authorization.schema';
 
 // WhatsApp: obrigatório nos dois cadastros. Só apara aqui; a normalização para
 // E.164 (e o erro user.invalid_phone) é do UserPhoneService.
@@ -11,6 +12,10 @@ const jobTitleSchema = z.string().trim().max(80).nullable().optional();
 // Nível (id de StaffLevel); ausente ou null = sem nível. Inexistente ou
 // inativo = 422 users.invalid_level (UsersService).
 const levelIdSchema = z.string().min(1).nullable().optional();
+// Ficha (C5): matrícula opcional, aparada, até 30 (a unicidade é do UsersService);
+// autorização sem o campo = NAO_AUTORIZADO, e CADASTRO_ANTERIOR não é aceito (400).
+const registrationSchema = z.string().trim().max(30).nullable().optional();
+const contactAuthorizationSchema = contactAuthorizationInputSchema.optional();
 
 // Convite (com acesso, `hasAccess` ausente ou true): o fluxo de hoje.
 const inviteSchema = z.object({
@@ -35,6 +40,8 @@ const inviteSchema = z.object({
   shiftId: shiftIdSchema,
   jobTitle: jobTitleSchema,
   levelId: levelIdSchema,
+  registration: registrationSchema,
+  contactAuthorization: contactAuthorizationSchema,
 });
 
 // Pessoa sem acesso (C2, D1): nome e telefone obrigatórios, setor opcional;
@@ -54,6 +61,8 @@ const personWithoutAccessSchema = z.object({
   levelId: levelIdSchema,
   shiftId: shiftIdSchema,
   jobTitle: jobTitleSchema,
+  registration: registrationSchema,
+  contactAuthorization: contactAuthorizationSchema,
   email: z.never().optional(),
   role: z.never().optional(),
 });

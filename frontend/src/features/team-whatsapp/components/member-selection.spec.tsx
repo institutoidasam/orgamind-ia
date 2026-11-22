@@ -20,14 +20,46 @@ const group = (sectorId: string, name: string, visible: RosterMember[], empty = 
   sectorId, name, empty, visible, off: [], noSchedule: 0,
 });
 
-function setup(groups: ReturnType<typeof group>[], shiftIds: string[] = ['noite']) {
+function setup(groups: ReturnType<typeof group>[], shiftIds: string[] = ['noite'], selected: string[] = []) {
   render(
     <MemberSelection
-      shiftIds={shiftIds} groups={groups} includeOff={false} shiftNames={new Map()} selected={new Set()}
+      shiftIds={shiftIds} groups={groups} includeOff={false} shiftNames={new Map()} selected={new Set(selected)}
       onToggle={vi.fn()} onToggleOff={vi.fn()} onToggleAll={vi.fn()} onSendAll={vi.fn()} onSendSelected={vi.fn()}
     />,
   );
 }
+
+const bloqueado: RosterMember = { ...ana, id: 'caio', name: 'Caio', level: null, contactAuthorization: 'NAO_AUTORIZADO' };
+const antigo = (id: string, name: string): RosterMember => ({
+  ...ana, id, name, level: null, contactAuthorization: 'AUTORIZADO', authorizationUnverified: true,
+});
+
+describe('MemberSelection: contato não autorizado', () => {
+  it('quem tem telefone e está NAO_AUTORIZADO aparece pelo nome em "Contato não autorizado", sem caixa de seleção e fora de "Escalados"', () => {
+    setup([group('ti', 'TI', [ana, bloqueado])]);
+    const bloqueados = within(screen.getByRole('list', { name: 'Contato não autorizado' }));
+    expect(bloqueados.getByText('Caio')).toBeInTheDocument();
+    expect(bloqueados.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(within(screen.getByRole('list', { name: 'Escalados' })).queryByText('Caio')).not.toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Sem telefone' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Enviar para todos (1)' })).toBeEnabled();
+  });
+});
+
+describe('MemberSelection: origem não verificada', () => {
+  const line = (n: string) => `${n} com origem de autorização não verificada (cadastro anterior)`;
+
+  it('com marcados, conta só os marcados; a linha não bloqueia o envio', () => {
+    setup([group('ti', 'TI', [antigo('d1', 'Dani'), antigo('e1', 'Edu'), antigo('f1', 'Fabi'), ana])], ['noite'], ['d1', 'e1']);
+    expect(screen.getByText(line('2 destinatários'))).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Enviar para selecionados (2)' })).toBeEnabled();
+  });
+
+  it('sem ninguém de cadastro anterior, a linha não aparece', () => {
+    setup([group('ti', 'TI', [ana, bia])], ['noite'], ['ana', 'bia']);
+    expect(screen.queryByText(/origem de autorização não verificada/)).not.toBeInTheDocument();
+  });
+});
 
 describe('MemberSelection', () => {
   it('agrupa por setor com o nível ao lado do nome ("Ana · Coordenador"); sem nível mostra só o nome', () => {

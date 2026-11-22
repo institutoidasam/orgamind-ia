@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { apiError, pickOption, sectorOptions } from './test-helpers';
+import { apiError, chooseAuthorization, pickOption, sectorOptions } from './test-helpers';
 
 const mocks = vi.hoisted(() => ({ candidates: vi.fn(), add: vi.fn(), toastSuccess: vi.fn(), toastError: vi.fn() }));
 
@@ -23,6 +23,8 @@ const items = [
 const onDone = vi.fn();
 const renderTab = () => render(<ContactsTab sectorId="s1" options={sectorOptions} onDone={onDone} />);
 const check = (name: string) => userEvent.setup().click(screen.getByRole('checkbox', { name }));
+const NO_AUTHORIZATION = 'Sem autorização registrada';
+const submit = (count: number) => userEvent.setup().click(screen.getByRole('button', { name: `Adicionar (${count})` }));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -30,6 +32,45 @@ beforeEach(() => {
   mocks.add.mockResolvedValue({ created: [{}, {}, {}], failed: [] });
 });
 afterEach(() => vi.useRealTimers());
+
+describe('ContactsTab: autorização do lote', () => {
+  it('sem autorização escolhida não envia e pede a escolha', async () => {
+    renderTab();
+    await check('Bia');
+    await pickOption('Turno', 'Dia');
+    await submit(1);
+    expect(await screen.findByText('Escolha a autorização de contato')).toBeInTheDocument();
+    expect(mocks.add).not.toHaveBeenCalled();
+  });
+
+  it('data futura da autorização não envia e mostra o erro', async () => {
+    renderTab();
+    await check('Bia');
+    await pickOption('Turno', 'Dia');
+    await chooseAuthorization('Termo assinado', '2999-01-01');
+    await submit(1);
+    expect(await screen.findByText('A data da autorização não pode ser futura')).toBeInTheDocument();
+    expect(mocks.add).not.toHaveBeenCalled();
+  });
+
+  it('uma só escolha vale para o lote inteiro e vai no corpo', async () => {
+    renderTab();
+    await check('Bia');
+    await check('Caio');
+    await pickOption('Turno', 'Dia');
+    expect(screen.getAllByRole('radiogroup')).toHaveLength(1);
+    await chooseAuthorization('Aceite pelo WhatsApp');
+    await submit(2);
+    await waitFor(() =>
+      expect(mocks.add).toHaveBeenCalledWith({
+        contactIds: ['c1', 'c2'],
+        contactAuthorization: { status: 'AUTORIZADO', source: 'ACEITE_WHATSAPP', date: '2026-11-10' },
+        levelId: null,
+        shiftId: 'dia',
+      }),
+    );
+  });
+});
 
 describe('ContactsTab: seleção e busca', () => {
   it('seleciona 3 contatos, escolhe Funcionário e o turno Noite e envia contactIds, levelId e shiftId', async () => {
@@ -39,9 +80,15 @@ describe('ContactsTab: seleção e busca', () => {
     await check('(92) 98888-7773'); // D11: contato sem nome aparece pelo número
     await pickOption('Nível', 'Funcionário');
     await pickOption('Turno', 'Noite');
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Adicionar (3)' }));
+    await chooseAuthorization(NO_AUTHORIZATION);
+    await submit(3);
     await waitFor(() =>
-      expect(mocks.add).toHaveBeenCalledWith({ contactIds: ['c1', 'c2', 'c3'], levelId: 'level_employee', shiftId: 'noite' }),
+      expect(mocks.add).toHaveBeenCalledWith({
+        contactIds: ['c1', 'c2', 'c3'],
+        contactAuthorization: { status: 'NAO_AUTORIZADO' },
+        levelId: 'level_employee',
+        shiftId: 'noite',
+      }),
     );
     expect(mocks.toastSuccess).toHaveBeenCalledWith('3 pessoa(s) adicionada(s)');
     expect(onDone).toHaveBeenCalled();
@@ -67,7 +114,8 @@ describe('ContactsTab: resultado e erros do envio', () => {
     await check('Caio');
     await check('(92) 98888-7773');
     await pickOption('Turno', 'Noite');
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Adicionar (3)' }));
+    await chooseAuthorization(NO_AUTHORIZATION);
+    await submit(3);
     expect(await screen.findByText('Número já usado por outra pessoa')).toBeInTheDocument();
     expect(mocks.toastSuccess).toHaveBeenCalledWith('2 pessoa(s) adicionada(s)');
     expect(onDone).not.toHaveBeenCalled();
@@ -90,7 +138,8 @@ describe('ContactsTab: resultado e erros do envio', () => {
     renderTab();
     await check('Bia');
     await pickOption('Turno', 'Dia');
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Adicionar (1)' }));
+    await chooseAuthorization(NO_AUTHORIZATION);
+    await submit(1);
     await waitFor(() => expect(mocks.toastError).toHaveBeenCalledWith('Turno inválido. Atualize a página.'));
     expect(onDone).not.toHaveBeenCalled();
   });

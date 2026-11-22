@@ -51,6 +51,10 @@ export const rosterMemberSchema = personSchema.extend({
   fromOtherSector: z.boolean(),
   situation: daySituationSchema,
   level: levelRefSchema.nullable(),
+  // C8: opcionais enquanto o back antigo não os envia; ausente = autorizado e verificado (nada muda na tela).
+  contactAuthorization: z.enum(['AUTORIZADO', 'NAO_AUTORIZADO']).optional(),
+  // Origem `CADASTRO_ANTERIOR`: recebe, mas a origem da autorização não foi verificada.
+  authorizationUnverified: z.boolean().optional(),
 });
 
 /** Escala dos setores pedidos na data; setores por nome, cada pessoa em um só. `channel` null = área sem número. */
@@ -92,7 +96,7 @@ export const dispatchResultSchema = z.object({
     .object({
       userId: z.string(),
       name: z.string(),
-      reason: z.enum(['NO_PHONE', 'SUPPRESSED', 'INACTIVE']),
+      reason: z.enum(['NO_PHONE', 'SUPPRESSED', 'INACTIVE', 'NOT_AUTHORIZED']),
     })
     .array(),
 });
@@ -203,7 +207,7 @@ export const dispatchRecipientPageSchema = z.object({
       levelName: z.string().nullable(),
       shiftName: z.string().nullable(),
       status: recipientStatusSchema,
-      // `skipReason ?? errorCode`: 'NO_PHONE' | 'SUPPRESSED' | 'INACTIVE' ou o código da falha.
+      // `skipReason ?? errorCode`: 'NO_PHONE' | 'SUPPRESSED' | 'INACTIVE' | 'NOT_AUTHORIZED' ou o código da falha.
       reason: z.string().nullable(),
       attempts: z.number().int().nonnegative(),
       // null = sem número (pulado antes de escolher o canal).
@@ -268,7 +272,7 @@ export type Paging = { page: number; pageSize: number; total: number; onPageChan
 export type RecipientPreview = { id: string; name: string };
 
 /** Quem fica de fora da prévia: sem telefone, ou com telefone mas não marcado na seleção. */
-export type LeftOutPerson = { name: string; reason: 'unselected' | 'no_phone' };
+export type LeftOutPerson = { name: string; reason: 'unselected' | 'no_phone' | 'not_authorized' };
 
 export type SendTarget =
   | { type: 'user'; userId: string; label: string }

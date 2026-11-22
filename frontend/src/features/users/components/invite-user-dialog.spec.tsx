@@ -83,12 +83,62 @@ function emailInput(): HTMLInputElement {
 
 const phoneInput = () => screen.getByLabelText("Telefone (WhatsApp)");
 const submitButton = () => screen.getByRole("button", { name: /^Cadastrar$/i });
+/** A autorização de contato é obrigatória e não vem pré-marcada: os fluxos de sucesso a escolhem antes de enviar. */
+const submit = () => {
+  fireEvent.click(screen.getByRole("radio", { name: "Termo assinado" }));
+  fireEvent.click(submitButton());
+};
 const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 const dialog = (open: boolean, onOpenChange = () => {}) => (
   <QueryClientProvider client={qc}>
     <InviteUserDialog open={open} onOpenChange={onOpenChange} />
   </QueryClientProvider>
 );
+
+describe("InviteUserDialog ficha", () => {
+  async function fillAdmin() {
+    wrap(dialog(true));
+    await userEvent.type(emailInput(), "admin@x.com");
+    await userEvent.type(phoneInput(), PHONE);
+    fireEvent.click(screen.getByRole("combobox", { name: "Perfil" }));
+    fireEvent.click(await screen.findByRole("option", { name: "Administrador" }));
+  }
+
+  it("sem escolher a autorização, o envio é bloqueado", async () => {
+    await fillAdmin();
+    expect(screen.getAllByRole("radio").every((radio) => !(radio as HTMLInputElement).checked)).toBe(true);
+    fireEvent.click(submitButton());
+    expect(await screen.findByText("Escolha a autorização de contato")).toBeTruthy();
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("com Termo assinado envia a autorização com a data e a matrícula aparada", async () => {
+    await fillAdmin();
+    await userEvent.type(screen.getByLabelText("Matrícula"), " M-77 ");
+    submit();
+    await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
+    expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+      registration: "M-77",
+      contactAuthorization: { status: "AUTORIZADO", source: "TERMO_ASSINADO", date: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) },
+    }));
+  });
+
+  it("data de autorização futura bloqueia o envio", async () => {
+    await fillAdmin();
+    fireEvent.click(screen.getByRole("radio", { name: "Termo assinado" }));
+    fireEvent.change(screen.getByLabelText("Data da autorização"), { target: { value: "2999-01-01" } });
+    fireEvent.click(submitButton());
+    expect(await screen.findByText("A data da autorização não pode ser futura")).toBeTruthy();
+    expect(mutateAsync).not.toHaveBeenCalled();
+  });
+
+  it("matrícula repetida aparece no campo Matrícula", async () => {
+    rejectOnce("user.registration_taken", 422);
+    await fillAdmin();
+    submit();
+    expect(await screen.findByText("Já existe uma pessoa com esta matrícula")).toBeTruthy();
+  });
+});
 
 describe("InviteUserDialog", () => {
   it("clears a typed email after the dialog is closed and reopened", async () => {
@@ -106,7 +156,7 @@ describe("InviteUserDialog", () => {
     await userEvent.type(phoneInput(), PHONE);
     fireEvent.click(screen.getByRole("combobox", { name: "Perfil" }));
     fireEvent.click(await screen.findByRole("option", { name: "Administrador" }));
-    fireEvent.click(submitButton());
+    submit();
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
     expect(mutateAsync).toHaveBeenCalledWith(
       expect.objectContaining({ email: "admin@x.com", role: "ADMIN" }),
@@ -119,7 +169,7 @@ describe("InviteUserDialog", () => {
     await userEvent.type(phoneInput(), PHONE);
     fireEvent.click(screen.getByRole("combobox", { name: "Setor principal" }));
     fireEvent.click(await screen.findByRole("option", { name: "Engenharia" }));
-    fireEvent.click(submitButton());
+    submit();
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
     expect(mutateAsync).toHaveBeenCalledWith(
       expect.objectContaining({ email: "op@x.com", role: "OPERATOR", sectorId: "sector-1" }),
@@ -130,7 +180,7 @@ describe("InviteUserDialog", () => {
     wrap(dialog(true));
     await userEvent.type(emailInput(), "operator@x.com");
     await userEvent.type(phoneInput(), PHONE);
-    fireEvent.click(submitButton());
+    submit();
     await waitFor(() =>
       expect(screen.getByText("Selecione o setor principal")).toBeTruthy(),
     );
@@ -149,7 +199,7 @@ describe("InviteUserDialog phone", () => {
     if (phone) await userEvent.type(phoneInput(), phone);
     fireEvent.click(screen.getByRole("combobox", { name: "Perfil" }));
     fireEvent.click(await screen.findByRole("option", { name: "Administrador" }));
-    fireEvent.click(submitButton());
+    submit();
   }
 
   it("shows the dialog title and the phone field", () => {
@@ -204,7 +254,7 @@ describe("InviteUserDialog shift", () => {
     fireEvent.click(await screen.findByRole("option", { name: "Engenharia" }));
     fireEvent.click(screen.getByRole("combobox", { name: "Turno" }));
     fireEvent.click(await screen.findByRole("option", { name: "Tarde" }));
-    fireEvent.click(submitButton());
+    submit();
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
     expect(mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ shiftId: "sh2" }));
   });
@@ -216,7 +266,7 @@ describe("InviteUserDialog shift", () => {
       fireEvent.change(screen.getByLabelText("Função (opcional)"), { target: { value: jobTitle } });
       fireEvent.click(screen.getByRole("combobox", { name: "Perfil" }));
       fireEvent.click(await screen.findByRole("option", { name: "Administrador" }));
-      fireEvent.click(submitButton());
+      submit();
     }
 
     it("sends the job title typed in Função", async () => {
@@ -262,7 +312,7 @@ describe("InviteUserDialog acesso ao sistema e nível", () => {
     expect(screen.queryByRole("combobox", { name: "Perfil" })).toBeNull();
     await userEvent.type(screen.getByLabelText("Nome"), "Rita");
     await userEvent.type(phoneInput(), PHONE);
-    fireEvent.click(submitButton());
+    submit();
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
     const payload = mutateAsync.mock.calls[0][0];
     expect(payload).toMatchObject({ hasAccess: false, name: "Rita", phone: PHONE, sectorId: null });
@@ -275,7 +325,7 @@ describe("InviteUserDialog acesso ao sistema e nível", () => {
     wrap(dialog(true));
     await chooseNoAccess();
     await userEvent.type(phoneInput(), PHONE);
-    fireEvent.click(submitButton());
+    submit();
     expect(await screen.findByText("Informe o nome")).toBeTruthy();
     expect(mutateAsync).not.toHaveBeenCalled();
   });
@@ -290,7 +340,7 @@ describe("InviteUserDialog acesso ao sistema e nível", () => {
     fireEvent.click(await screen.findByRole("option", { name: "Engenharia" }));
     fireEvent.click(screen.getByRole("combobox", { name: "Nível" }));
     fireEvent.click(await screen.findByRole("option", { name: "Líder" }));
-    fireEvent.click(submitButton());
+    submit();
     await waitFor(() => expect(mutateAsync).toHaveBeenCalledTimes(1));
     const payload = mutateAsync.mock.calls[0][0];
     expect(payload).toMatchObject({ email: "op@x.com", role: "OPERATOR", sectorId: "sector-1", levelId: "lv1" });

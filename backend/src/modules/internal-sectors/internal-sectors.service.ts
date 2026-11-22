@@ -1,12 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { ConflictError, NotFoundError } from '../../shared/errors/domain.error';
+import { AuditService } from '../../shared/audit/audit.service';
 import type {
   CreateSector,
   UpdateSector,
 } from '../../schemas/contracts/sector.schema';
 import { InternalSectorsRepository } from './internal-sectors.repository';
 import type { SectorSummaryRecord } from './internal-sectors.repository';
+import { sectorAuditChanges, type SectorAuditRow } from './sector-audit';
 import { toSectorChannel } from './sector-channel-view';
 
 function toSectorSummary(sector: SectorSummaryRecord) {
@@ -25,9 +27,19 @@ function toSectorSummary(sector: SectorSummaryRecord) {
   };
 }
 
+type SectorTrail = {
+  action: 'sector.created' | 'sector.updated';
+  actorId: string;
+  before: SectorAuditRow | null;
+  after: SectorAuditRow;
+};
+
 @Injectable()
 export class InternalSectorsService {
-  constructor(private readonly repo: InternalSectorsRepository) {}
+  constructor(
+    private readonly repo: InternalSectorsRepository,
+    private readonly audit: AuditService,
+  ) {}
   async list(page: number, pageSize: number, activeOnly?: boolean) {
     const [items, total] = await this.repo.list(page, pageSize, activeOnly);
     return { items: items.map(toSectorSummary), total, page, pageSize };
@@ -40,18 +52,35 @@ export class InternalSectorsService {
       members: sector.members,
     };
   }
-  async create(input: CreateSector) {
+  async create(input: CreateSector, actorId: string) {
     await this.validateManager(input.managerId);
-    return this.write(() => this.repo.create(this.createData(input))).then(
-      toSectorSummary,
-    );
+    return this.write(() =>
+      this.repo.createWithAudit(this.createData(input), (tx, row) =>
+        this.trail(tx, {
+          action: 'sector.created',
+          actorId,
+          before: null,
+          after: row,
+        }),
+      ),
+    ).then(toSectorSummary);
   }
-  async update(id: string, input: UpdateSector) {
+  async update(id: string, input: UpdateSector, actorId: string) {
     await this.get(id);
     await this.validateManager(input.managerId);
-    return this.write(() => this.repo.update(id, this.updateData(input))).then(
-      toSectorSummary,
-    );
+    return this.write(() =>
+      this.repo.updateWithAudit(
+        id,
+        this.updateData(input),
+        (tx, before, after) =>
+          this.trail(tx, {
+            action: 'sector.updated',
+            actorId,
+            before,
+            after,
+          }),
+      ),
+    ).then(toSectorSummary);
   }
   async members(sectorId: string, eligible?: boolean) {
     await this.get(sectorId);
@@ -86,6 +115,22 @@ export class InternalSectorsService {
           }
         : {}),
     };
+  }
+  /** Trilha dentro da transação do setor (GC1); sem campo auditado alterado, não grava evento vazio. */
+  private async trail(
+    tx: Prisma.TransactionClient,
+    { action, actorId, before, after }: SectorTrail,
+  ) {
+    const changes = sectorAuditChanges(before, after);
+    if (changes.length === 0) return;
+    await this.audit.recordChange(tx, {
+      action,
+      entity: 'Sector',
+      entityId: after.id,
+      category: 'STRUCTURE',
+      changes,
+      actorId,
+    });
   }
   private async validateManager(managerId: string | null | undefined) {
     if (managerId && !(await this.repo.findValidManager(managerId)))

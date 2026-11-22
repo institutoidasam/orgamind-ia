@@ -15,6 +15,7 @@ import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { ZodValidationPipe } from 'nestjs-zod';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UsersService } from './users.service';
+import { requireReason } from './change-reason';
 import { ListUsersDto } from './dto/list-users.dto';
 import { createUserSchema, type CreateUserBody } from './dto/create-user.dto';
 import { GrantAccessDto } from './dto/grant-access.dto';
@@ -30,12 +31,16 @@ export class UsersController {
   constructor(private readonly users: UsersService) {}
 
   @ApiOperation({
-    summary: 'List users (paginated, optional hasAccess filter)',
+    summary:
+      'List users (paginated; hasAccess, q, status and authorization filters; authorization counters)',
   })
   @Get()
   listUsers(@Query() query: ListUsersDto) {
     return this.users.listUsers(query.page, query.pageSize, {
       hasAccess: query.hasAccess,
+      q: query.q,
+      status: query.status,
+      authorization: query.authorization,
     });
   }
 
@@ -67,15 +72,21 @@ export class UsersController {
     return this.users.grantAccess(req.user.sub, id, dto);
   }
 
-  @ApiOperation({ summary: 'Update user name or role' })
+  @ApiOperation({
+    summary:
+      'Update a person (also deactivate or reactivate with isActive); reason is required',
+  })
   @HttpCode(HttpStatus.NO_CONTENT)
   @Patch(':id')
-  updateUser(
+  async updateUser(
     @Param('id') id: string,
     @Body() dto: UpdateUserDto,
     @Req() req: AuthRequest,
   ) {
-    return this.users.updateUser(id, dto, req.user.sub);
+    const { reason, ...patch } = dto;
+    return this.users.updateUser(id, patch, req.user.sub, {
+      reason: requireReason(reason),
+    });
   }
 
   @ApiOperation({
@@ -91,6 +102,6 @@ export class UsersController {
   @HttpCode(HttpStatus.NO_CONTENT)
   @Delete(':id')
   deleteUser(@Param('id') id: string, @Req() req: AuthRequest) {
-    return this.users.deleteUser(id, req.user.sub);
+    return this.users.deleteUser(id, req.user.sub, req.user.role);
   }
 }

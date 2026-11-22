@@ -43,14 +43,30 @@ const route = (name: keyof UsersController): object =>
     ?.value as object;
 
 describe('UsersController', () => {
-  it('GET /users delegates to service.listUsers with the hasAccess filter', async () => {
+  it('GET /users delegates to service.listUsers with the query filters', async () => {
     const listUsers = vi.fn().mockResolvedValue({ data: [], total: 0 });
     const ctrl = new UsersController(makeService({ listUsers }));
-    await ctrl.listUsers({ page: 1, pageSize: 20 });
-    await ctrl.listUsers({ page: 2, pageSize: 100, hasAccess: true });
+    await ctrl.listUsers({ page: 1, pageSize: 20, status: 'all' });
+    await ctrl.listUsers({
+      page: 2,
+      pageSize: 100,
+      hasAccess: true,
+      q: 'ab-12',
+      status: 'active',
+      authorization: 'UNVERIFIED',
+    });
     expect(listUsers.mock.calls).toEqual([
-      [1, 20, { hasAccess: undefined }],
-      [2, 100, { hasAccess: true }],
+      [1, 20, { hasAccess: undefined, status: 'all' }],
+      [
+        2,
+        100,
+        {
+          hasAccess: true,
+          q: 'ab-12',
+          status: 'active',
+          authorization: 'UNVERIFIED',
+        },
+      ],
     ]);
   });
 
@@ -68,12 +84,29 @@ describe('UsersController', () => {
     const { createUser } = svc as unknown as { createUser: Mock };
     expect(createUser).toHaveBeenCalledWith(body, 'admin1');
   });
+});
 
-  it('PATCH /users/:id delegates actorId from JWT', async () => {
+describe('UsersController — alteração com motivo', () => {
+  it('PATCH /users/:id delegates actorId from JWT and the trimmed reason (A4)', async () => {
     const updateUser = vi.fn().mockResolvedValue(undefined);
     const ctrl = new UsersController(makeService({ updateUser }));
-    await ctrl.updateUser('u2', { name: 'New' }, adminReq);
-    expect(updateUser).toHaveBeenCalledWith('u2', { name: 'New' }, 'admin1');
+    await ctrl.updateUser('u2', { name: 'New', reason: ' ajuste ' }, adminReq);
+    expect(updateUser).toHaveBeenCalledWith('u2', { name: 'New' }, 'admin1', {
+      reason: 'ajuste',
+    });
+  });
+
+  it('PATCH /users/:id without a valid reason → 422 user.reason_required, nothing saved', async () => {
+    const updateUser = vi.fn().mockResolvedValue(undefined);
+    const ctrl = new UsersController(makeService({ updateUser }));
+    const expected = { status: 422, code: 'user.reason_required' };
+    await expect(
+      ctrl.updateUser('u2', { name: 'New' }, adminReq),
+    ).rejects.toMatchObject(expected);
+    await expect(
+      ctrl.updateUser('u2', { isActive: false, reason: 'ab' }, adminReq),
+    ).rejects.toMatchObject(expected);
+    expect(updateUser).not.toHaveBeenCalled();
   });
 });
 
@@ -97,7 +130,7 @@ describe('UsersController — status e reset', () => {
     const deleteUser = vi.fn().mockResolvedValue(undefined);
     const ctrl = new UsersController(makeService({ deleteUser }));
     await ctrl.deleteUser('u2', adminReq);
-    expect(deleteUser).toHaveBeenCalledWith('u2', 'admin1');
+    expect(deleteUser).toHaveBeenCalledWith('u2', 'admin1', 'ADMIN');
   });
 });
 

@@ -31,6 +31,7 @@ export const SKIP_REASON_LABEL = {
   NO_PHONE: 'sem telefone',
   SUPPRESSED: 'pediu para não receber (SAIR)',
   INACTIVE: 'Usuário inativo',
+  NOT_AUTHORIZED: 'Contato não autorizado',
 } as const;
 
 /** Motivo de a pessoa estar fora da escala do dia (grupo "De folga"). */

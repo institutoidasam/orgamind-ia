@@ -1,4 +1,10 @@
 import { z } from "zod";
+import {
+  authorizationChoiceError,
+  contactAuthorizationSchema,
+  type AuthorizationChoice,
+} from "@/features/people-record/authorization";
+import { reasonSchema } from "@/features/people-record/reason";
 
 const phoneDigitsOk = (v: string) => {
   const digits = v.replace(/\D/g, "");
@@ -18,6 +24,22 @@ const optionalPhone = z
 
 const emailSchema = z.string().trim().email("Email inválido");
 const jobTitleSchema = z.string().trim().max(80, "Use até 80 caracteres");
+
+const registrationSchema = z.string().trim().max(30, "Use até 30 caracteres");
+
+/** Espelho de C4 (entrada): `CADASTRO_ANTERIOR` não existe aqui, só a migração o grava. */
+const contactAuthorizationInputSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("NAO_AUTORIZADO") }),
+  z.object({
+    status: z.literal("AUTORIZADO"),
+    source: z.enum(["TERMO_ASSINADO", "FICHA_ADMISSAO", "ACEITE_WHATSAPP", "OUTRO"]),
+    note: z.string().max(120).optional(),
+    date: z.string().optional(),
+  }),
+]);
+
+/** Escolha da tela (nada escolhido = `null`); a regra de validade fica em `authorizationChoiceError`. */
+const authorizationChoiceSchema = z.custom<AuthorizationChoice>().nullable();
 
 const levelRefSchema = z.object({
   id: z.string(),
@@ -46,6 +68,8 @@ export const userSummarySchema = z.object({
     .default(null),
   shiftId: z.string().nullable().optional().default(null),
   jobTitle: z.string().nullable().optional().default(null),
+  registration: z.string().nullable().optional().default(null),
+  contactAuthorization: contactAuthorizationSchema,
   levelId: z.string().nullable().optional().default(null),
   level: levelRefSchema.nullable().optional().default(null),
   isActive: z.boolean().optional().default(true),
@@ -60,6 +84,8 @@ export const userListResponseSchema = z.object({
   total: z.number().int().nonnegative(),
   page: z.number().int().positive(),
   pageSize: z.number().int().positive(),
+  authorizationCounts: z
+    .object({ unverified: z.number().int().nonnegative(), notAuthorized: z.number().int().nonnegative() }),
 });
 
 const roleSchema = z.enum(["ADMIN", "SUPERVISOR", "OPERATOR", "VIEWER"]);
@@ -80,8 +106,11 @@ export const inviteUserSchema = z
     shiftId: z.string().nullable().optional(),
     jobTitle: jobTitleSchema.optional(),
     levelId: z.string().nullable().optional(),
+    registration: registrationSchema.optional(),
+    authorization: authorizationChoiceSchema.default(null),
   })
   .superRefine((value, ctx) => {
+    addAuthorizationIssue(ctx, value.authorization, true);
     if (!value.hasAccess) {
       if (!value.name?.trim()) {
         ctx.addIssue({ code: "custom", path: ["name"], message: "Informe o nome" });
@@ -100,6 +129,13 @@ export const inviteUserSchema = z
     }
   });
 
+/** Cadastro exige escolher; na edição `null` é "sem mudança" e só a escolha feita é validada. */
+function addAuthorizationIssue(ctx: z.RefinementCtx, choice: AuthorizationChoice | null, required: boolean) {
+  if (choice === null && !required) return;
+  const message = authorizationChoiceError(choice);
+  if (message) ctx.addIssue({ code: "custom", path: ["authorization"], message });
+}
+
 /** Dar acesso a quem já está cadastrado: e-mail e perfil. */
 export const grantAccessSchema = z.object({
   email: emailSchema,
@@ -113,8 +149,10 @@ export const editUserSchema = z.object({
   shiftId: z.string().nullable().optional(),
   jobTitle: jobTitleSchema.nullable().optional(),
   levelId: z.string().nullable().optional(),
-  isActive: z.boolean().optional(),
   phone: z.string().optional(),
+  registration: registrationSchema.nullable().optional(),
+  contactAuthorization: contactAuthorizationInputSchema.optional(),
+  reason: z.string().max(200).optional(),
 });
 
 /**
@@ -123,11 +161,16 @@ export const editUserSchema = z.object({
  */
 export const editUserSchemaFor = (hadPhone: boolean, hasAccess = true) =>
   editUserSchema
-    .extend({ phone: hadPhone ? requiredPhone : optionalPhone })
+    .extend({
+      phone: hadPhone ? requiredPhone : optionalPhone,
+      reason: reasonSchema,
+      authorization: authorizationChoiceSchema.default(null),
+    })
     .superRefine((value, ctx) => {
       if (!hasAccess && !value.name?.trim()) {
         ctx.addIssue({ code: "custom", path: ["name"], message: "Informe o nome" });
       }
+      addAuthorizationIssue(ctx, value.authorization, false);
     });
 
 export type UserSummary = z.infer<typeof userSummarySchema>;
@@ -135,3 +178,5 @@ export type InviteUserInput = z.infer<typeof inviteUserSchema>;
 export type InviteUserOutput = z.output<typeof inviteUserSchema>;
 export type GrantAccessOutput = z.output<typeof grantAccessSchema>;
 export type EditUserInput = z.infer<typeof editUserSchema>;
+/** Valores do formulário de edição: o corpo do PATCH mais a escolha de autorização (só da tela). */
+export type EditUserFormValues = EditUserInput & { authorization?: AuthorizationChoice | null };

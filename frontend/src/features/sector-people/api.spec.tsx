@@ -8,16 +8,24 @@ import {
   useMoveSectorPeople,
   useRemoveSectorPerson,
   useSectorContactCandidates,
+  useSectorPeople,
   useSectorPersonCandidates,
+  useSetSectorPersonStatus,
   useUpdateSectorPerson,
 } from './api';
 
 afterEach(() => vi.restoreAllMocks());
 
-const person = {
+// Ficha no contrato estrito: todos os campos vêm da API.
+const listedPerson = {
   id: 'u2', name: 'Bia', phoneE164: '+5592988887777', hasAccess: false, role: null,
   level: null, jobTitle: null, shift: { id: 'sh1', name: 'Dia' }, editable: 'full',
+  registration: null,
+  isActive: true,
+  contactAuthorization: { status: 'NAO_AUTORIZADO', source: null, note: null, date: null, recordedAt: null },
 };
+const person = { ...listedPerson, registration: 'A-12' };
+const NOT_AUTHORIZED = { status: 'NAO_AUTORIZADO' as const };
 const REFRESHED = [['sector-people', 's1'], ['internal', 'sectors'], ['users']];
 
 function setup(response: unknown, status = 200) {
@@ -47,6 +55,51 @@ async function mutate<V>(useHook: () => Mutation<V>, vars: V, response: unknown 
   return { ...ctx, request: ctx.sent(), url: new URL(ctx.sent().url), body: ctx.sentBody() };
 }
 
+const listResponse = {
+  sector: { id: 's1', name: 'Logística', code: 'LOG', isActive: true, manager: null, channel: null },
+  people: [listedPerson],
+  options: { levels: [], shifts: [] },
+};
+
+async function readList(opts?: { includeInactive?: boolean }) {
+  const ctx = setup(listResponse);
+  const { result } = renderHook(() => useSectorPeople('s1', opts), { wrapper: ctx.wrapper });
+  await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  return { url: new URL(ctx.sent().url), method: ctx.sent().method, data: result.current.data! };
+}
+
+describe('listagem do setor', () => {
+  it('sem opts não manda parâmetro e devolve a ficha da pessoa', async () => {
+    const { url, method, data } = await readList();
+    expect(method).toBe('GET');
+    expect(url.pathname).toMatch(/\/internal\/sectors\/s1\/people$/);
+    expect(url.search).toBe('');
+    expect(data.people[0]).toMatchObject(listedPerson);
+  });
+
+  it('com includeInactive manda includeInactive=true', async () => {
+    const { url } = await readList({ includeInactive: true });
+    expect(Object.fromEntries(url.searchParams)).toEqual({ includeInactive: 'true' });
+  });
+
+  it('ficha sem isActive e sem contactAuthorization falha no contrato estrito', async () => {
+    const ctx = setup({ ...listResponse, people: [{ ...listedPerson, isActive: undefined, contactAuthorization: undefined }] });
+    const { result } = renderHook(() => useSectorPeople('s1'), { wrapper: ctx.wrapper });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+  });
+});
+
+describe('inativar e reativar no setor', () => {
+  it('POST /people/:userId/status com { isActive, reason }, e recarrega', async () => {
+    const vars = { userId: 'u2', isActive: false, reason: 'Saiu da empresa' };
+    const { request, url, body, invalidatedKeys } = await mutate(() => useSetSectorPersonStatus('s1'), vars, person);
+    expect(request.method).toBe('POST');
+    expect(url.pathname).toMatch(/\/internal\/sectors\/s1\/people\/u2\/status$/);
+    expect(body).toEqual({ isActive: false, reason: 'Saiu da empresa' });
+    expect(invalidatedKeys()).toEqual(REFRESHED);
+  });
+});
+
 describe('candidatos (leitura)', () => {
   it.each([
     ['pessoas', useSectorPersonCandidates, 'candidates'],
@@ -64,7 +117,7 @@ describe('candidatos (leitura)', () => {
 
 describe('escrita da lista de pessoas do setor', () => {
   it('nova pessoa: POST /people com o corpo, e recarrega lista, setores e usuários', async () => {
-    const data = { name: 'Bia', phone: '92988887777', levelId: null, jobTitle: 'Conferente', shiftId: 'sh1' };
+    const data = { name: 'Bia', phone: '92988887777', registration: 'A-12', contactAuthorization: NOT_AUTHORIZED, levelId: null, jobTitle: 'Conferente', shiftId: 'sh1' };
     const { request, url, body, invalidatedKeys } = await mutate(() => useCreateSectorPerson('s1'), data, person);
     expect(request.method).toBe('POST');
     expect(url.pathname).toMatch(/\/internal\/sectors\/s1\/people$/);
@@ -73,7 +126,7 @@ describe('escrita da lista de pessoas do setor', () => {
   });
 
   it('de contatos: POST /people/from-contacts, devolve created e failed, e recarrega', async () => {
-    const data = { contactIds: ['c1', 'c2'], levelId: 'l1', shiftId: 'sh1' };
+    const data = { contactIds: ['c1', 'c2'], contactAuthorization: NOT_AUTHORIZED, levelId: 'l1', shiftId: 'sh1' };
     const response = { created: [person], failed: [{ contactId: 'c2', reason: 'phone_taken' }] };
     const ctx = setup(response);
     const { result } = renderHook(() => useAddPeopleFromContacts('s1'), { wrapper: ctx.wrapper });
@@ -95,11 +148,11 @@ describe('escrita da lista de pessoas do setor', () => {
   });
 
   it('editar: PATCH /people/:userId só com o que mudou, e recarrega', async () => {
-    const vars = { userId: 'u2', data: { levelId: 'l2', shiftId: 'sh2' } };
+    const vars = { userId: 'u2', data: { levelId: 'l2', shiftId: 'sh2', reason: 'Troca de turno' } };
     const { request, url, body, invalidatedKeys } = await mutate(() => useUpdateSectorPerson('s1'), vars, null, 204);
     expect(request.method).toBe('PATCH');
     expect(url.pathname).toMatch(/\/internal\/sectors\/s1\/people\/u2$/);
-    expect(body).toEqual({ levelId: 'l2', shiftId: 'sh2' });
+    expect(body).toEqual({ levelId: 'l2', shiftId: 'sh2', reason: 'Troca de turno' });
     expect(invalidatedKeys()).toEqual(REFRESHED);
   });
 

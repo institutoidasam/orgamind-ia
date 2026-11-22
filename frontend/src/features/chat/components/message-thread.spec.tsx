@@ -40,6 +40,7 @@ vi.mock('./message-composer', () => ({
 }));
 vi.mock('./conversation-actions', () => ({ ConversationActions: () => null }));
 vi.mock('./bot-control', () => ({ BotControl: () => null }));
+vi.mock('./last-dispatch-banner', () => ({ LastDispatchBanner: () => null }));
 vi.mock('@/components/query-error-fallback', () => ({ QueryErrorFallback: () => <div data-testid="error-fallback" /> }));
 
 import { MessageThread } from './message-thread';

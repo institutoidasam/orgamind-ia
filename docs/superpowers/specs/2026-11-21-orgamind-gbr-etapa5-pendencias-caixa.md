@@ -253,6 +253,16 @@ Decididas provisoriamente no K2 (21/11; detalhe em "Dúvidas de produto" do plan
 16. O período de busca usa a data do alerta. Cada consulta da lista traz no máximo 2.000 linhas, das mais novas para as mais antigas, com aviso. O contador não tem teto.
 17. O contador não mostra número quando é zero, e o item do menu some enquanto carrega. Quem não envia mensagens à equipe e abre a tela pelo atalho vê só "Esta tela é para quem envia mensagens à equipe.".
 
+Decididas provisoriamente no K3 (21/11; detalhe em "Dúvidas de produto" do plano do K3). A recomendação é manter todas:
+
+18. Na passagem, além de "já resolvida" e "já com outro atendente", aparecem "já sem atendente" e "já estava com {nome}"; repetir o pedido é inofensivo. Nas pendências, a que já está com o destino mostra "já estava com {nome}"; a que ficou sem responsável no meio do caminho (encerrada e reaberta) mostra "já com outro responsável".
+19. "Recebidas na passagem de turno" mostra só as conversas de quem olha, cuja última troca de atendente foi uma passagem; o servidor ignora outro atendente pedido nesse filtro.
+20. A etiqueta da mensagem e a faixa do topo usam a hora real do disparo (no envio agendado, a hora em que saiu). Envio antigo sem finalidade aparece como "Envio à equipe · {data}". A etiqueta não tem link; "Ver resultado" fica só no topo, para quem pode ver o envio.
+21. Cada pedido passa no máximo 100 conversas ou 50 pendências, com aviso para repetir.
+22. O ADMIN pode passar as pendências de um responsável inativo ou fora do alcance (as "Sem responsável" que ainda têm o nome dele).
+23. Se o envio da resposta do robô falhar, o robô é pausado na conversa e não tenta de novo nem manda a mensagem de contingência (a resposta pode ter saído; evita duplicar). Se a fila do robô estiver fora no recebimento, a mensagem fica sem resposta automática.
+24. Mídia que chega pela importação do histórico do WhatsApp nunca aciona o robô, mesmo recente.
+
 ## Aceite
 
 **K1 — caixa**

@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { WhatsappProvidersModule } from '../whatsapp-providers/whatsapp-providers.module';
 import { ChatController } from './chat.controller';
 import { ChatMediaController } from './chat-media.controller';
+import { ConversationHandoverController } from './conversation-handover.controller';
+import { ConversationHandoverService } from './conversation-handover.service';
 import { ConversationOwnershipController } from './conversation-ownership.controller';
 import { ConversationOwnershipService } from './conversation-ownership.service';
 import { ChatService } from './chat.service';
@@ -32,10 +34,12 @@ import { TeamTrackingModule } from '../team-whatsapp/tracking/team-tracking.modu
     ChatMediaController,
     ChatSyncController,
     ConversationOwnershipController,
+    ConversationHandoverController,
   ],
   providers: [
     ChatService,
     ConversationOwnershipService,
+    ConversationHandoverService,
     ChatRepository,
     ChatEventsService,
     ChatIngestService,

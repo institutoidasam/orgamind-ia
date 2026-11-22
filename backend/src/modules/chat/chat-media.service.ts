@@ -69,6 +69,9 @@ export class ChatMediaService {
       conversationId, instanceId: conv.instanceId, contactId: conv.contactId, authorUserId: userId,
       kind, content: persistedCaption, mimeType: file.mimetype, fileName: file.originalname, sizeBytes: file.size, storageKey,
     });
+    // K3-7(a): como o texto, a resposta de mídia da equipe pausa o robô sempre
+    // (o claim com changed:false, conversa já minha e aberta, não pausa).
+    await this.repo.setBotPaused(conversationId);
     let sent = false;
     try {
       const base64 = file.buffer.toString('base64');

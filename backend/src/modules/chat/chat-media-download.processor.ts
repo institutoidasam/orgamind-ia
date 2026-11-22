@@ -48,6 +48,44 @@ export class ChatMediaDownloadProcessor extends WorkerHost {
     return { buffer: Buffer.from(dl.base64, 'base64'), mimeType: dl.mimeType ?? null };
   }
 
+  /**
+   * Auto-resposta para mídia suportada (imagem/áudio) recebida de contatos.
+   * Só dispara para mensagens recentes ("ao vivo"): o mesmo processor é usado
+   * pelo history sync, que reenfileira mídia antiga a cada reconexão — sem
+   * este guard o bot responderia mensagens de semanas atrás. K3-7(d): job com
+   * `imported` (histórico/backfill) nunca aciona o robô, seja qual for a idade;
+   * sem a marca (job antigo na fila) a idade continua decidindo.
+   */
+  private async enqueueBotReplyIfLive(d: ChatMediaDownloadJob): Promise<void> {
+    if (
+      d.fromMe ||
+      d.imported === true ||
+      (d.kind !== 'IMAGE' && d.kind !== 'AUDIO')
+    )
+      return;
+    const msg = await this.prisma.message.findUnique({
+      where: { id: d.messageId },
+      select: { receivedAt: true },
+    });
+    const receivedAt = msg?.receivedAt;
+    if (
+      !receivedAt ||
+      Date.now() - receivedAt.getTime() >= BOT_REPLY_MAX_AGE_MS
+    )
+      return;
+    const inst = await this.prisma.channel.findUnique({
+      where: { id: d.instanceId },
+      select: { botId: true },
+    });
+    if (inst?.botId) {
+      await this.botQueue.add(
+        'reply',
+        { conversationId: d.conversationId, messageId: d.messageId },
+        { jobId: d.messageId },
+      );
+    }
+  }
+
   async process(job: Job<ChatMediaDownloadJob>): Promise<void> {
     const d = job.data;
     // Scope the retry-driving try/catch to the download + store + READY write
@@ -86,21 +124,7 @@ export class ChatMediaDownloadProcessor extends WorkerHost {
     // transient failure here (Redis hiccup, etc.) must not fail the job.
     try {
       await this.events.publish({ type: 'media.ready', conversationId: d.conversationId, instanceId: d.instanceId, messageId: d.messageId });
-      // Auto-resposta para mídia suportada (imagem/áudio) recebida de contatos.
-      // Só dispara para mensagens recentes ("ao vivo"): o mesmo processor é usado
-      // pelo history sync, que reenfileira mídia antiga a cada reconexão — sem
-      // este guard o bot responderia mensagens de semanas atrás.
-      if (!d.fromMe && (d.kind === 'IMAGE' || d.kind === 'AUDIO')) {
-        const msg = await this.prisma.message.findUnique({ where: { id: d.messageId }, select: { receivedAt: true } });
-        const receivedAt = msg?.receivedAt;
-        const isLive = !!receivedAt && Date.now() - receivedAt.getTime() < BOT_REPLY_MAX_AGE_MS;
-        if (isLive) {
-          const inst = await this.prisma.channel.findUnique({ where: { id: d.instanceId }, select: { botId: true } });
-          if (inst?.botId) {
-            await this.botQueue.add('reply', { conversationId: d.conversationId, messageId: d.messageId }, { jobId: d.messageId });
-          }
-        }
-      }
+      await this.enqueueBotReplyIfLive(d);
     } catch (err) {
       this.logger.warn({ err, messageMediaId: d.messageMediaId }, 'media post-store side effect failed');
     }

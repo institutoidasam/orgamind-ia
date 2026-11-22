@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { TeamPurpose } from './team-whatsapp.schema';
 
 /**
  * Contrato das pendências da equipe (Lote K2, CK2): consulta, ações e resposta
@@ -46,6 +47,8 @@ export const pendencyListQuerySchema = z.object({
   sectorId: z.string().min(1).optional(),
   /** 'true' = "Minhas" (as pendências em que quem olha é o responsável). */
   mine: z.enum(['true', 'false']).optional(),
+  /** Só as pendências deste responsável, dentro do alcance de quem olha (K3-4). */
+  handlerId: z.string().min(1).optional(),
   days: z.coerce
     .number()
     .pipe(z.union([z.literal(7), z.literal(30)]))
@@ -85,6 +88,54 @@ export type TransferPendencyInput = z.infer<typeof transferPendencySchema>;
 export type PendencyNoteInput = z.infer<typeof pendencyNoteSchema>;
 export type ClosePendencyInput = z.infer<typeof closePendencySchema>;
 export type ReopenPendencyInput = z.infer<typeof reopenPendencySchema>;
+
+// K3-4/DT5: teto = o maior `pageSize` da lista de pendências; observação
+// obrigatória, aparada, comum a todas; só vai para a anotação, nunca para trilha nem log.
+export const PENDENCY_HANDOVER_MAX = 50;
+export const pendencyHandoverSchema = z.object({
+  toUserId: z.string().min(1),
+  // Ausente = quem pede; outro = só o ADMIN.
+  fromUserId: z.string().min(1).optional(),
+  note: requiredText,
+  pendencyIds: z
+    .array(z.string().min(1))
+    .min(1)
+    .max(PENDENCY_HANDOVER_MAX)
+    .refine((ids) => new Set(ids).size === ids.length, {
+      message: 'Há pendências repetidas.',
+    }),
+});
+export const pendencyHandoverTargetsQuerySchema = z.object({
+  fromUserId: z.string().min(1).optional(),
+});
+export type PendencyHandoverInput = z.infer<typeof pendencyHandoverSchema>;
+export type PendencyHandoverSkipReason =
+  | 'out_of_scope_target'
+  | 'already_with_target'
+  | 'other_handler'
+  | 'acked'
+  | 'closed'
+  | 'not_found';
+export type PendencyHandoverResult = {
+  transferred: { id: string }[];
+  skipped: { id: string; reason: PendencyHandoverSkipReason }[];
+};
+export type PendencyHandoverTargets = {
+  items: { id: string; name: string }[];
+};
+
+/** Último envio da equipe que ligou a conversa a uma pessoa (K3-7, DT7). */
+export type ConversationLastDispatch = {
+  last: {
+    purpose: TeamPurpose | null;
+    sentAt: string;
+    isReminder: boolean;
+    /** Só com `canViewDispatch` (DT7). */
+    dispatchId: string | null;
+    /** Só com a pendência no alcance K2-4 de quem olha. */
+    pendency: { situation: PendencySituation } | null;
+  } | null;
+};
 
 export type PendencyNoteKind = 'CONTACT' | 'ASSUME' | 'CLOSE' | 'HANDOVER';
 

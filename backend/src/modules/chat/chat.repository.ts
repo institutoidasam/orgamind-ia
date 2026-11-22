@@ -4,12 +4,23 @@ import type { ListConversationsQuery, ListMessagesQuery, ConversationsPage, Chat
 import { conversationSummaryInclude, toConversationSummary } from './conversation-summary.mapper';
 import { resolvedAtFilter } from './conversation-situation';
 import { resolveConversationForOutbound } from './resolve-conversation';
+import { findTeamDispatchTags } from './message-team-tag.query';
+
+/** Busca da lista: telefone, nome do WhatsApp ou nome do contato (extraída para `listConversations` caber em 50 linhas). */
+const searchConditions = (search: string) => [
+  { phoneE164: { contains: search } },
+  { waName: { contains: search, mode: 'insensitive' } },
+  { contact: { name: { contains: search, mode: 'insensitive' } } },
+];
 
 @Injectable()
 export class ChatRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  async listConversations(q: ListConversationsQuery): Promise<ConversationsPage> {
+  async listConversations(
+    q: ListConversationsQuery,
+    opts?: { ids?: string[] },
+  ): Promise<ConversationsPage> {
     const where: Record<string, unknown> = { archivedAt: null };
     // K1-10: abertas × resolvidas é só `resolvedAt`; `archivedAt: null` fica sempre.
     where.resolvedAt = resolvedAtFilter(q.status);
@@ -19,6 +30,8 @@ export class ChatRepository {
     // ABRE a conversa (mesmo sem responder).
     if (q.filter === 'awaiting') where.lastMessageDirection = 'INBOUND';
     if (q.instanceId) where.instanceId = q.instanceId;
+    // K3-3/DT3: restringe às conversas da passagem de turno (ids da consulta dedicada).
+    if (opts?.ids) where.id = { in: opts.ids };
     // The service resolves 'me' to the caller's id before reaching the repo, so
     // here 'assignee' is either 'unassigned' (no assignee) or a concrete userId.
     if (q.assignee === 'unassigned') where.assignedUserId = null;
@@ -36,13 +49,7 @@ export class ChatRepository {
     // filtering on a large table ever shows up in slow-query logs, consider
     // denormalizing `provider` onto Conversation as an indexed scalar.
     if (q.provider) where.instance = { provider: q.provider };
-    if (q.search) {
-      where.OR = [
-        { phoneE164: { contains: q.search } },
-        { waName: { contains: q.search, mode: 'insensitive' } },
-        { contact: { name: { contains: q.search, mode: 'insensitive' } } },
-      ];
-    }
+    if (q.search) where.OR = searchConditions(q.search);
     const [rows, total] = await Promise.all([
       this.prisma.conversation.findMany({
         // NULLS LAST explícito: no Postgres, `desc` ordena NULLS FIRST por
@@ -65,7 +72,18 @@ export class ChatRepository {
       ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),
       include: { media: true },
     });
-    const items: ChatMessage[] = rows.map((m: any) => this.toChatMessage(m)).reverse(); // chronological (oldest -> newest) for rendering
+    // K3-6: uma consulta por página; `teamTag` só aqui (os outros caminhos omitem).
+    const tags = await findTeamDispatchTags(
+      this.prisma,
+      conversationId,
+      rows.map((m: { id: string }) => m.id),
+    );
+    const items: ChatMessage[] = rows
+      .map((m: { id: string }) => ({
+        ...this.toChatMessage(m),
+        teamTag: tags.get(m.id) ?? null,
+      }))
+      .reverse(); // chronological (oldest -> newest) for rendering
     const nextCursor = rows.length === q.limit ? rows[rows.length - 1].id : null;
     return { items, nextCursor };
   }

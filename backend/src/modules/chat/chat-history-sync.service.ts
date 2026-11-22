@@ -172,10 +172,10 @@ export class ChatHistorySyncService {
           lastAt = m.receivedAt; lastPreview = m.text ?? `[${m.kind.toLowerCase()}]`; lastDir = m.fromMe ? MessageDirection.OUTBOUND : MessageDirection.INBOUND;
         }
         if (m.media && m.kind !== 'TEXT' && created.media) {
-          await this.mediaQueue.add('download', {
+          /* prettier-ignore */ await this.mediaQueue.add('download', {
             messageMediaId: created.media.id, messageId: created.id, conversationId,
             instanceId, evolutionInstanceName: evoName, providerMessageId: m.providerMessageId,
-            remoteJid: m.remoteJid, kind: m.kind, mimeType: m.media.mimeType ?? null, fromMe: m.fromMe,
+            remoteJid: m.remoteJid, kind: m.kind, mimeType: m.media.mimeType ?? null, fromMe: m.fromMe, imported: true,
           });
         }
       }

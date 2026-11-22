@@ -7,11 +7,15 @@ import { TeamAlertPanelService } from './team-alert-panel.service';
 import { TeamAlertReminderService } from './team-alert-reminder.service';
 import { TeamAlertController } from './team-alert.controller';
 import { TeamAudienceService } from './team-audience.service';
+import { TeamConversationDispatchController } from './team-conversation-dispatch.controller';
+import { TeamConversationDispatchService } from './team-conversation-dispatch.service';
 import { TeamPanoramaController } from './team-panorama.controller';
 import { TeamPanoramaService } from './team-panorama.service';
 import { TeamPendencyActionsService } from './team-pendency-actions.service';
 import { TeamPendencyController } from './team-pendency.controller';
 import { TeamPendencyService } from './team-pendency.service';
+import { TeamPendencyHandoverController } from './team-pendency-handover.controller';
+import { TeamPendencyHandoverService } from './team-pendency-handover.service';
 import { TeamWhatsappController } from './team-whatsapp.controller';
 import { TeamWhatsappRepository } from './team-whatsapp.repository';
 import { TeamWhatsappResultsService } from './team-whatsapp-results.service';
@@ -44,6 +48,8 @@ import { TeamWhatsappService } from './team-whatsapp.service';
     TeamAlertController,
     TeamPanoramaController,
     TeamPendencyController,
+    TeamPendencyHandoverController,
+    TeamConversationDispatchController,
   ],
   providers: [
     TeamWhatsappService,
@@ -57,6 +63,8 @@ import { TeamWhatsappService } from './team-whatsapp.service';
     TeamPanoramaService,
     TeamPendencyService,
     TeamPendencyActionsService,
+    TeamPendencyHandoverService,
+    TeamConversationDispatchService,
     TeamWhatsappRepository,
   ],
   exports: [TeamWhatsappRepository],

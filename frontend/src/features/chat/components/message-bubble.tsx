@@ -1,6 +1,7 @@
 import type { ChatMessage } from '../schemas';
 import { StatusTicks } from './chat-status';
 import { MediaAttachment } from './media-attachment';
+import { MessageTeamTag } from './message-team-tag';
 
 function timeLabel(iso: string): string {
   return new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
@@ -34,7 +35,8 @@ export function MessageBubble({ message, onReply }: { message: ChatMessage; onRe
   const style = styleForDirection(out);
 
   return (
-    <div className={`flex ${out ? 'justify-end' : 'justify-start'}`}>
+    <div className={`flex flex-col ${out ? 'items-end' : 'items-start'}`}>
+      <MessageTeamTag tag={message.teamTag} />
       <div
         className="max-w-[85%] rounded-lg px-3 py-2 text-sm sm:max-w-[62%]"
         style={style.bubble}

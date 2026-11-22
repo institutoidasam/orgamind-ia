@@ -31,6 +31,25 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.11.21.4',
+    date: '2026-11-21',
+    title: 'Passagem de turno',
+    items: [
+      {
+        text: 'Passar meu turno: na caixa, passe suas conversas abertas a outra pessoa, com uma observação. Quem recebe encontra-as no filtro "Recebidas na passagem de turno".',
+        where: '/inbox',
+      },
+      {
+        text: 'Passar minhas pendências: na tela de pendências da equipe, passe suas pendências a outra pessoa, com uma observação.',
+        where: '/pendencias-equipe',
+      },
+      {
+        text: 'Cada mensagem enviada à equipe mostra uma etiqueta, e o topo da conversa mostra o último envio à equipe.',
+        where: '/inbox',
+      },
+    ],
+  },
+  {
     version: '2026.11.21.3',
     date: '2026-11-21',
     title: 'Pendências da equipe',

@@ -88,7 +88,11 @@ const sortableOf = ({ row, situation }: RankedRow): SortablePendency => ({
   ackDeadlineAt: row.ackDeadlineAt,
 });
 
-/** Filtros da tela (K2-5): situação, setor EFETIVO (inclusive o nominal) e "Minhas". */
+/**
+ * Filtros da tela (K2-5): situação, setor EFETIVO (inclusive o nominal) e
+ * "Minhas"; e o responsável gravado (`handlerId`, K3-4), mesmo o inativo ou
+ * fora do alcance. Roda depois do alcance, sobre as linhas já lidas.
+ */
 function matchesFilters(
   ranked: RankedRow,
   query: PendencyListQuery,
@@ -100,6 +104,9 @@ function matchesFilters(
     query.sectorId !== undefined &&
     effectiveSectorId(row) !== query.sectorId
   ) {
+    return false;
+  }
+  if (query.handlerId !== undefined && row.handlerId !== query.handlerId) {
     return false;
   }
   return query.mine !== 'true' || row.handlerId === actorId;

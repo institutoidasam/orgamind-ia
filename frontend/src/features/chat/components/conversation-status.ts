@@ -10,6 +10,6 @@ export type ConversationStatusFilterValue = 'open' | 'resolved';
 export function assigneeForStatus(
   status: ConversationStatusFilterValue,
   assignee: AssigneeFilter,
-): 'me' | 'unassigned' | undefined {
+): Exclude<AssigneeFilter, null> | undefined {
   return status === 'open' ? (assignee ?? undefined) : undefined;
 }

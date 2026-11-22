@@ -29,6 +29,7 @@ import { LevelsController } from '../levels/levels.controller';
 import { InternalSectorsController } from '../internal-sectors/internal-sectors.controller';
 import { AuditTrailController } from '../audit-trail/audit-trail.controller';
 import { PeopleExportController } from '../people-export/people-export.controller';
+import { PeopleImportController } from '../people-import/people-import.controller';
 
 /**
  * GB1 (aceite 10): com a matriz inicial, cada rota dos sete controllers permite
@@ -278,7 +279,10 @@ describe('detector de mistura de @Roles e @RequirePermission', () => {
 const CLASS_KEY_CONTROLLERS: {
   controller: Type<object>;
   key: PermissionKey;
-}[] = [{ controller: PeopleExportController, key: 'pessoas.exportar' }];
+}[] = [
+  { controller: PeopleExportController, key: 'pessoas.exportar' },
+  { controller: PeopleImportController, key: 'pessoas.importar' },
+];
 
 /** Rotas cuja chave resolvida (handler vale sobre a classe) não é a esperada, ou que declaram `@Roles`. */
 function routesOffClassKey(

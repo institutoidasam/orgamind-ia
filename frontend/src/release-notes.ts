@@ -31,6 +31,23 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.11.19.4',
+    date: '2026-11-19',
+    title: 'Importar pessoas por planilha',
+    items: [
+      {
+        text: 'Em Administração > Importar pessoas, baixe o modelo, envie a planilha (CSV ou XLSX, até 5.000 linhas) e confira as colunas.',
+        where: '/importar-pessoas',
+      },
+      {
+        text: 'A prévia mostra o que cada linha vai fazer (criar, atualizar, sem alteração ou por que não entra) e você escolhe o que gravar. Nada é gravado antes de confirmar.',
+      },
+      {
+        text: 'As linhas que não entraram saem num relatório para baixar. Cada importação fica registrada na Trilha de alterações, no tipo Planilhas; o administrador libera a importação para Supervisor e Operador em Permissões.',
+      },
+    ],
+  },
+  {
     version: '2026.11.19.3',
     date: '2026-11-19',
     title: 'Exportar pessoas e escala',

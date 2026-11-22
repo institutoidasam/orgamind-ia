@@ -9,7 +9,7 @@ Segunda etapa do plano entregue à GBR (`reports/plano-gbr/`), na ordem pedida p
 
 **Por que agora:** a GBR quer carregar e conferir lotes grandes sem depender do programador. Hoje só existe importação e exportação de **contatos** (lista de marketing), em XLSX, sem prévia. Pessoas (colaboradores, com setor, turno e matrícula) só entram uma a uma.
 
-**De onde vêm as regras.** O Escopo e o Caderno da GBR de 28/10/2026 definem o que a função faz. A matriz de permissões das duas chaves novas foi fechada pelo Conselho R em 19/11/2026 (`~/.claude/tribunais/2026-11-19/conselho-R/sentenca-R.md`, R2) e está marcada **(conselho R2)**. O que o caderno não diz foi completado por mim e está marcado *(decisão minha)*. Tudo fica listado em "Para a GBR confirmar".
+**De onde vêm as regras.** O Escopo e o Caderno da GBR de 28/10/2026 definem o que a função faz. A matriz de permissões das duas chaves novas foi fechada pelo Conselho R em 19/11/2026 (`~/.claude/tribunais/2026-11-19/conselho-R/sentenca-R.md`, R2) e está marcada **(conselho R2)**. O tratamento de telefone já cadastrado na importação, para quem não vê telefone completo, foi fechado pelo Conselho S em 19/11/2026 (`~/.claude/tribunais/2026-11-19/conselho-S/sentenca-S.md`) e está marcado **(conselho S)**. O que o caderno não diz foi completado por mim e está marcado *(decisão minha)*. Tudo fica listado em "Para a GBR confirmar".
 
 **Fontes:** `escopo.txt` e `caderno.txt` em `.superpowers/sdd/2026-11-19-orgamind-gbr-etapa1-lote-a-ficha-trilha/fontes/` (CAD-03, CAD-04, "Regra da importação", testes T02 e T03); mapas do código em `.superpowers/sdd/2026-11-19-orgamind-gbr-etapa2-planilhas/fontes/` (`mapa-import-contatos.md`, `mapa-export-auditoria-permissoes.md`, `mapa-pessoas-escala-back.md`, `mapa-front.md`).
 
@@ -183,7 +183,7 @@ Abaixo dos passos, a lista dos lotes já enviados (arquivo, autor, data, situaç
   - precisa também de `pessoas.editar`; sem ela, as rotas de envio e de confirmação respondem 403;
   - o setor é obrigatório e precisa estar no alcance;
   - pessoa existente precisa estar hoje num setor do alcance e **não ter login**; senão, "Você não pode alterar esta pessoa.";
-  - sem `telefone.ver_completo`: a pessoa só é identificada pela **matrícula** (identificar pelo telefone diria de quem é um número) e o telefone já gravado não é alterado ("Você não pode alterar o telefone desta pessoa."); telefone de pessoa nova é aceito;
+  - sem `telefone.ver_completo` **(conselho S, provisório até a GBR confirmar)**: a pessoa só é identificada pela **matrícula** (identificar pelo telefone diria de quem é um número). Na prévia, nenhum telefone do arquivo é comparado com o cadastro: a prévia não diz se um número já existe, a linha sai como Criar ou Atualizar, e o topo mostra o aviso fixo "A conferência de telefones já cadastrados é feita ao gravar." Na gravação, número que já é de outra pessoa faz a linha falhar com "O telefone já pertence a outra pessoa cadastrada", seja de quem for; as outras linhas seguem. Telefone já gravado não é alterado nem comparado: a célula é ignorada com "Você não pode alterar o telefone desta pessoa.", mesmo quando é igual ao gravado. Telefone **vazio** de pessoa achada pela matrícula pode ser preenchido, como na tela do setor; a prévia mostra "Atualizar" com o número do arquivo. Telefone de pessoa nova é aceito. Com a chave, e para o ADMIN, a prévia continua mostrando o Conflito de telefone, sem dizer de quem;
   - as travas são conferidas na prévia e de novo na gravação, com as permissões daquele momento.
 - **ADMIN** pode atualizar pessoa com login (nome, telefone, função, vínculo), como na tela de Usuários. Perfil e acesso nunca mudam pela planilha.
 
@@ -201,20 +201,20 @@ Abaixo dos passos, a lista dos lotes já enviados (arquivo, autor, data, situaç
 
 - Só as linhas confirmadas são gravadas, **uma a uma**, pelo mesmo caminho do cadastro manual: criar pessoa sem acesso, ou atualizar a pessoa. Cada uma gera a entrada normal na trilha da pessoa e, se mudou setor, turno ou nível, a linha de vínculo com início hoje.
 - Motivo gravado em cada criação e alteração: "Importação de planilha: <arquivo>", cortado em 200 caracteres (limite do campo). A criação de pessoa sem acesso passa a aceitar o motivo (hoje grava vazio); o padrão das outras portas não muda.
-- Cada linha é conferida de novo na hora de gravar, nesta ordem: identificar a pessoa de novo → se os valores atuais já são os da linha, registrar como "Sem alteração", sem falha (vale para linha de criação cuja pessoa já existe com os valores da linha) → só então conferir a data da última alteração e os conflitos. A prévia guarda a data da última alteração da pessoa; se for outra na gravação, a linha falha com "A pessoa foi alterada depois da prévia". Matrícula ou telefone que passou a ser de outra pessoa falha com o motivo do conflito. Linha que falha não impede as outras: não é tudo ou nada *(decisão minha)*.
+- Cada linha é conferida de novo na hora de gravar, nesta ordem: identificar a pessoa de novo → se os valores atuais já são os da linha, registrar como "Sem alteração", sem falha (vale para linha de criação cuja pessoa já existe com os valores da linha; para quem não vê telefone completo, só quando a pessoa foi criada por essa mesma linha do lote, nunca por coincidência de telefone **(conselho S)**) → só então conferir a data da última alteração e os conflitos. A prévia guarda a data da última alteração da pessoa; se for outra na gravação, a linha falha com "A pessoa foi alterada depois da prévia". Matrícula ou telefone que passou a ser de outra pessoa falha com o motivo do conflito. Para quem não é ADMIN, as travas de E4 (inclusive a de telefone) são conferidas antes de "Sem alteração": pessoa que ganhou telefone depois da prévia faz a linha falhar com o texto da trava, sem comparar números **(conselho S)**. Linha que falha não impede as outras: não é tudo ou nada *(decisão minha)*.
 - A gravação nunca aplica mais do que a prévia mostrou: o que a prévia ignorou (por exemplo, colunas de autorização que o ator não podia alterar) continua ignorado, mesmo que o ator tenha ganhado permissão depois.
 - **A gravação acontece na API, em blocos pedidos pela tela** *(decisão minha)*: a tela pede um bloco, a API grava linhas por até 10 segundos (no máximo 50) e devolve o andamento ("Gravando 120 de 300"); a tela pede o próximo até acabar. Não usa a fila do worker, que não carrega o módulo de usuários. Cada gravação roda com o usuário e as permissões de **quem confirmou**, conferidas a cada bloco.
 - **Só quem confirmou continua a gravação.** Se a página for fechada no meio, o lote fica "Gravação interrompida" e quem confirmou continua pelo botão "Continuar gravação". O ADMIN pode "Encerrar gravação" de qualquer lote: as linhas pendentes viram "Não gravada: gravação encerrada" e entram no relatório. Lote interrompido há mais de 7 dias é encerrado do mesmo jeito quando alguém envia um arquivo novo. Em lote encerrado, linha com reserva vencida também vira "Não gravada: gravação encerrada". O encerramento grava `people_import.completed` com as contagens, e o autor do registro é quem encerrou. Pedido de bloco de quem não confirmou o lote responde 403, inclusive para o ADMIN, que só pode encerrar.
 - **Tempo e erros do pedido de bloco:** a tela espera até 120 segundos por bloco. Tempo esgotado ou erro de rede não marca falha: a tela consulta o andamento e pede de novo; linha reservada aparece como "Gravando". Se o ator perdeu `pessoas.importar` ou `pessoas.editar`, o bloco responde 403 e o lote fica "Gravação interrompida", com o aviso de permissão.
 - **Reserva da linha:** só um pedido passa a linha de pendente para reservada (operação atômica), e cada pedido reserva uma linha por vez. O resultado só é gravado por quem detém a reserva. A reserva vence em 5 minutos, mais que o tempo máximo de um pedido; linha com reserva vencida volta a ficar pendente e, pela ordem de conferência acima, repetir uma que já tinha entrado dá "Sem alteração".
 - Um lote só pode ser confirmado uma vez. Dois cliques, ou duas abas, não gravam duas vezes.
-- **Reimportar** a mesma planilha: as linhas que entraram ficam "Sem alteração" e as que não entraram repetem a classificação; ninguém é criado em dobro.
+- **Reimportar** a mesma planilha: as linhas que entraram ficam "Sem alteração" e as que não entraram repetem a classificação; ninguém é criado em dobro. Para quem não vê telefone completo, linha sem matrícula de pessoa que já entrou não é reconhecida pelo telefone: fica Criar na prévia e falha na gravação com "O telefone já pertence a outra pessoa cadastrada" **(conselho S)**.
 
 #### E7. Relatório de erros e registro
 
 - **Relatório** (`GET /internal/people-import/batches/:id/errors.csv`): uma linha por linha do arquivo que não entrou (inválida, duplicada, conflito, falha na gravação, não gravada por encerramento), com `linha`, as colunas **mapeadas** (com o cabeçalho original do arquivo) e `motivo`. Mesmo formato de CSV. O telefone sai como veio no arquivo, porque é o próprio arquivo de quem enviou. Baixar exige `pessoas.importar` e ser quem enviou o lote ou ADMIN.
-- **Registro do lote:** arquivo, tamanho, SHA-256, autor e hora do envio, quem confirmou e quando, hora do fim, contagens (linhas, criadas, atualizadas, sem alteração, inválidas, duplicadas, conflitos, falhas).
-- **Trilha:** `people_import.confirmed` e `people_import.completed`, categoria Planilhas, com o arquivo e as contagens.
+- **Registro do lote:** arquivo, tamanho, SHA-256, autor e hora do envio, quem confirmou e quando, hora do fim, contagens (linhas, criadas, atualizadas, sem alteração, inválidas, duplicadas, conflitos, falhas, e, das falhas, quantas por telefone já cadastrado — só o número **(conselho S)**).
+- **Trilha:** `people_import.confirmed` e `people_import.completed`, categoria Planilhas, com o arquivo e as contagens (inclusive a de falhas por telefone já cadastrado).
 - **Quem vê os lotes:** o ADMIN vê todos; os demais veem só os seus (prévia, andamento, relatório e descarte seguem a mesma regra; lote de outra pessoa responde 404).
 
 #### E8. Tela
@@ -222,6 +222,12 @@ Abaixo dos passos, a lista dos lotes já enviados (arquivo, autor, data, situaç
 - Rota "Importar pessoas" no menu Administração, para quem tem `pessoas.importar`; botão "Importar planilha" no cabeçalho de Usuários.
 - Os quatro passos de E1. Textos de erro e de aviso por extenso, em pt-BR.
 - **Novidades:** uma entrada explicando a importação.
+
+#### E9. Limitações conhecidas *(decisões da implementação)*
+
+- Matrícula digitada como número no XLSX (célula numérica, não texto) chega sem os zeros à esquerda: o próprio arquivo já não os guarda. O modelo traz todas as células como texto.
+- Remapear as colunas numa aba e confirmar na outra, que ainda mostrava a prévia antiga: a confirmação responde "A prévia mudou depois que você a abriu. Confira de novo antes de confirmar.", não grava nada, e a tela relê a prévia e volta a seleção ao padrão.
+- Caso raro de corrida no encerramento: uma linha cuja reserva venceu e que a gravação conclui depois que o encerramento leu as pessoas fica "Não gravada: gravação encerrada" no relatório, embora a pessoa tenha entrado. Reimportar a planilha mostra essa linha como "Sem alteração".
 
 ## Para a GBR confirmar
 
@@ -235,6 +241,8 @@ Abaixo dos passos, a lista dos lotes já enviados (arquivo, autor, data, situaç
 - **Data de referência** na exportação de pessoas muda só o vínculo; situação e telefone são os atuais.
 - **Formato do CSV:** ponto e vírgula, UTF-8 com BOM, telefone no formato nacional.
 - **Quem não é ADMIN,** se receber a permissão de importar, precisa também da de editar pessoas, só mexe em pessoas sem login dos setores que alcança, e o setor é obrigatório; sem ver telefone completo, identifica só por matrícula e não troca telefone já gravado.
+- **Telefone já cadastrado, para quem importa sem ver telefone completo (conselho S, provisório até a GBR confirmar;** `~/.claude/tribunais/2026-11-19/conselho-S/sentenca-S.md`**):** a prévia não confere telefones já cadastrados e avisa disso no topo; a pessoa só descobre na gravação, pelo relatório de erros, que um número já existe. Ela pode preencher telefone vazio pela planilha, mas não troca telefone já gravado. Ao reimportar uma planilha sem matrícula, as linhas de quem já entrou falham com "telefone já pertence a outra pessoa" em vez de "Sem alteração" (ninguém é criado em dobro). Quem tem a chave vê "Conflito" na prévia, sem saber de quem é o número. O registro do lote ganha a contagem de falhas por telefone já cadastrado.
+- **Achado fora das planilhas (conselho S):** a busca de contatos da tela do setor mostra, a quem pode ver telefone completo, o número completo e a pessoa ligada, mesmo quando ela tem login; a lista do setor mascara o telefone de quem tem login. Vale decidir se a busca deve seguir a mesma regra da lista.
 - **Gravação em blocos pela tela:** se a página for fechada no meio, o lote fica interrompido; só quem confirmou continua, e o ADMIN pode encerrar.
 - **Pessoa inativa** não é alterada pela planilha.
 - **Exportação de data passada:** quem hoje está fora do alcance sai com telefone mascarado; quem foi cadastrado depois da data não entra.
@@ -250,6 +258,23 @@ Decisões tomadas na implementação do Lote D (exportar), todas *(decisão minh
 - **Nome que é um e-mail sai vazio na escala exportada** (na tela da escala, quem não tem nome cadastrado aparece pelo e-mail; o arquivo não leva e-mail).
 - **Limite de 20 exportações por minuto por pessoa** (contado à parte para pessoas e para escala); a 21ª no mesmo minuto é recusada e basta esperar. Motivo: cada exportação pode ler até 50.000 pessoas e o servidor atual é pequeno.
 - **Trilha:** quando quem exporta não é ADMIN mas pode ver telefone completo (sai completo só para quem não tem login, e mascarado para quem tem), o registro mostra o telefone como "Completo em parte".
+
+Decisões tomadas na implementação do Lote E (importar), todas *(decisão minha)*:
+
+- **Descartar apaga o lote e as linhas, sem deixar registro** — **a GBR confirma**: E2 falava em limpar as colunas ao descartar, supondo o lote guardado; descartado, o lote some da lista.
+- **Arquivo acima de 5 MB** é recusado com "O arquivo passa de 5 MB. Divida a planilha e envie em partes."; XLSX que fica acima de 60 MB ao abrir também é recusado como ilegível (proteção contra arquivo compactado malicioso). Até 10 envios ou remapeamentos por minuto por pessoa.
+- **"Gravação interrompida"** aparece quando nenhum bloco chega há mais de 3 minutos (a tela espera até 120 s por bloco).
+- **"A pessoa foi alterada depois da prévia"** compara só os campos que a importação mostra (nome, telefone, matrícula, função, setor, turno, nível, autorização, situação e acesso).
+- **Encerramento automático** (lote interrompido há mais de 7 dias, quando alguém envia arquivo novo): o registro sai em nome de quem confirmou, com o motivo "Encerrada automaticamente: gravação interrompida há mais de 7 dias.".
+- **Para quem não é ADMIN, setor alheio e setor inexistente dão o mesmo texto**, e pessoa fora do alcance ou com login dá sempre "Você não pode alterar esta pessoa.", seja qual for o conteúdo da linha.
+- **Autorização "Outro" sem detalhe** é ignorada, com aviso.
+- **Trava que mudou entre a prévia e a gravação** (permissão perdida, setor de destino fora do alcance de agora, pessoa que ganhou login) faz a linha falhar com o texto da trava.
+- **Alteração simultânea por outro ADMIN** durante a gravação vira "Não foi possível gravar esta linha." na linha, sem parar as outras.
+- **Só quem enviou o arquivo** remapeia e confirma (nem o ADMIN confirma lote de outra pessoa); só quem confirmou continua a gravação; o ADMIN só encerra.
+- **Quem não é ADMIN precisa mapear a coluna Setor**, e quem não gerencia nenhum setor é recusado com "Você não gerencia nenhum setor.".
+- **Remapear numa aba e confirmar na outra** (que ainda mostrava a prévia antiga, ao mesmo tempo ou depois): a confirmação leva o mapeamento que a tela mostrou e responde "A prévia mudou depois que você a abriu. Confira de novo antes de confirmar." e não grava nada.
+- **CSV aceita linhas em branco antes do cabeçalho**; no XLSX o cabeçalho continua obrigatório na linha 1 (E2).
+- **Tela de resultado:** "Sem alteração" soma as linhas que já estavam iguais na prévia e as que ficaram iguais na gravação (o mesmo número do registro).
 
 ## Aceite
 

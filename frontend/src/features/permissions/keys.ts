@@ -11,6 +11,7 @@ export const PERMISSION_KEYS = [
   'equipe.disparo_amplo',
   'trilha.consultar',
   'pessoas.exportar',
+  'pessoas.importar',
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
@@ -20,7 +21,7 @@ export type UserRole = 'ADMIN' | 'SUPERVISOR' | 'OPERATOR' | 'VIEWER';
 /**
  * Matriz inicial: ADMIN e VIEWER são fixos (todas / nenhuma) e não passam por ela.
  * SUPERVISOR e OPERATOR listam as chaves uma a uma: chave nova nasce desmarcada
- * (`pessoas.exportar` é só do administrador até alguém conceder).
+ * (`pessoas.exportar` e `pessoas.importar` são só do administrador até alguém conceder).
  */
 const DEFAULT_MATRIX = {
   SUPERVISOR: [
@@ -87,6 +88,11 @@ export const PERMISSION_LABELS: Record<PermissionKey, { name: string; descriptio
     name: 'Exportar pessoas e escala',
     description:
       'Baixar a lista de pessoas e a escala em CSV ou XLSX. Quem não é administrador exporta só os setores que gerencia.',
+  },
+  'pessoas.importar': {
+    name: 'Importar planilha de pessoas',
+    description:
+      'Enviar planilhas CSV ou XLSX para criar e atualizar pessoas, com prévia antes de gravar. Quem não é administrador precisa também da permissão de editar pessoas e só altera pessoas sem acesso dos setores que gerencia.',
   },
 };
 

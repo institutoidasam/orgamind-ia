@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { DEFAULT_PERMISSIONS } from "@/features/permissions/keys";
+import { DEFAULT_PERMISSIONS, type PermissionKey } from "@/features/permissions/keys";
 import {
   NAV,
+  type NavRole,
   canAccessPath,
   navItemsForRole,
   navLabelFor,
@@ -33,6 +34,7 @@ describe("NAV por permissão: padrão do papel", () => {
     "Turnos",
     "Níveis",
     "Usuários",
+    "Importar pessoas",
     "Conexões",
     "Trilha de alterações",
   ];
@@ -120,6 +122,7 @@ describe("NAV manifest", () => {
       "Turnos",
       "Níveis",
       "Usuários",
+      "Importar pessoas",
       "Conexões",
       "Trilha de alterações",
     ]);
@@ -302,5 +305,24 @@ describe("NAV Setores", () => {
     for (const role of ["ADMIN", "SUPERVISOR", "OPERATOR"] as const)
       expect(canAccessPath("/setores", role)).toBe(true);
     expect(canAccessPath("/setores", "VIEWER")).toBe(false);
+  });
+});
+
+describe("NAV Importar pessoas", () => {
+  const WITH_KEY = ["pessoas.importar"] as const;
+  const labels = (role: NavRole, permissions?: readonly PermissionKey[]) =>
+    navSection("admin", role, permissions).map((item) => item.label);
+
+  it("menu Administração mostra Importar pessoas só com a chave", () => {
+    const admin = labels("ADMIN");
+    expect(admin.indexOf("Importar pessoas")).toBe(admin.indexOf("Usuários") + 1);
+    expect(labels("SUPERVISOR", WITH_KEY)).toEqual(["Setores", "Importar pessoas"]);
+    expect(labels("OPERATOR", WITH_KEY)).toEqual(["Setores", "Importar pessoas"]);
+    expect(labels("SUPERVISOR", [])).toEqual(["Setores"]);
+    expect(labels("VIEWER", WITH_KEY)).toEqual([]);
+    expect(canAccessPath("/importar-pessoas", "OPERATOR", WITH_KEY)).toBe(true);
+    expect(canAccessPath("/importar-pessoas", "SUPERVISOR", [])).toBe(false);
+    expect(canAccessPath("/importar-pessoas", "VIEWER", WITH_KEY)).toBe(false);
+    expect(navLabelFor("/importar-pessoas")).toBe("Importar pessoas");
   });
 });

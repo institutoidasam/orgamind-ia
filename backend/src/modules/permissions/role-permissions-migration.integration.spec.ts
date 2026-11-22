@@ -20,7 +20,7 @@ const MIGRATION_SQL = path.resolve(
 
 type PermissionRow = { role: string; key: string; granted: boolean };
 
-// A matriz inicial inteira (2 papéis x 9 chaves), na ordem de leitura do SELECT.
+// A matriz inicial inteira (2 papéis x 10 chaves), na ordem de leitura do SELECT.
 const EXPECTED_ROWS: PermissionRow[] = EDITABLE_ROLES.flatMap((role) =>
   PERMISSION_KEYS.map((key) => ({
     role,
@@ -64,12 +64,12 @@ afterAll(async () => {
 });
 
 describe('migração 20261119100000_role_permissions', () => {
-  it('semeia 18 linhas iguais a DEFAULT_MATRIX, sem autor', async () => {
+  it('semeia 20 linhas iguais a DEFAULT_MATRIX, sem autor', async () => {
     const rows = await selectRows();
     const [{ authored }] = await prisma.$queryRaw<{ authored: bigint }[]>`
       SELECT count(*) AS "authored" FROM "RolePermission" WHERE "updatedById" IS NOT NULL`;
 
-    expect(rows).toHaveLength(18);
+    expect(rows).toHaveLength(20);
     expect(rows).toEqual(EXPECTED_ROWS);
     expect(authored).toBe(0n);
   });
@@ -97,7 +97,7 @@ describe('migração 20261119100000_role_permissions', () => {
     const edited = rows.find(
       (row) => row.role === 'OPERATOR' && row.key === 'trilha.consultar',
     );
-    expect(rows).toHaveLength(18);
+    expect(rows).toHaveLength(20);
     expect(edited?.granted).toBe(true);
   });
 });

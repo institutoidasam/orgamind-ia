@@ -89,13 +89,13 @@ describe('team-whatsapp policy — remetente', () => {
     expect(isTeamSender(actor)).toBe(false);
   });
 
-  it('TEAM_PROVIDERS só traz os provedores não oficiais', () => {
-    expect(TEAM_PROVIDERS).toEqual(['GOZAP', 'EVOLUTION']);
+  it('TEAM_PROVIDERS só traz os provedores ligados (D1)', () => {
+    expect(TEAM_PROVIDERS).toEqual(['EVOLUTION']);
     expect(
       (['GOZAP', 'EVOLUTION', 'META', 'TWILIO', 'ZERNIO'] as const).map(
         isTeamProvider,
       ),
-    ).toEqual([true, true, false, false, false]);
+    ).toEqual([false, true, false, false, false]);
   });
 });
 

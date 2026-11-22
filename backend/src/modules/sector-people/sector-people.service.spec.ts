@@ -32,7 +32,7 @@ const SECTORS = [
       id: 'channel_ope',
       name: 'Operação Zap',
       phoneE164: '+5592999990001',
-      provider: 'GOZAP',
+      provider: 'EVOLUTION',
       isActive: true,
     },
   },

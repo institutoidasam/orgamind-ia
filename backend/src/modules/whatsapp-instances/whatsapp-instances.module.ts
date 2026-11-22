@@ -21,7 +21,7 @@ import { configuredProviderGroups, type Env } from '../../shared/config/env.sche
 
 /**
  * be-whatsapp: build the admin client used by WhatsappInstancesService for
- * create/logout/restart. On a deploy with no Evolution credential group
+ * create/logout/restart/delete. On a deploy with no Evolution credential group
  * configured (e.g. Meta/Twilio-only) there is no Evolution server to talk to,
  * so calling adminLogout/adminRestart/adminCreateInstance would hit a
  * non-existent service. Gate by provider and return a no-op client under
@@ -37,12 +37,14 @@ export function buildEvolutionAdminClient(
       createInstance: async () => ({ apiKey: '' }),
       logout: async () => {},
       restart: async () => {},
+      deleteInstance: async () => {},
     };
   }
   return {
     createInstance: (args) => adapter.adminCreateInstance(args),
     logout: (name) => adapter.adminLogout(name),
     restart: (name) => adapter.adminRestart(name),
+    deleteInstance: (name) => adapter.adminDeleteInstance(name),
   };
 }
 

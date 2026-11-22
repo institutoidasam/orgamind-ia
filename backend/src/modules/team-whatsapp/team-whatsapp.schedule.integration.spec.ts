@@ -124,7 +124,11 @@ async function seedScheduled({
     data: { email: `${code}-adm@test.local`, password: 'x', role: 'ADMIN' },
   });
   const channel = await db.channel.create({
-    data: { name: `Canal ${code}`, provider: 'GOZAP', isActive: channelActive },
+    data: {
+      name: `Canal ${code}`,
+      provider: 'EVOLUTION',
+      isActive: channelActive,
+    },
   });
   const users = await createPeople(db, code, sector.id, recipients);
   const created = await db.teamWhatsappDispatch.create({
@@ -367,6 +371,35 @@ describe('condições na hora — pessoas', () => {
   });
 });
 
+/** Canal GOZAP (provedor desligado) ativo ou inativo, para o cenário D3/D7. */
+function createGozapChannel(name: string, isActive: boolean) {
+  return prisma.channel.create({
+    data: { name, provider: 'GOZAP', isActive },
+  });
+}
+
+/**
+ * Envio com mais de um número: `dispatch.channelId` nulo, cada pessoa (na
+ * ordem de `recipientIds`) no seu canal.
+ */
+async function assignChannelPerRecipient(
+  d: Awaited<ReturnType<typeof seedScheduled>>,
+  channelIds: string[],
+): Promise<void> {
+  await prisma.teamWhatsappDispatch.update({
+    where: { id: d.id },
+    data: { channelId: null },
+  });
+  await Promise.all(
+    channelIds.map((channelId, i) =>
+      prisma.teamWhatsappRecipient.update({
+        where: { id: d.recipientIds[i] },
+        data: { channelId },
+      }),
+    ),
+  );
+}
+
 describe('condições na hora — número de cada destinatário (D3/D7)', () => {
   it('destinatário com canal inativo → FAILED channel_unavailable; o outro → QUEUED', async () => {
     const d = await seedScheduled({
@@ -374,25 +407,37 @@ describe('condições na hora — número de cada destinatário (D3/D7)', () => 
       scheduledFor: DUE,
       recipients: [{ name: 'Ana' }, { name: 'Bia' }],
     });
-    const inactive = await prisma.channel.create({
-      data: { name: `Inativo ${d.id}`, provider: 'GOZAP', isActive: false },
-    });
-    // Envio com dois números: `dispatch.channelId` nulo, cada pessoa no seu.
-    await prisma.teamWhatsappDispatch.update({
-      where: { id: d.id },
-      data: { channelId: null },
-    });
-    await Promise.all(
-      [d.channelId, inactive.id].map((channelId, i) =>
-        prisma.teamWhatsappRecipient.update({
-          where: { id: d.recipientIds[i] },
-          data: { channelId },
-        }),
-      ),
-    );
+    const inactive = await createGozapChannel(`Inativo ${d.id}`, false);
+    await assignChannelPerRecipient(d, [d.channelId, inactive.id]);
     await expect(service.fireOne(d.id, NOW)).resolves.toBe('fired');
     expect(await recipientsOf(d.id)).toEqual([
       { status: 'QUEUED', skipReason: null, errorCode: null },
+      {
+        status: 'FAILED',
+        skipReason: null,
+        errorCode: 'team_whatsapp.channel_unavailable',
+      },
+    ]);
+    expect(jobsSent()).toEqual(jobsFor([d.recipientIds[0]]));
+  });
+
+  it('SCHEDULED com canal GOZAP ativo → FAILED channel.provider_disabled; com canal inativo → channel_unavailable', async () => {
+    const d = await seedScheduled({
+      prisma,
+      scheduledFor: DUE,
+      recipients: [{ name: 'Ana' }, { name: 'Bia' }, { name: 'Caio' }],
+    });
+    const gozap = await createGozapChannel(`GoZap ${d.id}`, true);
+    const inactive = await createGozapChannel(`Inativo ${d.id}`, false);
+    await assignChannelPerRecipient(d, [d.channelId, gozap.id, inactive.id]);
+    await expect(service.fireOne(d.id, NOW)).resolves.toBe('fired');
+    expect(await recipientsOf(d.id)).toEqual([
+      { status: 'QUEUED', skipReason: null, errorCode: null },
+      {
+        status: 'FAILED',
+        skipReason: null,
+        errorCode: 'channel.provider_disabled',
+      },
       {
         status: 'FAILED',
         skipReason: null,

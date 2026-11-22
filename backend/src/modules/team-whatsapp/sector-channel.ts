@@ -27,8 +27,9 @@ export type SectorChannelRef = {
 
 /**
  * Número efetivo da área (D2): o canal associado, só se estiver ativo e for de
- * um provedor que o envio da equipe aceita (GOZAP/EVOLUTION). Qualquer outro
- * caso é "sem número".
+ * um provedor ligado que o envio da equipe aceita (TEAM_PROVIDERS =
+ * ENABLED_CHANNEL_PROVIDERS, hoje só EVOLUTION). Qualquer outro caso é "sem
+ * número".
  */
 export function effectiveChannel(
   row: SectorChannelRow | null,

@@ -53,7 +53,7 @@ const failed = (
 
 const channelOf = (id: string, over: Record<string, unknown> = {}) => ({
   id,
-  provider: 'GOZAP',
+  provider: 'EVOLUTION',
   isActive: true,
   evolutionInstanceName: null,
   ...over,
@@ -208,26 +208,49 @@ describe('TeamWhatsappSendProcessor — pré-checagens (telefone)', () => {
 });
 
 describe('TeamWhatsappSendProcessor — pré-checagens (canal)', () => {
-  it.each([
-    ['desativado', channelOf('ch1', { isActive: false })],
-    ['removido', null],
-    ['fora de TEAM_PROVIDERS', channelOf('ch1', { provider: 'TWILIO' })],
-  ])('canal %s vira FAILED channel_invalid', async (_n, channel) => {
+  const givenChannel = (channel: ReturnType<typeof channelOf> | null) => {
     const r = makeRecipient();
     prisma.teamWhatsappRecipient.findUnique.mockResolvedValue({
       ...r,
       channel,
       dispatch: { ...r.dispatch, channel },
     } as never);
+  };
+  const expectNothingSent = () => {
+    expect(chat.sendTeamMessage.mock.calls).toHaveLength(0);
+    expect(liveState.check.mock.calls).toHaveLength(0);
+    expect(acquirePacingLock).not.toHaveBeenCalled();
+  };
+
+  it.each([
+    ['desativado', channelOf('ch1', { isActive: false })],
+    ['removido', null],
+    [
+      'GOZAP desativado',
+      channelOf('ch1', { provider: 'GOZAP', isActive: false }),
+    ],
+  ])('canal %s vira FAILED channel_invalid', async (_n, channel) => {
+    givenChannel(channel);
     await proc.process(makeJob());
     expect(lastData()).toEqual({
       status: 'FAILED',
       errorCode: 'team_whatsapp.channel_invalid',
     });
-    expect(chat.sendTeamMessage.mock.calls).toHaveLength(0);
-    expect(liveState.check.mock.calls).toHaveLength(0);
-    expect(acquirePacingLock).not.toHaveBeenCalled();
+    expectNothingSent();
   });
+
+  it.each([['GOZAP'], ['TWILIO']])(
+    'canal %s ativo (provedor desligado) vira FAILED channel.provider_disabled, sem envio',
+    async (provider) => {
+      givenChannel(channelOf('ch1', { provider }));
+      await proc.process(makeJob());
+      expect(lastData()).toEqual({
+        status: 'FAILED',
+        errorCode: 'channel.provider_disabled',
+      });
+      expectNothingSent();
+    },
+  );
 });
 
 describe('TeamWhatsappSendProcessor — envio e retentativa', () => {

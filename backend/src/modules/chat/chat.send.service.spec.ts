@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mockDeep, type MockProxy } from 'vitest-mock-extended';
 import { ChatService } from './chat.service';
 import { ChatRepository } from './chat.repository';
@@ -7,6 +7,16 @@ import { WhatsappProvidersService } from '../whatsapp-providers/whatsapp-provide
 import { WhatsappSendError } from '../whatsapp-providers/errors/whatsapp.errors';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { AuditService } from '../../shared/audit/audit.service';
+
+// O envio por GOZAP/ZERNIO/TWILIO é código inativo (GC5): esta suíte segue
+// cobrindo-o com todo provedor "ligado". O guard de provedor desligado do chat
+// tem o seu teste em chat.service.spec.ts.
+vi.mock('../../shared/config/enabled-providers', async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import('../../shared/config/enabled-providers')
+  >()),
+  isEnabledChannelProvider: () => true,
+}));
 
 const conv = { id: 'c1', instanceId: 'i1', phoneE164: '+5592999', remoteJid: '5592999@s.whatsapp.net', contactId: null, unreadCount: 2, instance: { id: 'i1', evolutionInstanceName: 'orgamind', provider: 'EVOLUTION' } };
 

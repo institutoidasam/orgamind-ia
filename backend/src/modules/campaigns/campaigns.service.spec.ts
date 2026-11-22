@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mockDeep, type MockProxy } from 'vitest-mock-extended';
 import type { Queue } from 'bullmq';
 import type { ClsService } from 'nestjs-cls';
@@ -39,6 +39,329 @@ import { ConsentService } from '../consent/consent.service';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { invalidContactWhere } from '../../shared/contact-validity';
 
+// O código dos provedores desligados segue no repositório, inativo (GC5), e as
+// suítes legadas deste arquivo ainda o exercitam (fixtures de canal até sem
+// `provider`). Por padrão elas rodam com todo provedor "ligado"; só os testes
+// de provedor desligado (B7) zeram `allEnabled` e usam a regra real.
+const providerGate = vi.hoisted(() => ({ allEnabled: true }));
+vi.mock('../../shared/config/enabled-providers', async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import('../../shared/config/enabled-providers')
+    >();
+  return {
+    ...actual,
+    isEnabledChannelProvider: (
+      provider: Parameters<typeof actual.isEnabledChannelProvider>[0],
+    ) => providerGate.allEnabled || actual.isEnabledChannelProvider(provider),
+  };
+});
+
+/** Defaults do gate de consentimento (C1, C1b). */
+function stubConsentDefaults(consent: MockProxy<ConsentService>) {
+  // C1 gate defaults. Os testes que NÃO são sobre o gate (paginação, lock,
+  // correlationId…) assumem uma audiência que consentiu — senão o gate,
+  // corretamente, não passaria ninguém e eles testariam o vazio. Os testes DO
+  // gate sobrescrevem `grantedContactIds` com um Set explícito.
+  consent.suppressedPhones.mockResolvedValue(new Set());
+  consent.grantedContactIds.mockImplementation(
+    async (ids: string[]) => new Set(ids),
+  );
+  consent.isSensitivePurpose.mockResolvedValue(false);
+  // C1b — por padrão, toda purposeKey passada existe e está ativa. Os testes de
+  // finalidade desconhecida sobrescrevem com null.
+  consent.findActivePurpose.mockImplementation((async (key: string | null) =>
+    key
+      ? { key, label: key, description: '', isSensitive: false }
+      : null) as any);
+}
+
+/** Defaults do dispatch: janela, limite, status, reset e paginação. */
+function stubDispatchDefaults(repo: MockProxy<CampaignsRepository>) {
+  repo.findContactsWithOpenWindow.mockResolvedValue(new Set());
+  // Sem limite, a audiência passa intacta — é o caso de TODA campanha que não
+  // usa "os N primeiros" (e de todas as que já existiam). Os testes do limite
+  // sobrescrevem com a audiência recortada.
+  repo.applyAudienceLimit.mockImplementation(
+    (async (where: unknown) => where) as any,
+  );
+  // Prod: o groupBy do Prisma SEMPRE devolve um array. Os fluxos de dispatch
+  // agora reavaliam a conclusão da campanha no fim (gate silencioso), então o
+  // mock precisa do mesmo contrato — vazio por padrão ("nenhuma Message
+  // materializada" ⇒ maybeCompleteCampaign é no-op).
+  repo.groupMessagesByStatus.mockResolvedValue([]);
+  // C12 — `resetForRedispatch` devolve POR QUE não pegou a linha
+  // ('ok' | 'not_redispatchable' | 'contact_already_live'). O default é o
+  // caminho feliz; os testes das duas recusas sobrescrevem.
+  repo.resetForRedispatch.mockResolvedValue('ok' as never);
+  // I8 — `resetForRetry` ganhou o MESMO contrato do gêmeo
+  // ('ok' | 'not_retryable' | 'contact_already_live'). Default feliz; os
+  // testes das duas recusas sobrescrevem.
+  repo.resetForRetry.mockResolvedValue('ok' as never);
+
+  // Keyset-pagination defaults: an empty audience unless a test wires pages.
+  repo.findContactsPage.mockResolvedValue([] as any);
+  repo.countContactsByWhere.mockResolvedValue(0);
+}
+
+/** Defaults do runChecks (create() e a suíte runChecks). */
+function stubRunChecksDefaults(
+  repo: MockProxy<CampaignsRepository>,
+  segmentsRepo: MockProxy<SegmentsRepository>,
+  instancesRepo: MockProxy<WhatsappInstancesRepository>,
+) {
+  // runChecks defaults (used by create() and the runChecks suite): a calm,
+  // non-blocking baseline so existing create tests don't trip the send-checks
+  // gate added in Task 5.
+  repo.hasRunningCampaignOnInstance.mockResolvedValue(false);
+  segmentsRepo.countContactsByWhere.mockResolvedValue(0);
+  segmentsRepo.preflightSummary.mockResolvedValue({
+    total: 0,
+    reachable: 0,
+    invalid: 0,
+    unknown: 0,
+  });
+  instancesRepo.findById.mockResolvedValue({
+    isActive: true,
+    sentToday: 0,
+    dailySendLimit: 500,
+    sendWindowStartHour: 8,
+    sendWindowEndHour: 20,
+    sendWindowEnabled: true,
+  } as any);
+}
+
+/** Redis do lock por campanha (A4). */
+function createRedisStub() {
+  // A4 per-campaign lock: SET NX returns 'OK' (lock free) by default.
+  // release/refresh are owner-checked compare-and-delete/extend Lua evals.
+  return {
+    set: vi.fn().mockResolvedValue('OK'),
+    del: vi.fn().mockResolvedValue(1),
+    eval: vi.fn().mockResolvedValue(1),
+  };
+}
+
+/** O `CampaignsService` com todas as dependências mockadas e os defaults de teste. */
+function createCampaignsService(broadcastQueue?: unknown) {
+  const repo = mockDeep<CampaignsRepository>();
+  const segmentsRepo = mockDeep<SegmentsRepository>();
+  const templatesRepo = mockDeep<TemplatesRepository>();
+  const instancesRepo = mockDeep<WhatsappInstancesRepository>();
+  const sendQueue = mockDeep<Queue<SendMessageJob>>();
+  const audit = mockDeep<AuditService>();
+  const cls = mockDeep<ClsService>();
+  const redis = createRedisStub();
+  const consent = mockDeep<ConsentService>();
+  const prisma = mockDeep<PrismaService>();
+  // F1 T4 — resolveHistoryTargets só bate no banco quando a árvore do filtro
+  // tem um nó history com templateIds; a maioria dos testes aqui usa filtros
+  // escalares, então o default vazio nunca é lido.
+  prisma.campaign.findMany.mockResolvedValue([]);
+  const service = new CampaignsService(
+    repo,
+    segmentsRepo,
+    templatesRepo,
+    instancesRepo,
+    sendQueue,
+    audit,
+    cls,
+    redis as never,
+    consent,
+    prisma,
+    broadcastQueue as never,
+  );
+  stubConsentDefaults(consent);
+  stubDispatchDefaults(repo);
+  stubRunChecksDefaults(repo, segmentsRepo, instancesRepo);
+  return {
+    service,
+    repo,
+    segmentsRepo,
+    templatesRepo,
+    instancesRepo,
+    sendQueue,
+    audit,
+    cls,
+    consent,
+    prisma,
+    redis,
+  };
+}
+
+// Fixtures do create()/run() e do canal ativo (T7, B7).
+function baseCreateInput(overrides: Record<string, unknown> = {}) {
+  return {
+    name: 'C1',
+    templateId: 't1',
+    defaultInstanceId: 'inst-1',
+    filters: { combinator: 'and', rules: [] },
+    variableMap: {},
+    schedule: { type: 'IMMEDIATE' as const },
+    timezone: 'America/Sao_Paulo',
+    // C2 — finalidade obrigatória em QUALQUER provedor.
+    purposeKey: 'convite_atividades',
+    ...overrides,
+  } as any;
+}
+
+function activeChannel(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'inst-1',
+    isActive: true,
+    provider: 'EVOLUTION',
+    sentToday: 0,
+    dailySendLimit: 500,
+    sendWindowStartHour: 8,
+    sendWindowEndHour: 20,
+    sendWindowEnabled: true,
+    ...overrides,
+  } as any;
+}
+
+type FakeContact = {
+  id: string;
+  phoneE164: string;
+  optedOut: boolean;
+  marketingUndeliverableAt: Date | null;
+};
+type FakeMessage = {
+  contactId: string;
+  status: MessageStatus;
+  errorCode: string | null;
+};
+type FakeCampaignDb = { contacts: FakeContact[]; messages: FakeMessage[] };
+
+/** Um contato "cN" com id zero-padded — a ordem lexicográfica é a numérica,
+ *  como o keyset por `id` (cuid) assume em produção. */
+const makeFakeContacts = (n: number): FakeContact[] =>
+  Array.from({ length: n }, (_, i) => ({
+    id: `c${String(i).padStart(3, '0')}`,
+    phoneE164: `+5592${String(900000000 + i)}`,
+    optedOut: false,
+    marketingUndeliverableAt: null,
+  }));
+
+/** Contatos que receberam mensagem de verdade (não as linhas SKIPPED). */
+const queuedIdsOf = (messages: FakeMessage[]) =>
+  messages.filter((m) => m.status === 'QUEUED').map((m) => m.contactId);
+
+/**
+ * Simula o Postgres: `findContactsPage` aplica o MESMO recorte que o
+ * `pendingAudienceWhere` empurra para o banco — cursor por id, exclui quem
+ * já tem mensagem tratada na campanha e (quando a cláusula está presente no
+ * `where`) exclui os inalcançáveis para marketing.
+ */
+function wireFakeContactsPage(
+  repo: MockProxy<CampaignsRepository>,
+  db: () => FakeCampaignDb,
+) {
+  repo.findContactsPage.mockImplementation((async (
+    where: any,
+    opts: { take: number; cursorId?: string },
+  ) => {
+    const { contacts, messages } = db();
+    const handled = new Set(
+      messages.filter((m) => isHandledInCampaign(m)).map((m) => m.contactId),
+    );
+    const clauses: any[] = where?.AND ?? [];
+    const excludesUnreachable = clauses.some(
+      (c) => c && 'marketingUndeliverableAt' in c,
+    );
+    const pool = contacts
+      .filter((c) => (opts.cursorId ? c.id > opts.cursorId : true))
+      .filter((c) => !handled.has(c.id))
+      .filter((c) => !(excludesUnreachable && c.marketingUndeliverableAt));
+    return pool.slice(0, opts.take) as any;
+  }) as any);
+}
+
+/** As escritas do banco falso: mensagens, puladas e o registro do lote. */
+function wireFakeMessageWrites(
+  repo: MockProxy<CampaignsRepository>,
+  db: () => FakeCampaignDb,
+) {
+  repo.createMessage.mockImplementation((async (data: any) => {
+    db().messages.push({
+      contactId: data.contactId,
+      status: 'QUEUED',
+      errorCode: null,
+    });
+    return { id: `m-${data.contactId}` } as any;
+  }) as any);
+
+  repo.createSkippedMessage.mockImplementation((async (data: any) => {
+    db().messages.push({
+      contactId: data.contactId,
+      status:
+        data.reason === 'suppressed'
+          ? 'SKIPPED_SUPPRESSED'
+          : 'SKIPPED_NO_CONSENT',
+      errorCode: data.reason,
+    });
+    return { id: `s-${data.contactId}` } as any;
+  }) as any);
+
+  repo.createBatch.mockImplementation((async (data: any) => ({
+    id: 'batch-1',
+    campaignId: data.campaignId,
+    seq: 1,
+    requested: data.requested,
+    queued: 0,
+    skipped: 0,
+    startedAt: new Date(),
+    finishedAt: null,
+    createdByUserId: null,
+  })) as any);
+  repo.finishBatch.mockResolvedValue({} as any);
+  repo.countBatches.mockResolvedValue(1);
+  repo.groupMessagesByStatus.mockResolvedValue([] as any);
+}
+
+/** Cenário-base do sendBatch: campanha DRAFT, template e canal ZERNIO do mesmo provedor. */
+function wireSendBatchScenario(
+  deps: Pick<
+    ReturnType<typeof createCampaignsService>,
+    'repo' | 'templatesRepo' | 'instancesRepo'
+  >,
+  db: () => FakeCampaignDb,
+) {
+  const { repo, templatesRepo, instancesRepo } = deps;
+  repo.findById.mockResolvedValue({
+    id: 'camp1',
+    status: 'DRAFT',
+    templateId: 't1',
+    defaultInstanceId: 'i1',
+    filters: { combinator: 'and', rules: [] },
+    variableMap: {},
+    purposeKey: 'marketing',
+    override: false,
+    overrideJustification: null,
+    scheduleType: 'IMMEDIATE',
+    segmentId: null,
+    totalRecipients: 0,
+  } as any);
+  // Template de MARKETING, aprovado, do mesmo provedor do canal.
+  templatesRepo.findById.mockResolvedValue({
+    id: 't1',
+    provider: 'ZERNIO',
+    status: 'APPROVED',
+    category: 'MARKETING',
+  } as any);
+  instancesRepo.findById.mockResolvedValue({
+    id: 'i1',
+    provider: 'ZERNIO',
+    isActive: true,
+    sentToday: 0,
+    dailySendLimit: 500,
+  } as any);
+  repo.transitionToQueued.mockResolvedValue(1);
+  repo.countContactsByWhere.mockImplementation(
+    (async () => db().contacts.length) as any,
+  );
+  wireFakeContactsPage(repo, db);
+  wireFakeMessageWrites(repo, db);
+}
 describe('CampaignsService', () => {
   let service: CampaignsService;
   let repo: MockProxy<CampaignsRepository>;
@@ -57,27 +380,8 @@ describe('CampaignsService', () => {
   };
 
   beforeEach(() => {
-    repo = mockDeep<CampaignsRepository>();
-    segmentsRepo = mockDeep<SegmentsRepository>();
-    templatesRepo = mockDeep<TemplatesRepository>();
-    instancesRepo = mockDeep<WhatsappInstancesRepository>();
-    sendQueue = mockDeep<Queue<SendMessageJob>>();
-    audit = mockDeep<AuditService>();
-    cls = mockDeep<ClsService>();
-    // A4 per-campaign lock: SET NX returns 'OK' (lock free) by default.
-    // release/refresh are owner-checked compare-and-delete/extend Lua evals.
-    redis = {
-      set: vi.fn().mockResolvedValue('OK'),
-      del: vi.fn().mockResolvedValue(1),
-      eval: vi.fn().mockResolvedValue(1),
-    };
-    consent = mockDeep<ConsentService>();
-    prisma = mockDeep<PrismaService>();
-    // F1 T4 — resolveHistoryTargets só bate no banco quando a árvore do filtro
-    // tem um nó history com templateIds; a maioria dos testes aqui usa filtros
-    // escalares, então o default vazio nunca é lido.
-    prisma.campaign.findMany.mockResolvedValue([]);
-    service = new CampaignsService(
+    ({
+      service,
       repo,
       segmentsRepo,
       templatesRepo,
@@ -85,66 +389,10 @@ describe('CampaignsService', () => {
       sendQueue,
       audit,
       cls,
-      redis as never,
       consent,
       prisma,
-    );
-
-    // C1 gate defaults. Os testes que NÃO são sobre o gate (paginação, lock,
-    // correlationId…) assumem uma audiência que consentiu — senão o gate,
-    // corretamente, não passaria ninguém e eles testariam o vazio. Os testes DO
-    // gate sobrescrevem `grantedContactIds` com um Set explícito.
-    consent.suppressedPhones.mockResolvedValue(new Set());
-    consent.grantedContactIds.mockImplementation(
-      async (ids: string[]) => new Set(ids),
-    );
-    consent.isSensitivePurpose.mockResolvedValue(false);
-    // C1b — por padrão, toda purposeKey passada existe e está ativa. Os testes de
-    // finalidade desconhecida sobrescrevem com null.
-    consent.findActivePurpose.mockImplementation((async (key: string | null) =>
-      key ? { key, label: key, description: '', isSensitive: false } : null) as any);
-    repo.findContactsWithOpenWindow.mockResolvedValue(new Set());
-    // Sem limite, a audiência passa intacta — é o caso de TODA campanha que não
-    // usa "os N primeiros" (e de todas as que já existiam). Os testes do limite
-    // sobrescrevem com a audiência recortada.
-    repo.applyAudienceLimit.mockImplementation((async (where: unknown) => where) as any);
-    // Prod: o groupBy do Prisma SEMPRE devolve um array. Os fluxos de dispatch
-    // agora reavaliam a conclusão da campanha no fim (gate silencioso), então o
-    // mock precisa do mesmo contrato — vazio por padrão ("nenhuma Message
-    // materializada" ⇒ maybeCompleteCampaign é no-op).
-    repo.groupMessagesByStatus.mockResolvedValue([]);
-    // C12 — `resetForRedispatch` devolve POR QUE não pegou a linha
-    // ('ok' | 'not_redispatchable' | 'contact_already_live'). O default é o
-    // caminho feliz; os testes das duas recusas sobrescrevem.
-    repo.resetForRedispatch.mockResolvedValue('ok' as never);
-    // I8 — `resetForRetry` ganhou o MESMO contrato do gêmeo
-    // ('ok' | 'not_retryable' | 'contact_already_live'). Default feliz; os
-    // testes das duas recusas sobrescrevem.
-    repo.resetForRetry.mockResolvedValue('ok' as never);
-
-    // Keyset-pagination defaults: an empty audience unless a test wires pages.
-    repo.findContactsPage.mockResolvedValue([] as any);
-    repo.countContactsByWhere.mockResolvedValue(0);
-
-    // runChecks defaults (used by create() and the runChecks suite): a calm,
-    // non-blocking baseline so existing create tests don't trip the send-checks
-    // gate added in Task 5.
-    repo.hasRunningCampaignOnInstance.mockResolvedValue(false);
-    segmentsRepo.countContactsByWhere.mockResolvedValue(0);
-    segmentsRepo.preflightSummary.mockResolvedValue({
-      total: 0,
-      reachable: 0,
-      invalid: 0,
-      unknown: 0,
-    });
-    instancesRepo.findById.mockResolvedValue({
-      isActive: true,
-      sentToday: 0,
-      dailySendLimit: 500,
-      sendWindowStartHour: 8,
-      sendWindowEndHour: 20,
-      sendWindowEnabled: true,
-    } as any);
+      redis,
+    } = createCampaignsService());
   });
 
   /**
@@ -1682,35 +1930,6 @@ describe('CampaignsService', () => {
   // Evolution/Baileys number) — checked at create() AND run() so a template
   // or channel edited after creation can't silently drift apart.
   describe('T7 — template×channel provider mismatch', () => {
-    function baseCreateInput(overrides: Record<string, unknown> = {}) {
-      return {
-        name: 'C1',
-        templateId: 't1',
-        defaultInstanceId: 'inst-1',
-        filters: { combinator: 'and', rules: [] },
-        variableMap: {},
-        schedule: { type: 'IMMEDIATE' as const },
-        timezone: 'America/Sao_Paulo',
-        // C2 — finalidade obrigatória em QUALQUER provedor.
-        purposeKey: 'convite_atividades',
-        ...overrides,
-      } as any;
-    }
-
-    function activeChannel(overrides: Record<string, unknown> = {}) {
-      return {
-        id: 'inst-1',
-        isActive: true,
-        provider: 'EVOLUTION',
-        sentToday: 0,
-        dailySendLimit: 500,
-        sendWindowStartHour: 8,
-        sendWindowEndHour: 20,
-        sendWindowEnabled: true,
-        ...overrides,
-      } as any;
-    }
-
     // ZC6 — gate de campanha: SÓ APPROVED entra. O gate existia só no wizard do
     // frontend, o que o tornava uma sugestão e não uma garantia. E no ZERNIO isso
     // é perigoso de um jeito que não é nos outros provedores: lá o status muda
@@ -4593,133 +4812,19 @@ describe('redispatchMessage', () => {
   });
 
   describe('ZE — sendBatch (campanha retomável em lotes)', () => {
-    type FakeContact = {
-      id: string;
-      phoneE164: string;
-      optedOut: boolean;
-      marketingUndeliverableAt: Date | null;
-    };
-    type FakeMessage = {
-      contactId: string;
-      status: MessageStatus;
-      errorCode: string | null;
-    };
-
     let contacts: FakeContact[];
     let messages: FakeMessage[];
 
-    /** Um contato "cN" com id zero-padded — a ordem lexicográfica é a numérica,
-     *  como o keyset por `id` (cuid) assume em produção. */
-    const makeContacts = (n: number): FakeContact[] =>
-      Array.from({ length: n }, (_, i) => ({
-        id: `c${String(i).padStart(3, '0')}`,
-        phoneE164: `+5592${String(900000000 + i)}`,
-        optedOut: false,
-        marketingUndeliverableAt: null,
-      }));
-
-    /**
-     * Simula o Postgres: `findContactsPage` aplica o MESMO recorte que o
-     * `pendingAudienceWhere` empurra para o banco — cursor por id, exclui quem
-     * já tem mensagem tratada na campanha e (quando a cláusula está presente no
-     * `where`) exclui os inalcançáveis para marketing.
-     */
-    const wireFakeDb = () => {
-      repo.findContactsPage.mockImplementation((async (
-        where: any,
-        opts: { take: number; cursorId?: string },
-      ) => {
-        const handled = new Set(
-          messages.filter((m) => isHandledInCampaign(m)).map((m) => m.contactId),
-        );
-        const clauses: any[] = where?.AND ?? [];
-        const excludesUnreachable = clauses.some(
-          (c) => c && 'marketingUndeliverableAt' in c,
-        );
-        const pool = contacts
-          .filter((c) => (opts.cursorId ? c.id > opts.cursorId : true))
-          .filter((c) => !handled.has(c.id))
-          .filter((c) => !(excludesUnreachable && c.marketingUndeliverableAt));
-        return pool.slice(0, opts.take) as any;
-      }) as any);
-
-      repo.createMessage.mockImplementation((async (data: any) => {
-        messages.push({
-          contactId: data.contactId,
-          status: 'QUEUED',
-          errorCode: null,
-        });
-        return { id: `m-${data.contactId}` } as any;
-      }) as any);
-
-      repo.createSkippedMessage.mockImplementation((async (data: any) => {
-        messages.push({
-          contactId: data.contactId,
-          status:
-            data.reason === 'suppressed'
-              ? 'SKIPPED_SUPPRESSED'
-              : 'SKIPPED_NO_CONSENT',
-          errorCode: data.reason,
-        });
-        return { id: `s-${data.contactId}` } as any;
-      }) as any);
-
-      repo.createBatch.mockImplementation((async (data: any) => ({
-        id: 'batch-1',
-        campaignId: data.campaignId,
-        seq: 1,
-        requested: data.requested,
-        queued: 0,
-        skipped: 0,
-        startedAt: new Date(),
-        finishedAt: null,
-        createdByUserId: null,
-      })) as any);
-      repo.finishBatch.mockResolvedValue({} as any);
-      repo.countBatches.mockResolvedValue(1);
-      repo.groupMessagesByStatus.mockResolvedValue([] as any);
-    };
-
     /** Contatos que receberam mensagem de verdade (não as linhas SKIPPED). */
-    const queuedContactIds = () =>
-      messages.filter((m) => m.status === 'QUEUED').map((m) => m.contactId);
+    const queuedContactIds = () => queuedIdsOf(messages);
 
     beforeEach(() => {
-      contacts = makeContacts(120);
+      contacts = makeFakeContacts(120);
       messages = [];
-      repo.findById.mockResolvedValue({
-        id: 'camp1',
-        status: 'DRAFT',
-        templateId: 't1',
-        defaultInstanceId: 'i1',
-        filters: { combinator: 'and', rules: [] },
-        variableMap: {},
-        purposeKey: 'marketing',
-        override: false,
-        overrideJustification: null,
-        scheduleType: 'IMMEDIATE',
-        segmentId: null,
-        totalRecipients: 0,
-      } as any);
-      // Template de MARKETING, aprovado, do mesmo provedor do canal.
-      templatesRepo.findById.mockResolvedValue({
-        id: 't1',
-        provider: 'ZERNIO',
-        status: 'APPROVED',
-        category: 'MARKETING',
-      } as any);
-      instancesRepo.findById.mockResolvedValue({
-        id: 'i1',
-        provider: 'ZERNIO',
-        isActive: true,
-        sentToday: 0,
-        dailySendLimit: 500,
-      } as any);
-      repo.transitionToQueued.mockResolvedValue(1);
-      repo.countContactsByWhere.mockImplementation(
-        (async () => contacts.length) as any,
-      );
-      wireFakeDb();
+      wireSendBatchScenario({ repo, templatesRepo, instancesRepo }, () => ({
+        contacts,
+        messages,
+      }));
     });
 
     it('envia 50 de uma audiência de 120 — e para exatamente aí', async () => {
@@ -6121,5 +6226,84 @@ describe('resolveAudience — exclusão por template', () => {
     const r = await service.preview({ combinator: 'and', rules: [] });
     expect(r.excludedSameTemplate).toBe(0);
   });
+  });
+});
+
+describe('CampaignsService — canal de provedor desligado (B7)', () => {
+  afterEach(() => {
+    providerGate.allEnabled = true;
+  });
+
+  // B7 — só a Evolution está ligada: create() e run() recusam canal de
+  // provedor desligado com 409; o disparo agendado não passa por esta recusa.
+  it('create() com canal GOZAP → 409 channel.provider_disabled', async () => {
+    providerGate.allEnabled = false;
+    const { service, repo, templatesRepo, instancesRepo } =
+      createCampaignsService();
+    templatesRepo.findById.mockResolvedValue({
+      id: 't1',
+      provider: 'GOZAP',
+      status: 'APPROVED',
+    } as never);
+    instancesRepo.findById.mockResolvedValue(
+      activeChannel({ provider: 'GOZAP' }) as never,
+    );
+
+    await expect(service.create(baseCreateInput())).rejects.toMatchObject({
+      code: 'channel.provider_disabled',
+      status: 409,
+    });
+    expect(repo.create.mock.calls).toHaveLength(0);
+  });
+
+  it('run() em canal GOZAP → 409 channel.provider_disabled, campanha segue em DRAFT', async () => {
+    providerGate.allEnabled = false;
+    const { service, repo, instancesRepo, sendQueue } =
+      createCampaignsService();
+    repo.findById.mockResolvedValue({
+      id: 'camp1',
+      templateId: 't1',
+      defaultInstanceId: 'inst-1',
+    } as never);
+    instancesRepo.findById.mockResolvedValue(
+      activeChannel({ provider: 'GOZAP' }) as never,
+    );
+
+    await expect(service.run('camp1')).rejects.toMatchObject({
+      code: 'channel.provider_disabled',
+      status: 409,
+    });
+    expect(repo.transitionToQueued.mock.calls).toHaveLength(0);
+    expect(sendQueue.add.mock.calls).toHaveLength(0);
+  });
+});
+
+describe('CampaignsService.sendBatch — canal ZERNIO desligado', () => {
+  afterEach(() => {
+    providerGate.allEnabled = true;
+  });
+
+  it('dispatchAudience em canal ZERNIO com broadcast ligado não usa a fila de broadcast', async () => {
+    providerGate.allEnabled = false;
+    const broadcastQueue = { add: vi.fn().mockResolvedValue({ id: 'd' }) };
+    const { service, repo, templatesRepo, instancesRepo } =
+      createCampaignsService(broadcastQueue);
+    const db: FakeCampaignDb = {
+      contacts: makeFakeContacts(120),
+      messages: [],
+    };
+    wireSendBatchScenario({ repo, templatesRepo, instancesRepo }, () => db);
+    instancesRepo.findById.mockResolvedValue({
+      id: 'i1',
+      provider: 'ZERNIO',
+      isActive: true,
+      zernioBroadcastEnabled: true,
+    } as never);
+
+    await service.sendBatch('camp1', 10);
+
+    // Canal desligado volta ao 1-a-1: o processor falha cada mensagem.
+    expect(broadcastQueue.add.mock.calls).toHaveLength(0);
+    expect(queuedIdsOf(db.messages)).toHaveLength(10);
   });
 });

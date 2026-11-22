@@ -14,59 +14,16 @@ vi.mock('@tanstack/react-router', () => ({
 
 // --- Feature API mocks ----------------------------------------------------
 const useTemplatesMock = vi.fn();
-const syncMutateAsync = vi.fn();
-const syncState = { isPending: false };
-const syncZernioMutateAsync = vi.fn();
-const syncZernioState = { isPending: false };
 
 vi.mock('@/features/templates/api', () => ({
   useTemplates: (provider?: string) => useTemplatesMock(provider),
-  useSyncTemplates: () => ({
-    mutateAsync: syncMutateAsync,
-    isPending: syncState.isPending,
-  }),
-  useSyncZernioTemplates: () => ({
-    mutateAsync: syncZernioMutateAsync,
-    isPending: syncZernioState.isPending,
-  }),
   // A module mock replaces the WHOLE module, so EVERY hook the page's tree
-  // calls must be stubbed here — the Twilio create/submit/edit dialogs the page
-  // now renders call these on mount, and omitting one throws
+  // calls must be stubbed here — omitting one throws
   // "No <hook> export is defined on the mock", failing every test in the file.
   useCreateTemplate: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useUpdateTemplate: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useDeleteTemplate: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useCreateTwilioTemplate: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useSubmitTwilioTemplate: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useUpdateTwilioDraft: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
-
-// The provider tabs are gated to the CONFIGURED providers, so the page reads
-// useProviders(). Default: all four configured, so the existing tab assertions
-// hold; individual tests narrow it to prove the gating.
-const useProvidersMock = vi.fn();
-vi.mock('@/features/whatsapp/api', async () => {
-  const actual =
-    await vi.importActual<typeof import('@/features/whatsapp/api')>(
-      '@/features/whatsapp/api',
-    );
-  return { ...actual, useProviders: () => useProvidersMock() };
-});
-
-// --- Provider scope mock ---------------------------------------------------
-// Keep the real PROVIDER_LABEL/ProviderBadge (plain, hook-free) so the tests
-// exercise the real badge/label text; only `useProviderScope` needs mocking
-// since it requires the context provider mounted at the authenticated root.
-const useProviderScopeMock = vi.fn();
-vi.mock('@/features/whatsapp/provider-scope', async () => {
-  const actual = await vi.importActual<
-    typeof import('@/features/whatsapp/provider-scope')
-  >('@/features/whatsapp/provider-scope');
-  return {
-    ...actual,
-    useProviderScope: () => useProviderScopeMock(),
-  };
-});
 
 // --- Dialog mocks ---------------------------------------------------------
 // Capture the props the page passes so we can assert which dialog is open and
@@ -159,21 +116,6 @@ function mockList(items: Template[]) {
 
 beforeEach(() => {
   useTemplatesMock.mockReset();
-  useProvidersMock.mockReset();
-  useProvidersMock.mockReturnValue({
-    data: {
-      providers: [
-        { provider: 'EVOLUTION', channels: [] },
-        { provider: 'TWILIO', channels: [] },
-        { provider: 'ZERNIO', channels: [] },
-        { provider: 'META', channels: [] },
-      ],
-    },
-  });
-  syncMutateAsync.mockReset();
-  syncState.isPending = false;
-  syncZernioMutateAsync.mockReset();
-  syncZernioState.isPending = false;
   formDialogSpy.mockReset();
   deleteDialogSpy.mockReset();
   toastSuccess.mockReset();
@@ -182,8 +124,6 @@ beforeEach(() => {
   // `extractApiError` is async in the real module; default to a resolved
   // promise so consumers (e.g. QueryErrorFallback) can `.then()` on it.
   extractApiErrorMock.mockResolvedValue({ title: 'Erro', message: 'erro' });
-  useProviderScopeMock.mockReset();
-  useProviderScopeMock.mockReturnValue({ scope: 'all', setScope: vi.fn() });
 });
 
 describe('TemplatesPage — error handling', () => {
@@ -572,124 +512,6 @@ describe('TemplatesPage — create / edit / delete actions', () => {
   });
 });
 
-// Pedido do cliente (2026-08-25): "sincronizar com a Meta" só aparece/roda
-// pelo ZERNIO — é o único provedor cujo template nasce e vive na Meta por
-// aqui. Nos demais provedores/abas o botão não existe mais.
-describe('TemplatesPage — sync button (ZERNIO only)', () => {
-  it('shows no sync button by default (no provider tab selected)', () => {
-    useProviderScopeMock.mockReturnValue({ scope: 'all', setScope: vi.fn() });
-    mockList([makeTemplate()]);
-
-    wrap(<TemplatesPage />);
-
-    expect(
-      screen.queryByRole('button', { name: /Sincronizar/i }),
-    ).not.toBeInTheDocument();
-  });
-
-  it('shows no sync button on a non-ZERNIO provider tab (e.g. Evolution)', async () => {
-    const user = userEvent.setup();
-    mockList([makeTemplate()]);
-
-    wrap(<TemplatesPage />);
-
-    await user.click(screen.getByRole('tab', { name: 'Evolution' }));
-
-    expect(
-      screen.queryByRole('button', { name: /Sincronizar/i }),
-    ).not.toBeInTheDocument();
-  });
-
-  it('shows "Sincronizar Zernio" when the Zernio tab is active', async () => {
-    const user = userEvent.setup();
-    mockList([makeTemplate()]);
-
-    wrap(<TemplatesPage />);
-
-    await user.click(screen.getByRole('tab', { name: 'Zernio' }));
-
-    expect(
-      screen.getByRole('button', { name: /Sincronizar Zernio/i }),
-    ).toBeInTheDocument();
-  });
-
-  it('seeding the filter from a Zernio global scope shows the Zernio button immediately', () => {
-    useProviderScopeMock.mockReturnValue({ scope: 'ZERNIO', setScope: vi.fn() });
-    mockList([makeTemplate({ provider: 'ZERNIO' })]);
-
-    wrap(<TemplatesPage />);
-
-    expect(
-      screen.getByRole('button', { name: /Sincronizar Zernio/i }),
-    ).toBeInTheDocument();
-  });
-
-  it('clicking the Zernio button calls useSyncZernioTemplates (not the Meta sync) and toasts synced+skipped', async () => {
-    const user = userEvent.setup();
-    syncZernioMutateAsync.mockResolvedValue({ synced: 5, skipped: 2 });
-    mockList([makeTemplate()]);
-
-    wrap(<TemplatesPage />);
-
-    await user.click(screen.getByRole('tab', { name: 'Zernio' }));
-    await user.click(
-      screen.getByRole('button', { name: /Sincronizar Zernio/i }),
-    );
-
-    expect(syncZernioMutateAsync).toHaveBeenCalledTimes(1);
-    expect(syncMutateAsync).not.toHaveBeenCalled();
-    expect(toastSuccess).toHaveBeenCalledWith(
-      'Sincronizados 5 templates (2 pulados)',
-    );
-  });
-
-  it('shows an error toast when the Zernio sync fails', async () => {
-    const user = userEvent.setup();
-    syncZernioMutateAsync.mockRejectedValue(new Error('nope'));
-    extractApiErrorMock.mockResolvedValue({
-      title: 'Falhou',
-      message: 'detalhe zernio',
-    });
-    mockList([makeTemplate()]);
-
-    wrap(<TemplatesPage />);
-
-    await user.click(screen.getByRole('tab', { name: 'Zernio' }));
-    await user.click(
-      screen.getByRole('button', { name: /Sincronizar Zernio/i }),
-    );
-
-    expect(toastError).toHaveBeenCalledWith('Falhou', {
-      description: 'detalhe zernio',
-    });
-  });
-
-  it('disables the sync button and shows the pending label while the Zernio sync runs', () => {
-    useProviderScopeMock.mockReturnValue({ scope: 'ZERNIO', setScope: vi.fn() });
-    syncZernioState.isPending = true;
-    mockList([makeTemplate({ provider: 'ZERNIO' })]);
-
-    wrap(<TemplatesPage />);
-
-    const btn = screen.getByRole('button', { name: /Sincronizando.../i });
-    expect(btn).toBeDisabled();
-  });
-
-  it('switching back to "Todos" hides the sync button again', async () => {
-    const user = userEvent.setup();
-    mockList([makeTemplate()]);
-
-    wrap(<TemplatesPage />);
-
-    await user.click(screen.getByRole('tab', { name: 'Zernio' }));
-    await user.click(screen.getByRole('tab', { name: 'Todos' }));
-
-    expect(
-      screen.queryByRole('button', { name: /Sincronizar/i }),
-    ).not.toBeInTheDocument();
-  });
-});
-
 describe('TemplatesPage — provider badge', () => {
   it('renders a ProviderBadge with the provider label on each card', () => {
     mockList([
@@ -699,8 +521,7 @@ describe('TemplatesPage — provider badge', () => {
 
     wrap(<TemplatesPage />);
 
-    // Scope to each card (not the provider-filter tabs, which repeat the same
-    // provider labels) via the closest `.rounded-xl` card wrapper.
+    // Scope to each card via the closest `.rounded-xl` card wrapper.
     const alphaCard = screen.getByText('alpha').closest('.rounded-xl');
     const bravoCard = screen.getByText('bravo').closest('.rounded-xl');
     expect(alphaCard).not.toBeNull();
@@ -710,113 +531,35 @@ describe('TemplatesPage — provider badge', () => {
   });
 });
 
-describe('TemplatesPage — provider filter', () => {
-  it('queries with no provider (undefined) when the global scope is "all"', () => {
-    useProviderScopeMock.mockReturnValue({ scope: 'all', setScope: vi.fn() });
-    mockList([makeTemplate()]);
+// R12/R14/R15 — o catálogo é só Evolution: sem sincronizar, sem Twilio/Zernio e
+// sem filtro/aba de provedor.
+describe('TemplatesPage — sem provedor', () => {
+  it('sem ações de sincronizar, Twilio ou Zernio', () => {
+    mockList([
+      makeTemplate({ id: 'a', metaName: 'alpha', provider: 'TWILIO', twilioApprovalStatus: 'draft' }),
+      makeTemplate({ id: 'b', metaName: 'bravo', provider: 'TWILIO', status: 'REJECTED' }),
+    ]);
+
+    wrap(<TemplatesPage />);
+
+    expect(screen.queryByRole('button', { name: /Sincronizar/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Twilio/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Zernio/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Submeter/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Clonar/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab')).not.toBeInTheDocument();
+  });
+
+  it('lista sem filtro de provedor e a mensagem vazia não cita sincronizar', () => {
+    mockList([]);
 
     wrap(<TemplatesPage />);
 
     expect(useTemplatesMock).toHaveBeenLastCalledWith(undefined);
-  });
-
-  it('seeds the filter from a specific initial global scope', () => {
-    useProviderScopeMock.mockReturnValue({ scope: 'TWILIO', setScope: vi.fn() });
-    mockList([makeTemplate({ provider: 'TWILIO' })]);
-
-    wrap(<TemplatesPage />);
-
-    expect(useTemplatesMock).toHaveBeenLastCalledWith('TWILIO');
-  });
-
-  // Evolution (não Twilio): a aba Twilio agora é condicional (ver describe
-  // dedicado abaixo) — este teste só quer o comportamento genérico de troca
-  // de aba, então usa uma aba sempre disponível.
-  it('re-queries with the selected provider when a tab is clicked', async () => {
-    const user = userEvent.setup();
-    mockList([makeTemplate()]);
-
-    wrap(<TemplatesPage />);
-
-    await user.click(screen.getByRole('tab', { name: 'Evolution' }));
-
-    expect(useTemplatesMock).toHaveBeenLastCalledWith('EVOLUTION');
-  });
-
-  it('switches back to no filter when "Todos" is clicked again', async () => {
-    const user = userEvent.setup();
-    mockList([makeTemplate()]);
-
-    wrap(<TemplatesPage />);
-
-    await user.click(screen.getByRole('tab', { name: 'Evolution' }));
-    await user.click(screen.getByRole('tab', { name: 'Todos' }));
-
-    expect(useTemplatesMock).toHaveBeenLastCalledWith(undefined);
-  });
-
-  // An Evolution-only deploy must not carry three permanently-empty tabs; a
-  // template prepared before its channel exists still shows under "Todos".
-  it('only offers tabs for configured providers', () => {
-    useProvidersMock.mockReturnValue({
-      data: { providers: [{ provider: 'EVOLUTION', channels: [] }] },
-    });
-    mockList([makeTemplate()]);
-
-    wrap(<TemplatesPage />);
-
-    expect(screen.getByRole('tab', { name: 'Todos' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'Evolution' })).toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: 'Twilio' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: 'Zernio' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('tab', { name: 'Meta' })).not.toBeInTheDocument();
+    expect(screen.getByText(/Nenhum template ainda/i)).not.toHaveTextContent(/sincroniz/i);
   });
 });
 
-// Pedido do cliente (2026-08-25, complemento): a aba Twilio e o botão "Novo
-// template Twilio" só existem enquanto houver pelo menos um template TWILIO
-// já cadastrado (legado) — sem nenhum, a Twilio some da tela inteira.
-describe('TemplatesPage — Twilio tab (legacy-only)', () => {
-  it('hides the Twilio tab and the "Novo template Twilio" button when no TWILIO template exists', () => {
-    mockList([makeTemplate({ provider: 'EVOLUTION' })]);
-
-    wrap(<TemplatesPage />);
-
-    expect(screen.queryByRole('tab', { name: 'Twilio' })).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole('button', { name: /Novo template Twilio/i }),
-    ).not.toBeInTheDocument();
-  });
-
-  it('keeps the Twilio tab visible when at least one TWILIO template exists', () => {
-    mockList([makeTemplate({ provider: 'TWILIO' })]);
-
-    wrap(<TemplatesPage />);
-
-    expect(screen.getByRole('tab', { name: 'Twilio' })).toBeInTheDocument();
-  });
-
-  it('never shows "Novo template Twilio", even with a legacy TWILIO template (read/edit-only)', async () => {
-    const user = userEvent.setup();
-    mockList([makeTemplate({ provider: 'TWILIO' })]);
-
-    wrap(<TemplatesPage />);
-
-    await user.click(screen.getByRole('tab', { name: 'Twilio' }));
-
-    expect(
-      screen.queryByRole('button', { name: /Novo template Twilio/i }),
-    ).not.toBeInTheDocument();
-    // O "Novo template" genérico segue existindo (agora sem Twilio como
-    // opção de provedor — ver template-form-dialog.render.spec.tsx).
-    expect(
-      screen.getByRole('button', { name: /^Novo template$/i }),
-    ).toBeInTheDocument();
-  });
-});
-
-// ZC — o catálogo do ZERNIO aparece IGUAL ao da Twilio: badge de status,
-// categoria, idioma, motivo e "sincronizado há X".
 describe('TemplatesPage — catálogo ZERNIO (ZC)', () => {
   it('mostra status, categoria e idioma de um template ZERNIO', () => {
     mockList([

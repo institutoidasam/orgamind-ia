@@ -28,12 +28,6 @@ vi.mock('./release-notes-button', () => ({
   ReleaseNotesButton: () => <div data-testid="release-notes-button-stub" />,
 }));
 
-// Same — the provider scope selector needs TanStack Query + its context
-// provider; that wiring is covered by provider-scope.spec.tsx instead.
-vi.mock('@/features/whatsapp/provider-scope', () => ({
-  ProviderScopeSelector: () => <div data-testid="provider-scope-stub" />,
-}));
-
 import { Topbar } from './topbar';
 
 const noop = () => {};
@@ -88,15 +82,13 @@ describe('Topbar breadcrumb', () => {
 
     expect(screen.getByLabelText('Menu do perfil: Vera (Leitura)')).toBeInTheDocument();
     expect(screen.queryByTestId('whatsapp-status-stub')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('provider-scope-stub')).not.toBeInTheDocument();
   });
 
-  it('mantém controles legados para ADMIN e OPERATOR', () => {
+  it('mantém o indicador de status para ADMIN e OPERATOR', () => {
     currentPath = '/dashboard';
     render(<Topbar {...props} />);
 
     expect(screen.getByTestId('whatsapp-status-stub')).toBeInTheDocument();
-    expect(screen.getByTestId('provider-scope-stub')).toBeInTheDocument();
   });
 
   it('resolves a label for nested Inbox externo/Segmentos/Imports paths', () => {
@@ -111,6 +103,15 @@ describe('Topbar breadcrumb', () => {
       expect(screen.queryByText('—')).not.toBeInTheDocument();
       unmount();
     }
+  });
+});
+
+describe('Topbar provider scope', () => {
+  it('não renderiza o seletor de provedor', () => {
+    currentPath = '/dashboard';
+    render(<Topbar {...props} />);
+
+    expect(screen.queryByLabelText('Filtrar por provedor')).not.toBeInTheDocument();
   });
 });
 

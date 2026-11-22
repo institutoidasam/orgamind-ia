@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import type { Queue } from 'bullmq';
 import { PrismaService } from '../../shared/prisma/prisma.service';
-import { isSessionProvider } from '../../schemas/contracts/channel-provider.schema';
+import { skipsConnectionGate } from '../../shared/config/enabled-providers';
 
 @Injectable()
 export class ReconnectReplayService {
@@ -58,11 +58,11 @@ export class ReconnectReplayService {
         continue;
       }
 
-      // Mesma regra do roteador de envio: provedor de sessão (Evolution/GoZap)
-      // precisa de um evento 'open' gravado; os oficiais (Twilio/Zernio/Meta)
-      // não geram evento nenhum e estão sempre alcançáveis. Divergir daqui
-      // faria a varredura soltar mensagem que o roteador vai reestacionar.
-      const online = !isSessionProvider(canal.provider)
+      // Mesma regra do roteador: canal de sessão ligado precisa de um evento
+      // 'open'; os oficiais e os DESLIGADOS (D11) estão sempre alcançáveis, e o
+      // processor falha o desligado com `channel.provider_disabled`. Divergir
+      // daqui soltaria mensagem que o roteador vai reestacionar.
+      const online = skipsConnectionGate(canal.provider)
         ? true
         : (
             await this.prisma.whatsappConnectionEvent.findFirst({

@@ -10,7 +10,6 @@ import { ChatMediaService } from './chat-media.service';
 import { ChatHistorySyncService } from './chat-history-sync.service';
 import { ChatSyncController } from './chat-sync.controller';
 import { ZernioInboxSyncService } from './zernio-inbox-sync.service';
-import { ZernioInboxSyncController } from './zernio-inbox-sync.controller';
 import { ZernioSyncRunsService } from './zernio-sync-runs.service';
 import { TeamTrackingModule } from '../team-whatsapp/tracking/team-tracking.module';
 
@@ -25,7 +24,8 @@ import { TeamTrackingModule } from '../team-whatsapp/tracking/team-tracking.modu
     // T10 — "respondeu" do envio da equipe (D10: módulo sem imports, sem ciclo).
     TeamTrackingModule,
   ],
-  controllers: [ChatController, ChatMediaController, ChatSyncController, ZernioInboxSyncController],
+  // ZernioInboxSyncController fora (R5: sem sync-inbox); o arquivo fica (GC5).
+  controllers: [ChatController, ChatMediaController, ChatSyncController],
   providers: [ChatService, ChatRepository, ChatEventsService, ChatIngestService, ChatMediaService, ChatHistorySyncService, ZernioInboxSyncService, ZernioSyncRunsService],
   exports: [ChatService, ChatRepository, ChatIngestService, ChatEventsService, ChatHistorySyncService, ZernioInboxSyncService, ZernioSyncRunsService],
 })

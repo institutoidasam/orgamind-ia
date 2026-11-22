@@ -3,7 +3,7 @@ import type { Channel } from '@prisma/client';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { WhatsappInstancesRepository } from './whatsapp-instances.repository';
 import { DomainError } from '../../shared/errors/domain.error';
-import { isSessionProvider } from '../../schemas/contracts/channel-provider.schema';
+import { skipsConnectionGate } from '../../shared/config/enabled-providers';
 
 export type RouterResult =
   | { kind: 'send'; instance: Channel }
@@ -101,9 +101,14 @@ export class WhatsappInstanceRouter {
    * with no WhatsappConnectionEvent rows, so treat them as always reachable —
    * else every send would park WAITING_INSTANCE forever. Callers already have
    * the channel row in hand, so this never re-queries it.
+   *
+   * Canal de provedor DESLIGADO também pula o gate (`skipsConnectionGate`): a
+   * sessão dele nunca emite `open`, e a mensagem ficaria em WAITING_INSTANCE
+   * para sempre. O roteador devolve `send` e o processor a falha com
+   * `channel.provider_disabled` (D11).
    */
   private async isInstanceOnline(instance: Channel): Promise<boolean> {
-    if (!isSessionProvider(instance.provider)) {
+    if (skipsConnectionGate(instance.provider)) {
       return true;
     }
     const last = await this.prisma.whatsappConnectionEvent.findFirst({

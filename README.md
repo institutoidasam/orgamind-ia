@@ -1,25 +1,23 @@
 # ORGAMIND
 
-WhatsApp broadcast system that imports Excel contacts, filters them, and dispatches Meta-approved templates with live delivery status tracking.
+WhatsApp broadcast system that imports Excel contacts, filters them, and dispatches messages through the Evolution API with live delivery status tracking.
 
 ## Features
 
 - Excel upload (`.xlsx`) with phone E.164 normalization and dedupe by phone
 - Filter contacts by AND/OR nested rules (city, group, tags, etc.)
-- Sync WhatsApp templates from Meta Cloud API
 - Campaign wizard: pick template, map variables, filter recipients, preview, send
 - Live campaign monitor with delivery status (sent/delivered/read/failed)
-- Adapter pattern: Meta Cloud API (primary) or Evolution API (alternative)
+- Adapter pattern: only the Evolution API is on (Meta Cloud API, Twilio, Zernio and GoZap: see [WhatsApp providers](#whatsapp-providers))
 - Worker as separate process (BullMQ + Redis) with deterministic job IDs
 - Webhook receiver with HMAC verification + Redis-based dedupe
-- Auto opt-out on Meta error codes 131026 / 131047
 
 ## Architecture
 
 - **Backend**: NestJS (Node 22 + Bun pkg manager) modular monolith — `src/modules/<domain>/` + `src/shared/<infra>/`. DomainError hierarchy mapped to RFC 9457 problem+json. Prisma + PostgreSQL.
 - **Worker**: separate Node process via `NestFactory.createApplicationContext(WorkerModule)`, same Docker image, different bootstrap.
 - **Frontend**: React 19 + Vite + Bun + TanStack Router/Query/Table + shadcn/ui + ky + Zustand (memory token only) + Zod + RHF. Feature-first under `src/features/<domain>/`.
-- **Hexagonal** in `whatsapp-providers/` (Meta + Evolution adapters behind `MessageProvider` port).
+- **Hexagonal** in `whatsapp-providers/` (Evolution adapter behind the `MessageProvider` port; the Meta, Twilio, Zernio and GoZap adapters stay in the repository, inactive).
 - **Event-driven** via BullMQ for sends + `@nestjs/event-emitter` for cross-module events when needed.
 
 See `docs/superpowers/specs/2026-04-29-whatsapp-broadcast-design.md` for full design.
@@ -43,7 +41,7 @@ docker compose -f docker-compose.dev.yml exec api bun run prisma db seed
 ## Production
 
 ```bash
-cp .env.example .env  # fill in Meta credentials, JWT_SECRET, etc.
+cp .env.example .env  # fill in Evolution credentials, JWT_SECRET, etc.
 docker compose up -d --build
 docker compose exec api bun run prisma migrate deploy
 docker compose exec api bun run prisma db seed
@@ -103,7 +101,7 @@ ORGAMIND supports auto-reply via [Dify](https://dify.ai) chatbot apps. Each What
 
 - Dify runs as a **separate application** on the same Dokploy instance, served at `https://bot.picoa.app.br`. The `OPENAI_API_KEY` (and any other model-provider credentials) are configured **inside Dify** (Settings → Model Provider), not in orgamind's `.env`.
 - orgamind's backend calls Dify's API to generate a reply for each incoming message, then forwards that reply via the WhatsApp provider.
-- Requires an **Evolution-provider channel**. The Meta Cloud API does not support free-text auto-replies; bots only work with numbers connected via the Evolution provider (checked per-channel, not by a deploy-wide setting).
+- Requires an **Evolution-provider channel**. Evolution is the only provider on, so bots work with every connected number (checked per-channel, not by a deploy-wide setting).
 
 ### Setup
 
@@ -142,17 +140,33 @@ See `.env.example` for the full list. Required for production:
 | Variable | Notes |
 |---|---|
 | `JWT_SECRET` | Generate with `openssl rand -hex 32`. Min 32 chars. |
-| `META_PHONE_NUMBER_ID` | Part of the Meta provider group — see below. From Meta Business Manager. |
-| `META_BUSINESS_ACCOUNT_ID` | Part of the Meta provider group. WABA ID. |
-| `META_ACCESS_TOKEN` | Part of the Meta provider group. System user token (long-lived). |
-| `META_APP_SECRET` | Part of the Meta provider group. Used for webhook HMAC verification. |
-| `META_WEBHOOK_VERIFY_TOKEN` | Part of the Meta provider group. Set the same value in Meta App webhook config. |
 | `EVOLUTION_BASE_URL` | Part of the Evolution provider group — see below. |
 | `EVOLUTION_API_KEY` | Part of the Evolution provider group. |
 | `EVOLUTION_INSTANCE_NAME` | Part of the Evolution provider group. |
 | `DIFY_BASE_URL` | Required for chatbot auto-reply. Base URL of your Dify instance including `/v1` (e.g. `https://bot.picoa.app.br/v1`). |
 
-**Provider groups**: there is no single "WHATSAPP_PROVIDER" selector. Each provider (Meta, Evolution, Twilio) is enabled by setting **all** of its own vars together; **at least one** group must be fully configured or the app fails to boot. A deploy may configure more than one group at once to run several WhatsApp channels side by side. See `backend/src/shared/config/env.schema.ts` for the exact grouping.
+**Provider group**: only the Evolution group (`EVOLUTION_BASE_URL`, `EVOLUTION_API_KEY`, `EVOLUTION_INSTANCE_NAME`) is required, and the app fails to boot without it. Env keys of the switched-off providers are ignored with a warning that lists names only, never values. See `backend/src/shared/config/env.schema.ts`. The Evolution image is pinned by digest in the compose files; to change the version, see `OPERATIONS.md` → "Evolution: versão fixa e troca de versão".
+
+## WhatsApp providers
+
+Only the Evolution API is on (`ENABLED_CHANNEL_PROVIDERS`). The other providers were switched off and their code stays in the repository, inactive.
+
+### Meta Cloud API
+
+Desligado em 2026-11; código inativo no repositório.
+
+### Twilio
+
+Desligado em 2026-11; código inativo no repositório.
+
+### Zernio
+
+Desligado em 2026-11; código inativo no repositório.
+
+### GoZap
+
+Desligado em 2026-11; código inativo no repositório.
+
 
 ## Authentication
 
@@ -203,11 +217,9 @@ GIT_SHA=$(git rev-parse HEAD) docker compose up -d --build
 
 ## Webhooks
 
-Configure your Meta App webhook URL to:
-```
-https://<your-domain>/webhooks/whatsapp
-```
-Verify token = `META_WEBHOOK_VERIFY_TOKEN`. Subscribe to the `messages` field.
+The Evolution API posts its events to `POST /webhooks/whatsapp` (internal Docker network, `WEBHOOK_BASE_URL`). The worker checks every 10 min that the webhook is armed on each Evolution instance and re-arms it when it diverges (details in `OPERATIONS.md`).
+
+The Meta, Twilio, Zernio and GoZap webhooks: Desligado em 2026-11; código inativo no repositório.
 
 ## Development workflow
 
@@ -283,7 +295,7 @@ orgamind-ia/
 | C — Auth (User + JWT + login) | Done |
 | D — Frontend foundation | Done |
 | E — Contacts + Excel import | Done |
-| F — WhatsApp providers (Meta + Evolution) | Done |
+| F — WhatsApp providers (Meta + Evolution; only Evolution on since 2026-11) | Done |
 | G — Templates + Campaigns + filters | Done |
 | H — BullMQ worker + Webhooks | Done |
 | I — Frontend complete | Done |

@@ -17,6 +17,7 @@ import type {
 import { StaffScheduleRepository } from '../staff-schedule/staff-schedule.repository';
 import type { PageQuery } from './dto/page-query.dto';
 import { tooManyPeople } from './team-whatsapp.errors';
+import { PROVIDER_DISABLED_CODE } from '../../shared/errors/channel-provider-disabled.error';
 import { NOT_REPEATABLE_CODES } from './team-whatsapp.outcome';
 import type { RosterSnapshot } from './team-whatsapp.roster';
 import { findTeamActor } from './team-actor.query';
@@ -868,8 +869,9 @@ const usableChannelSelect = {
 
 /**
  * SCHEDULED cujo número (o do destinatário; o do envio só na linha legada sem
- * canal) está inativo, removido ou fora de TEAM_PROVIDERS → FAILED
- * `channel_unavailable`. Devolve quantos falharam.
+ * canal) não serve mais → FAILED. Número ausente ou inativo →
+ * `channel_unavailable`; número ativo de provedor desligado (fora de
+ * TEAM_PROVIDERS) → `channel.provider_disabled` (R9). Devolve quantos falharam.
  */
 async function failUnavailable(tx: Tx, dispatchId: string): Promise<number> {
   const rows = await tx.teamWhatsappRecipient.findMany({
@@ -880,16 +882,28 @@ async function failUnavailable(tx: Tx, dispatchId: string): Promise<number> {
       dispatch: { select: { channel: usableChannelSelect } },
     },
   });
-  const unavailable = rows
-    .filter((r) => {
-      const channel = r.channel ?? r.dispatch.channel;
-      return !channel?.isActive || !isTeamProvider(channel.provider);
-    })
-    .map((r) => r.id);
-  if (unavailable.length === 0) return 0;
+  const unavailable: string[] = [];
+  const disabled: string[] = [];
+  for (const r of rows) {
+    const channel = r.channel ?? r.dispatch.channel;
+    if (!channel?.isActive) unavailable.push(r.id);
+    else if (!isTeamProvider(channel.provider)) disabled.push(r.id);
+  }
+  const gone = await failScheduled(tx, unavailable, CHANNEL_UNAVAILABLE);
+  const off = await failScheduled(tx, disabled, PROVIDER_DISABLED_CODE);
+  return gone + off;
+}
+
+/** SCHEDULED → FAILED com o código dado; lista vazia não vai ao banco. */
+async function failScheduled(
+  tx: Tx,
+  ids: readonly string[],
+  errorCode: string,
+): Promise<number> {
+  if (ids.length === 0) return 0;
   const { count } = await tx.teamWhatsappRecipient.updateMany({
-    where: { id: { in: unavailable }, status: 'SCHEDULED' },
-    data: { status: 'FAILED', errorCode: CHANNEL_UNAVAILABLE },
+    where: { id: { in: [...ids] }, status: 'SCHEDULED' },
+    data: { status: 'FAILED', errorCode },
   });
   return count;
 }

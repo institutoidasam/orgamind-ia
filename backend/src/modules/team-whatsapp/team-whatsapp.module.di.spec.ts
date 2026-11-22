@@ -22,6 +22,9 @@ vi.hoisted(() => {
     ZERNIO_API_KEY: 'zk_test',
     ZERNIO_BASE_URL: 'https://zernio.test/api/v1',
     ZERNIO_WEBHOOK_SECRET: 'whsec_test',
+    EVOLUTION_BASE_URL: 'http://evolution.test:8080',
+    EVOLUTION_API_KEY: 'test-evolution-key',
+    EVOLUTION_INSTANCE_NAME: 'test-instance',
   });
 });
 

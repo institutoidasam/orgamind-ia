@@ -3,52 +3,30 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { validateEnv, envSchema, configuredProviderGroups } from './env.schema';
 
+// vitest roda com root em `backend/` (CI: `cd backend && bun run test`).
+const compose = readFileSync(
+  resolve(process.cwd(), '..', 'docker-compose.prod.yml'),
+  'utf8',
+);
+
+/** Recorta o bloco `environment:` de um serviço de primeiro nível. */
+function serviceEnvBlock(service: string): string {
+  const lines = compose.split('\n');
+  const start = lines.findIndex((l) => l === `  ${service}:`);
+  expect(start, `serviço ${service} não encontrado`).toBeGreaterThan(-1);
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((l) => /^ {2}\S/.test(l));
+  return (end === -1 ? rest : rest.slice(0, end)).join('\n');
+}
+
 /**
- * UMA VAR QUE O SCHEMA CONHECE MAS O CONTÊINER NUNCA VÊ É UM INTERRUPTOR DE
- * MENTIRA. O `docker-compose.prod.yml` não usa `env_file`: ele lista cada
- * variável à mão em `environment:`. O que não estiver lá não chega ao processo
- * — a var definida no painel do Dokploy simplesmente não existe dentro do
- * contêiner, o zod aplica o default e nada no boot avisa. Já aconteceu uma vez
- * com GOZAP_WEBHOOK_DEBUG (está escrito no próprio compose).
- *
- * Aqui isso não é sujeira de configuração, é segurança: o passo final da
- * migração do C20 ("feche a query, o segredo já viaja no cabeçalho") é
- * exatamente definir GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN=false. Se ela não for
- * encaminhada, o operador segue o runbook, vê o deploy verde e acredita ter
- * fechado uma porta que continua aceitando `?t=<segredo>`.
+ * O `docker-compose.prod.yml` não usa `env_file`: ele lista cada variável à mão
+ * em `environment:`. O que não estiver lá não chega ao processo. Aqui isso é
+ * segurança para o sal de consentimento (trocá-lo orfaniza a supressão/PARAR).
+ * As envs do GoZap saíram do compose junto com o provedor (somente-evolution),
+ * então a checagem de encaminhamento delas foi removida.
  */
-describe('docker-compose.prod.yml encaminha as envs do webhook do GoZap', () => {
-  // vitest roda com root em `backend/` (CI: `cd backend && bun run test`).
-  const compose = readFileSync(
-    resolve(process.cwd(), '..', 'docker-compose.prod.yml'),
-    'utf8',
-  );
-
-  /** Recorta o bloco `environment:` de um serviço de primeiro nível. */
-  function serviceEnvBlock(service: string): string {
-    const lines = compose.split('\n');
-    const start = lines.findIndex((l) => l === `  ${service}:`);
-    expect(start, `serviço ${service} não encontrado`).toBeGreaterThan(-1);
-    const rest = lines.slice(start + 1);
-    const end = rest.findIndex((l) => /^ {2}\S/.test(l));
-    return (end === -1 ? rest : rest.slice(0, end)).join('\n');
-  }
-
-  it.each([
-    ['api', 'GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN'],
-    ['worker', 'GOZAP_WEBHOOK_ALLOW_QUERY_TOKEN'],
-    ['api', 'GOZAP_MAX_INSTANCES'],
-    ['worker', 'GOZAP_MAX_INSTANCES'],
-  ])('serviço %s recebe %s', (service, name) => {
-    expect(serviceEnvBlock(service)).toMatch(new RegExp(`^\\s+${name}:`, 'm'));
-  });
-
-  it('serviço api recebe o segredo e a flag de debug do webhook do GoZap', () => {
-    const env = serviceEnvBlock('api');
-    expect(env).toMatch(/^\s+GOZAP_WEBHOOK_TOKEN:/m);
-    expect(env).toMatch(/^\s+GOZAP_WEBHOOK_DEBUG:/m);
-  });
-
+describe('docker-compose.prod.yml exige o sal de consentimento', () => {
   it.each(['migrate', 'api', 'worker'])(
     'serviço %s exige o sal de consentimento externo',
     (service) => {
@@ -85,19 +63,17 @@ describe('docker-compose.prod.yml encaminha as envs do webhook do GoZap', () => 
 });
 
 describe('validateEnv', () => {
-  // Base env satisfies the `meta` provider group. Tests that want to exercise
-  // Evolution or Twilio instead swap in that group's own vars explicitly —
-  // there is no single WHATSAPP_PROVIDER selector to flip anymore.
+  // Base env satisfies the Evolution group, the only one required at boot (R2).
+  // The other provider groups are inert: tests add their vars explicitly.
   const baseEnv = {
     DATABASE_URL: 'postgresql://u:p@h:5432/d',
     JWT_SECRET: 'a'.repeat(32),
     APP_BASE_URL: 'http://localhost:5173',
     WEBHOOK_BASE_URL: 'http://localhost:3000',
     CORS_ORIGIN: 'http://localhost:5173',
-    META_ACCESS_TOKEN: 'meta-token',
-    META_PHONE_NUMBER_ID: '123',
-    META_APP_SECRET: 'meta-secret',
-    META_WEBHOOK_VERIFY_TOKEN: 'verify',
+    EVOLUTION_BASE_URL: 'http://localhost:8080',
+    EVOLUTION_API_KEY: 'evolution-key',
+    EVOLUTION_INSTANCE_NAME: 'picoa-dev',
   };
 
   it('parses valid env', () => {
@@ -121,146 +97,67 @@ describe('validateEnv', () => {
     expect(result.PORT).toBe(4000);
   });
 
-  // Provider credentials are validated by GROUP now (not by WHATSAPP_PROVIDER):
-  // any non-empty var in a group makes the whole group required, and at least
-  // one group must be fully configured.
+  // Só o grupo Evolution é obrigatório (R2). Os grupos dos provedores
+  // desligados (Meta, Twilio, Zernio, GoZap) não derrubam o boot, completos ou
+  // parciais: viram um aviso só com os NOMES das chaves (ignoredProviderEnvKeys).
+  describe('grupo Evolution obrigatório (R2)', () => {
+    const gozapCompleto = {
+      GOZAP_BASE_URL: 'https://tenant.gozap.dev',
+      GOZAP_ADMIN_TOKEN: 'admin-token',
+      GOZAP_WEBHOOK_TOKEN: 'webhook-token',
+      GOZAP_TOKEN_ENCRYPTION_KEY: 'a'.repeat(64),
+    };
 
-  it('requires the rest of the Meta group when one Meta var is missing', () => {
-    expect(() =>
-      validateEnv({ ...baseEnv, META_ACCESS_TOKEN: undefined }),
-    ).toThrow(/META_ACCESS_TOKEN/);
-  });
-
-  it('requires the full Evolution group when any Evolution var is set', () => {
-    // A lone EVOLUTION_API_KEY makes the whole Evolution group required even
-    // though the Meta group is complete.
-    expect(() => validateEnv({ ...baseEnv, EVOLUTION_API_KEY: 'k' })).toThrow(
-      /EVOLUTION_BASE_URL/,
-    );
-  });
-
-  it('requires the full Twilio group when any Twilio var is set', () => {
-    expect(() =>
-      validateEnv({ ...baseEnv, TWILIO_AUTH_TOKEN: 'auth-token' }),
-    ).toThrow(/TWILIO_ACCOUNT_SID/);
-  });
-
-  it('requires the full Zernio group when any Zernio var is set', () => {
-    expect(() => validateEnv({ ...baseEnv, ZERNIO_API_KEY: 'k' })).toThrow(
-      /ZERNIO_WEBHOOK_SECRET/,
-    );
-  });
-
-  it('boots with ONLY the Zernio group configured (no Meta)', () => {
-    const result = validateEnv({
-      DATABASE_URL: 'postgresql://u:p@h:5432/d',
-      JWT_SECRET: 'a'.repeat(32),
-      APP_BASE_URL: 'http://localhost:5173',
-      WEBHOOK_BASE_URL: 'http://localhost:3000',
-      CORS_ORIGIN: 'http://localhost:5173',
-      ZERNIO_API_KEY: 'k',
-      ZERNIO_WEBHOOK_SECRET: 'wh-secret',
+    it('falha sem EVOLUTION_API_KEY e diz que o grupo Evolution é obrigatório', () => {
+      expect(() =>
+        validateEnv({ ...baseEnv, EVOLUTION_API_KEY: undefined }),
+      ).toThrow(/grupo Evolution é obrigatório/);
     });
-    expect(result.ZERNIO_API_KEY).toBe('k');
-  });
 
-  it('accepts multiple complete groups (Meta + Zernio)', () => {
-    const result = validateEnv({
-      ...baseEnv,
-      ZERNIO_API_KEY: 'k',
-      ZERNIO_WEBHOOK_SECRET: 'wh-secret',
+    it('falha sem Evolution mesmo com outro provedor completo, e a mensagem não vaza valores', () => {
+      const error = () =>
+        validateEnv({
+          ...baseEnv,
+          EVOLUTION_BASE_URL: undefined,
+          EVOLUTION_API_KEY: undefined,
+          EVOLUTION_INSTANCE_NAME: undefined,
+          ...gozapCompleto,
+        });
+      expect(error).toThrow(
+        /defina EVOLUTION_BASE_URL, EVOLUTION_API_KEY e EVOLUTION_INSTANCE_NAME/,
+      );
+      expect(error).not.toThrow(/admin-token|webhook-token|aaaaaaaa/);
     });
-    expect(result.ZERNIO_API_KEY).toBe('k');
-  });
 
-  it('rejects a Zernio group missing WEBHOOK_SECRET even when BASE_URL is set', () => {
-    // ZERNIO_BASE_URL is excluded from the group's presence/completeness
-    // check (it defaults) — setting it does not exempt API_KEY/WEBHOOK_SECRET.
-    expect(() =>
-      validateEnv({
+    it('Evolution completo + GOZAP completo + ZERNIO parcial passa', () => {
+      const result = validateEnv({
         ...baseEnv,
+        ...gozapCompleto,
         ZERNIO_API_KEY: 'k',
-        ZERNIO_BASE_URL: 'https://custom.zernio.example.com/api/v1',
-      }),
-    ).toThrow(/ZERNIO_WEBHOOK_SECRET/);
-  });
-
-  it('boots with ONLY the Evolution group configured (no Meta)', () => {
-    const result = validateEnv({
-      DATABASE_URL: 'postgresql://u:p@h:5432/d',
-      JWT_SECRET: 'a'.repeat(32),
-      APP_BASE_URL: 'http://localhost:5173',
-      WEBHOOK_BASE_URL: 'http://localhost:3000',
-      CORS_ORIGIN: 'http://localhost:5173',
-      EVOLUTION_BASE_URL: 'http://localhost:8080',
-      EVOLUTION_API_KEY: 'k',
-      EVOLUTION_INSTANCE_NAME: 'picoa-dev',
+      });
+      expect(result.GOZAP_ADMIN_TOKEN).toBe('admin-token');
+      expect(result.ZERNIO_API_KEY).toBe('k');
     });
-    expect(result.EVOLUTION_INSTANCE_NAME).toBe('picoa-dev');
-  });
 
-  it('throws when NO provider group is fully configured', () => {
-    expect(() =>
-      validateEnv({
-        DATABASE_URL: 'postgresql://u:p@h:5432/d',
-        JWT_SECRET: 'a'.repeat(32),
-        APP_BASE_URL: 'http://localhost:5173',
-        WEBHOOK_BASE_URL: 'http://localhost:3000',
-        CORS_ORIGIN: 'http://localhost:5173',
-        // no meta / evolution / twilio credentials at all
-      }),
-    ).toThrow(/provider group/i);
-  });
-
-  it('attaches the no-group-configured error to a synthetic `providers` path, not a removed WHATSAPP_PROVIDER field', () => {
-    // There is no single-selector field to blame anymore — the invariant is
-    // cross-group ("at least one of meta/evolution/twilio"), so it can't be
-    // attached to a real env var.
-    const result = envSchema.safeParse({
-      DATABASE_URL: 'postgresql://u:p@h:5432/d',
-      JWT_SECRET: 'a'.repeat(32),
-      APP_BASE_URL: 'http://localhost:5173',
-      WEBHOOK_BASE_URL: 'http://localhost:3000',
-      CORS_ORIGIN: 'http://localhost:5173',
-    });
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(
-        result.error.issues.some((i) => i.path.join('.') === 'providers'),
-      ).toBe(true);
-    }
-  });
-
-  it('rejects a partial group even when another group is complete', () => {
-    // Meta complete + a stray EVOLUTION_BASE_URL (incomplete Evolution group).
-    expect(() =>
-      validateEnv({ ...baseEnv, EVOLUTION_BASE_URL: 'http://localhost:8080' }),
-    ).toThrow(/EVOLUTION_API_KEY/);
-  });
-
-  it('accepts multiple complete groups (Meta + Twilio)', () => {
-    const result = validateEnv({
-      ...baseEnv,
-      TWILIO_ACCOUNT_SID: 'ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
-      TWILIO_AUTH_TOKEN: 'auth-token',
-      TWILIO_WHATSAPP_FROM: 'whatsapp:+14155238886',
-    });
-    expect(result.TWILIO_ACCOUNT_SID).toBe(
-      'ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
-    );
-  });
-
-  it('treats empty strings (compose ${VAR:-}) as absent, not partial', () => {
-    // Meta complete; all Evolution vars forwarded as '' → group is absent, not
-    // a partial group that would fail the boot.
-    expect(() =>
-      validateEnv({
+    it('Evolution completo + GOZAP_TOKEN_ENCRYPTION_KEY malformada passa e a chave vira undefined', () => {
+      const result = validateEnv({
         ...baseEnv,
-        EVOLUTION_BASE_URL: '',
-        EVOLUTION_API_KEY: '',
-        EVOLUTION_INSTANCE_NAME: '',
-      }),
-    ).not.toThrow();
+        GOZAP_TOKEN_ENCRYPTION_KEY: 'not-a-valid-hex-key',
+      });
+      expect(result.GOZAP_TOKEN_ENCRYPTION_KEY).toBeUndefined();
+    });
+  });
+
+  describe('GoZap malformado não derruba o boot (R2)', () => {
+    it('com Evolution completo, GOZAP_CHECK_RATE_PER_MIN=abc e GOZAP_MAX_INSTANCES=0 passa e cai nos defaults', () => {
+      const result = validateEnv({
+        ...baseEnv,
+        GOZAP_CHECK_RATE_PER_MIN: 'abc',
+        GOZAP_MAX_INSTANCES: '0',
+      });
+      expect(result.GOZAP_CHECK_RATE_PER_MIN).toBe(40);
+      expect(result.GOZAP_MAX_INSTANCES).toBe(1);
+    });
   });
 
   it('treats empty Zernio strings (compose ${VAR:-}) as absent, not partial', () => {
@@ -284,17 +181,6 @@ describe('validateEnv', () => {
     expect(result.TWILIO_MESSAGING_SERVICE_SID).toBe(
       'MGxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
     );
-  });
-
-  it('rejects a Twilio group missing BOTH sender fields', () => {
-    expect(() =>
-      validateEnv({
-        ...baseEnv,
-        TWILIO_ACCOUNT_SID: 'ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
-        TWILIO_AUTH_TOKEN: 'auth-token',
-        // neither TWILIO_WHATSAPP_FROM nor TWILIO_MESSAGING_SERVICE_SID
-      }),
-    ).toThrow(/TWILIO_WHATSAPP_FROM|TWILIO_MESSAGING_SERVICE_SID/);
   });
 
   it('accepts a full Twilio config', () => {
@@ -597,16 +483,18 @@ describe('envSchema ZERNIO_BASE_URL', () => {
       );
   });
 
-  it('rejects a non-url ZERNIO_BASE_URL', () => {
+  it('falls back to the default on a non-url ZERNIO_BASE_URL (Zernio is off: malformed must not crash boot)', () => {
     const r = envSchema.safeParse({ ...base, ZERNIO_BASE_URL: 'not-a-url' });
-    expect(r.success).toBe(false);
+    expect(r.success).toBe(true);
+    if (r.success)
+      expect(r.data.ZERNIO_BASE_URL).toBe('https://zernio.com/api/v1');
   });
 });
 
-// F-A Task 3: the GOZAP_* group is all-or-nothing (4 vars), exactly like the
-// other provider groups — the tests below prove both halves of the safety
-// contract: a deploy with NONE of the vars boots untouched (inertia), and a
-// deploy with SOME but not ALL of them fails LOUD at boot (never silently).
+// GoZap is switched off (somente-evolution, R2): its credential group is no
+// longer validated at boot. No GOZAP_* var set boots untouched (inertia), and
+// partial or malformed ones do not crash boot either (see also the
+// 'grupo Evolution obrigatório (R2)' describe above).
 describe('envSchema GOZAP_*', () => {
   const fullGozap = {
     GOZAP_BASE_URL: 'https://tenant.gozap.dev',
@@ -623,38 +511,13 @@ describe('envSchema GOZAP_*', () => {
     expect(r.success).toBe(true);
   });
 
-  it('boots with ONLY the GoZap group configured (no Evolution/Meta/Twilio/Zernio)', () => {
+  it('a partially configured GOZAP group does NOT fail boot (provider is off)', () => {
     const r = envSchema.safeParse({
-      DATABASE_URL: 'postgresql://u:p@h:5432/d',
-      JWT_SECRET: 'a'.repeat(32),
-      APP_BASE_URL: 'http://localhost:5173',
-      WEBHOOK_BASE_URL: 'http://localhost:3000',
-      CORS_ORIGIN: 'http://localhost:5173',
-      ...fullGozap,
+      ...base,
+      GOZAP_ADMIN_TOKEN: 'admin-token',
     });
     expect(r.success).toBe(true);
-    if (r.success) {
-      expect(r.data.GOZAP_BASE_URL).toBe('https://tenant.gozap.dev');
-      expect(r.data.GOZAP_TOKEN_ENCRYPTION_KEY).toBe('a'.repeat(64));
-    }
   });
-
-  it.each([
-    ['GOZAP_BASE_URL', { GOZAP_BASE_URL: 'https://tenant.gozap.dev' }],
-    ['GOZAP_ADMIN_TOKEN', { GOZAP_ADMIN_TOKEN: 'admin-token' }],
-    ['GOZAP_WEBHOOK_TOKEN', { GOZAP_WEBHOOK_TOKEN: 'webhook-token' }],
-    [
-      'GOZAP_TOKEN_ENCRYPTION_KEY',
-      { GOZAP_TOKEN_ENCRYPTION_KEY: 'a'.repeat(64) },
-    ],
-  ])(
-    'FAILS BOOT (does not pass in silence) when only %s is set — the group is all-or-nothing',
-    (_label, partial) => {
-      expect(() => validateEnv({ ...base, ...partial })).toThrow();
-      const r = envSchema.safeParse({ ...base, ...partial });
-      expect(r.success).toBe(false);
-    },
-  );
 
   it('treats empty GOZAP_* strings (compose ${VAR:-} default) as absent, not partial', () => {
     const r = envSchema.safeParse({
@@ -675,33 +538,14 @@ describe('envSchema GOZAP_*', () => {
     if (r.success) expect(r.data.GOZAP_BASE_URL).toBeUndefined();
   });
 
-  it('rejects a non-url GOZAP_BASE_URL', () => {
+  it('a non-url GOZAP_BASE_URL does NOT fail boot and becomes undefined', () => {
     const r = envSchema.safeParse({
       ...base,
       ...fullGozap,
       GOZAP_BASE_URL: 'not-a-url',
     });
-    expect(r.success).toBe(false);
-  });
-
-  it('rejects a malformed GOZAP_TOKEN_ENCRYPTION_KEY (must be 64 hex chars — AES-256-GCM key)', () => {
-    expect(() =>
-      validateEnv({
-        ...base,
-        ...fullGozap,
-        GOZAP_TOKEN_ENCRYPTION_KEY: 'not-a-valid-hex-key',
-      }),
-    ).toThrow(/GOZAP_TOKEN_ENCRYPTION_KEY/);
-  });
-
-  it('rejects a GOZAP_TOKEN_ENCRYPTION_KEY that is hex but the wrong length', () => {
-    expect(() =>
-      validateEnv({
-        ...base,
-        ...fullGozap,
-        GOZAP_TOKEN_ENCRYPTION_KEY: 'ab'.repeat(16), // 32 hex chars = 16 bytes, not 32
-      }),
-    ).toThrow(/GOZAP_TOKEN_ENCRYPTION_KEY/);
+    expect(r.success).toBe(true);
+    if (r.success) expect(r.data.GOZAP_BASE_URL).toBeUndefined();
   });
 
   it('GOZAP_WEBHOOK_DEBUG defaults to false and never affects group completeness', () => {
@@ -992,10 +836,9 @@ describe('validação ativa de números: envs de risco (Fase B)', () => {
     APP_BASE_URL: 'http://localhost:5173',
     WEBHOOK_BASE_URL: 'http://localhost:3000',
     CORS_ORIGIN: 'http://localhost:5173',
-    META_ACCESS_TOKEN: 'meta-token',
-    META_PHONE_NUMBER_ID: '123',
-    META_APP_SECRET: 'meta-secret',
-    META_WEBHOOK_VERIFY_TOKEN: 'verify',
+    EVOLUTION_BASE_URL: 'http://localhost:8080',
+    EVOLUTION_API_KEY: 'evolution-key',
+    EVOLUTION_INSTANCE_NAME: 'picoa-dev',
   };
 
   it('CONTACT_SYNC_CRON_ENABLED: padrão DESLIGADO', () => {
@@ -1049,10 +892,11 @@ describe('envSchema GOZAP_MAX_INSTANCES', () => {
   });
 
   it.each(['0', '-1', '1.5', 'abc'])(
-    'GOZAP_MAX_INSTANCES=%s é recusado no boot',
+    'GOZAP_MAX_INSTANCES=%s malformado cai no padrão 1 e não derruba o boot (R2)',
     (input) => {
       const r = envSchema.safeParse({ ...base, GOZAP_MAX_INSTANCES: input });
-      expect(r.success).toBe(false);
+      expect(r.success).toBe(true);
+      if (r.success) expect(r.data.GOZAP_MAX_INSTANCES).toBe(1);
     },
   );
 });

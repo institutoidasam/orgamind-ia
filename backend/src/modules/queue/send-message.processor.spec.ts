@@ -13,7 +13,7 @@ import type { WhatsappProvidersService } from '../whatsapp-providers/whatsapp-pr
 import { WhatsappSendError } from '../whatsapp-providers/errors/whatsapp.errors';
 import { DomainError } from '../../shared/errors/domain.error';
 import type { SendMessageJob } from './queue.constants';
-import type { WhatsappInstanceRouter } from '../whatsapp-instances/whatsapp-instance-router.service';
+import { WhatsappInstanceRouter } from '../whatsapp-instances/whatsapp-instance-router.service';
 import type { WhatsappInstancesRepository } from '../whatsapp-instances/whatsapp-instances.repository';
 import type { CampaignsRepository } from '../campaigns/campaigns.repository';
 
@@ -31,6 +31,24 @@ vi.mock('../campaigns/pacing.helper', () => ({
   PACING_BURST_SIZE: 100,
   PACING_BURST_PAUSE_MS: 300_000,
 }));
+
+// O código dos provedores desligados (Twilio/Meta/Zernio) segue no repositório,
+// inativo (GC5), e as suítes legadas abaixo ainda o exercitam. Por padrão elas
+// rodam com todo provedor "ligado"; só a suíte do guard de provedor desligado
+// zera `allEnabled` e usa a regra real (`ENABLED_CHANNEL_PROVIDERS`).
+const providerGate = vi.hoisted(() => ({ allEnabled: true }));
+vi.mock('../../shared/config/enabled-providers', async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import('../../shared/config/enabled-providers')
+    >();
+  return {
+    ...actual,
+    isEnabledChannelProvider: (
+      provider: Parameters<typeof actual.isEnabledChannelProvider>[0],
+    ) => providerGate.allEnabled || actual.isEnabledChannelProvider(provider),
+  };
+});
 
 import * as Sentry from '@sentry/nestjs';
 import * as pacingHelper from '../campaigns/pacing.helper';
@@ -3952,5 +3970,142 @@ describe('K4 — a guarda não carimba linha que já saiu da fila', () => {
       expect.anything(),
     );
     expect(m.campaignsService.maybeCompleteCampaign).not.toHaveBeenCalled();
+  });
+});
+
+// ── B7: canal de provedor DESLIGADO → FAILED claro, sem retry ────────────────
+// Só a Evolution está ligada. Mensagem que chega ao processor num canal de
+// outro provedor vira FAILED `channel.provider_disabled` (não lança, não
+// retenta), antes de janela, lock, throttle ZA4, cota e adapter.
+function useRealProviderGate() {
+  beforeEach(() => {
+    providerGate.allEnabled = false;
+  });
+  afterEach(() => {
+    providerGate.allEnabled = true;
+  });
+}
+
+function setupDisabled(provider: string) {
+  const m = makeProcessor({ provider });
+  m.prisma.message.findUnique.mockResolvedValue(makeAntiBanMessage());
+  return m;
+}
+
+function expectFailedProviderDisabled(m: ReturnType<typeof makeProcessor>) {
+  expect(m.prisma.message.updateMany).toHaveBeenCalledWith({
+    where: { id: 'msg-1', status: 'QUEUED' },
+    data: expect.objectContaining({
+      status: 'FAILED',
+      errorCode: 'channel.provider_disabled',
+    }) as never,
+  });
+  expect(m.wa.send).not.toHaveBeenCalled();
+  expect(m.campaignsRepo.claimForSend).not.toHaveBeenCalled();
+  expect(m.campaignsRepo.markWaitingForInstance).not.toHaveBeenCalled();
+  expect(m.instancesRepo.reserveSendSlot).not.toHaveBeenCalled();
+}
+
+describe('SendMessageProcessor — guard de provedor desligado', () => {
+  useRealProviderGate();
+
+  it('mensagem QUEUED em canal GOZAP → FAILED channel.provider_disabled, sem chamar adapter e sem lançar', async () => {
+    const m = setupDisabled('GOZAP');
+
+    await expect(
+      m.processor.process(makeAntiBanJob()),
+    ).resolves.toBeUndefined();
+
+    expectFailedProviderDisabled(m);
+    expect(m.prisma.message.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          errorMessage: 'Este número usa uma integração desligada (GoZap).',
+        }) as never,
+      }),
+    );
+    expect(m.campaignsService.maybeCompleteCampaign).toHaveBeenCalledWith(
+      'camp1',
+    );
+  });
+
+  it('linha já fora de QUEUED → guard não grava e retorna', async () => {
+    const m = setupDisabled('GOZAP');
+    m.prisma.message.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(
+      m.processor.process(makeAntiBanJob()),
+    ).resolves.toBeUndefined();
+
+    expect(m.wa.send).not.toHaveBeenCalled();
+    expect(m.prisma.contact.update).not.toHaveBeenCalled();
+    expect(m.campaignsService.maybeCompleteCampaign).not.toHaveBeenCalled();
+  });
+});
+
+/** Troca o roteador mockado por um real cujo último evento de conexão é `close`. */
+function useRealRouterWithLastEventClose(
+  m: ReturnType<typeof setupDisabled>,
+): void {
+  const realRouter = new WhatsappInstanceRouter(
+    {
+      message: { findFirst: vi.fn().mockResolvedValue(null) },
+      whatsappConnectionEvent: {
+        findFirst: vi.fn().mockResolvedValue({ state: 'close' }),
+      },
+    } as never,
+    {
+      findById: vi.fn().mockResolvedValue({
+        ...makeInstance({ provider: 'GOZAP' }),
+        isActive: true,
+      }),
+    } as never,
+  );
+  m.router.resolveForSend.mockImplementation(
+    (args: Parameters<WhatsappInstanceRouter['resolveForSend']>[0]) =>
+      realRouter.resolveForSend(args),
+  );
+}
+
+describe('SendMessageProcessor — guard de provedor desligado: caminhos do roteador', () => {
+  useRealProviderGate();
+
+  it('GOZAP último evento close → FAILED (roteador real não estaciona em WAITING_INSTANCE)', async () => {
+    const m = setupDisabled('GOZAP');
+    useRealRouterWithLastEventClose(m);
+
+    await m.processor.process(makeAntiBanJob());
+
+    expectFailedProviderDisabled(m);
+  });
+
+  it('re-resolve pós-reset devolve canal GOZAP → FAILED channel.provider_disabled', async () => {
+    const m = setupDisabled('EVOLUTION');
+    const oldReset = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    m.router.resolveForSend
+      .mockResolvedValueOnce({
+        kind: 'send',
+        instance: makeInstance({ sentTodayResetAt: oldReset }),
+      })
+      .mockResolvedValueOnce({
+        kind: 'send',
+        instance: makeInstance({ provider: 'GOZAP' }),
+      });
+
+    await m.processor.process(makeAntiBanJob());
+
+    expect(m.instancesRepo.resetSentToday).toHaveBeenCalledTimes(1);
+    expectFailedProviderDisabled(m);
+  });
+
+  it('canal ZERNIO não passa pelo throttle ZA4', async () => {
+    const m = setupDisabled('ZERNIO');
+
+    await m.processor.process(makeAntiBanJob());
+
+    expectFailedProviderDisabled(m);
+    expect(
+      m.redis.set.mock.calls.map((c: unknown[]) => c[0] as string),
+    ).not.toContain('zernio:send:throttle:inst-default');
   });
 });

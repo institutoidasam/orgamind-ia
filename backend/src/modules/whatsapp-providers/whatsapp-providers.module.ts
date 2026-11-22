@@ -1,7 +1,6 @@
-import { Module, Provider } from '@nestjs/common';
+import { Logger, Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import type { ChannelProvider } from '@prisma/client';
 import { WhatsappProvidersService } from './whatsapp-providers.service';
 import { WhatsappProvidersController } from './whatsapp-providers.controller';
 import { WhatsappProvidersRepository } from './whatsapp-providers.repository';
@@ -11,17 +10,11 @@ import { ZernioInboxClient } from './zernio-inbox.client';
 import { ZernioAnalyticsClient } from './zernio-analytics.client';
 import { ZernioBroadcastSyncService } from './zernio-broadcast-sync.service';
 import { ZernioAnalyticsSyncService } from './zernio-analytics-sync.service';
-import { ZernioBroadcastSyncProcessor } from './zernio-broadcast-sync.processor';
-import { ZernioBroadcastSyncController } from './zernio-broadcast-sync.controller';
 import { WebhookDropsService } from './webhook-drops.service';
 import { ChannelHealthService } from './channel-health.service';
 import { ZernioTemplateService } from './zernio-template.service';
-import { TwilioTierSyncProcessor } from './twilio-tier-sync.processor';
 import { QUEUE_NAMES } from '../queue/queue.constants';
-import {
-  MESSAGE_PROVIDER,
-  type MessageProvider,
-} from './ports/message-provider.port';
+import { MESSAGE_PROVIDER } from './ports/message-provider.port';
 import { ProviderRegistry } from './provider-registry.service';
 import { TwilioContentService } from './twilio-content.service';
 import { TwilioMediaService } from './twilio-media.service';
@@ -31,105 +24,63 @@ import { TwilioCloudAdapter } from './adapters/twilio-cloud.adapter';
 import { ZernioCloudAdapter } from './adapters/zernio-cloud.adapter';
 import { GozapCloudAdapter } from './adapters/gozap-cloud.adapter';
 import { GozapInstancesService } from './gozap-instances.service';
-import { GozapConnectionReconcilerProcessor } from './gozap-connection-reconciler.processor';
 import { ChannelLiveStateService } from './channel-live-state.service';
 import { SectorChannelService } from './sector-channel.service';
+import { DisabledChannelsService } from './disabled-channels.service';
 import { WhatsappInstancesModule } from '../whatsapp-instances/whatsapp-instances.module';
 import { ZernioBroadcastClient } from './zernio-broadcast.client';
+import { envSchema, type Env } from '../../shared/config/env.schema';
 import {
-  configuredProviderGroups,
-  type Env,
-} from '../../shared/config/env.schema';
+  DISABLED_PROVIDER_ENV_KEYS,
+  ignoredProviderEnvKeys,
+  ignoredProviderEnvMessage,
+} from '../../shared/config/enabled-providers';
 
-// The env keys the registry consults to decide which provider groups are
-// complete (mirrors env.schema's group definitions). Built from ConfigService
-// at DI time — no `process.env` at module scope anymore.
-const PROVIDER_ENV_KEYS = [
-  'META_ACCESS_TOKEN',
-  'META_PHONE_NUMBER_ID',
-  'META_APP_SECRET',
-  'META_WEBHOOK_VERIFY_TOKEN',
-  'EVOLUTION_BASE_URL',
-  'EVOLUTION_API_KEY',
-  'EVOLUTION_INSTANCE_NAME',
-  'TWILIO_ACCOUNT_SID',
-  'TWILIO_AUTH_TOKEN',
-  'TWILIO_WHATSAPP_FROM',
-  'TWILIO_MESSAGING_SERVICE_SID',
-  'ZERNIO_API_KEY',
-  'ZERNIO_BASE_URL',
-  'ZERNIO_WEBHOOK_SECRET',
-  'GOZAP_BASE_URL',
-  'GOZAP_ADMIN_TOKEN',
-  'GOZAP_WEBHOOK_TOKEN',
-  'GOZAP_TOKEN_ENCRYPTION_KEY',
-] as const;
+// `ZERNIO_BASE_URL` tem default no `envSchema` e o ConfigModule grava os
+// defaults validados em `process.env`: tanto `config.get` quanto `process.env`
+// a devolvem preenchida mesmo quando o operador nunca a configurou. Valor igual
+// ao default conta como ausente, senão o aviso de chaves ignoradas sairia em
+// todo boot.
+const ZERNIO_BASE_URL_DEFAULT =
+  envSchema.shape.ZERNIO_BASE_URL.parse(undefined);
 
+// As chaves de env dos provedores desligados (C1), lidas do ConfigService no
+// momento da DI — nada de `process.env` no escopo do módulo.
 function envSnapshot(config: ConfigService<Env>): Record<string, unknown> {
   const snap: Record<string, unknown> = {};
-  for (const key of PROVIDER_ENV_KEYS) {
+  for (const key of DISABLED_PROVIDER_ENV_KEYS) {
     snap[key] = config.get(key as keyof Env, { infer: true });
+  }
+  if (snap.ZERNIO_BASE_URL === ZERNIO_BASE_URL_DEFAULT) {
+    delete snap.ZERNIO_BASE_URL;
   }
   return snap;
 }
 
-// The multi-provider registry: injects all three adapters + ConfigService, and
-// registers ONLY the providers whose env group is complete. The adapters are
-// plain Nest providers below, so their constructors/lifecycle hooks run once and
-// the registry just decides which ones are reachable per channel.
-const registryProvider: Provider = {
+// O registry só monta a Evolution (R1), mesmo com env de outros provedores. Os
+// adapters dos desligados seguem como providers Nest (D3/GC5), mas ficam fora
+// do mapa. Chaves de env de provedores desligados viram UM aviso no boot, só
+// com os NOMES (GC6).
+export const registryProvider = {
   provide: ProviderRegistry,
-  inject: [
-    ConfigService,
-    MetaCloudAdapter,
-    EvolutionApiAdapter,
-    TwilioCloudAdapter,
-    ZernioCloudAdapter,
-    GozapCloudAdapter,
-  ],
-  useFactory: (
-    config: ConfigService<Env>,
-    meta: MetaCloudAdapter,
-    evolution: EvolutionApiAdapter,
-    twilio: TwilioCloudAdapter,
-    zernio: ZernioCloudAdapter,
-    gozap: GozapCloudAdapter,
-  ) => {
-    const configured = new Set(configuredProviderGroups(envSnapshot(config)));
-    const map = new Map<ChannelProvider, MessageProvider>();
-    if (configured.has('meta')) map.set('META', meta);
-    if (configured.has('evolution')) map.set('EVOLUTION', evolution);
-    if (configured.has('twilio')) map.set('TWILIO', twilio);
-    if (configured.has('zernio')) map.set('ZERNIO', zernio);
-    if (configured.has('gozap')) map.set('GOZAP', gozap);
-    return new ProviderRegistry(map);
+  inject: [ConfigService, EvolutionApiAdapter],
+  useFactory: (config: ConfigService<Env>, evolution: EvolutionApiAdapter) => {
+    const ignored = ignoredProviderEnvMessage(
+      ignoredProviderEnvKeys(envSnapshot(config)),
+    );
+    if (ignored !== null) new Logger('ProviderRegistry').warn(ignored);
+    return new ProviderRegistry(new Map([['EVOLUTION', evolution]]));
   },
 };
 
-// Legacy single-provider token (MESSAGE_PROVIDER). @deprecated: F6 removed
-// the WHATSAPP_PROVIDER env selector; this factory now picks a default
-// adapter from whichever provider GROUPS are actually configured on this
-// deploy (evolution > meta > twilio — same priority the old default implied,
-// since 'evolution' was every real deploy's default). Still resolved via
-// ConfigService (not `process.env` at module scope). Kept alive only for
-// WhatsappProvidersService's remaining legacy delegates (parseInboundMessages
-// / parseInboundChatMessages) that don't yet resolve a specific channel —
-// callers that know their channel/provider should use the registry-backed
-// *For methods instead.
-const legacyProvider: Provider = {
+// Token legado (MESSAGE_PROVIDER). @deprecated: só sobra para os delegates
+// legados do WhatsappProvidersService (parseInboundMessages /
+// parseInboundChatMessages) que ainda não resolvem um canal específico. Com só
+// a Evolution ligada, é sempre o adapter dela.
+export const legacyProvider = {
   provide: MESSAGE_PROVIDER,
-  inject: [ConfigService, MetaCloudAdapter, EvolutionApiAdapter, TwilioCloudAdapter],
-  useFactory: (
-    config: ConfigService<Env>,
-    meta: MetaCloudAdapter,
-    evolution: EvolutionApiAdapter,
-    twilio: TwilioCloudAdapter,
-  ): MessageProvider => {
-    const configured = new Set(configuredProviderGroups(envSnapshot(config)));
-    if (configured.has('evolution')) return evolution;
-    if (configured.has('meta')) return meta;
-    return twilio;
-  },
+  inject: [EvolutionApiAdapter],
+  useFactory: (evolution: EvolutionApiAdapter) => evolution,
 };
 
 @Module({
@@ -212,7 +163,12 @@ const legacyProvider: Provider = {
       },
     }),
   ],
-  controllers: [WhatsappProvidersController, ZernioBroadcastSyncController],
+  controllers: [WhatsappProvidersController],
+  // R8/GC5: nenhum @Processor nem controller dos provedores desligados é
+  // registrado aqui (GozapConnectionReconcilerProcessor, TwilioTierSyncProcessor,
+  // ZernioBroadcastSyncProcessor, ZernioBroadcastSyncController); os arquivos
+  // ficam no repositório, inativos. Adapters e serviços seguem como providers
+  // porque código compartilhado os injeta (D3).
   providers: [
     MetaCloudAdapter,
     EvolutionApiAdapter,
@@ -222,10 +178,6 @@ const legacyProvider: Provider = {
     // F-A Task 7 — ciclo de vida da instância GoZap (criação/QR/desconexão),
     // separado do adapter de envio (ver a nota no topo de gozap-cloud.adapter.ts).
     GozapInstancesService,
-    // Puxa o estado da sessão GoZap de 60 em 60s e converge o banco — sem ele
-    // um canal pareado fica offline para o roteador de envio (incidente
-    // 2026-08-07), e uma sessão que cai nunca é notada.
-    GozapConnectionReconcilerProcessor,
     registryProvider,
     legacyProvider,
     WhatsappProvidersService,
@@ -239,7 +191,6 @@ const legacyProvider: Provider = {
     // Senders API v2 (messaging_limit/quality_rating) + tier-sync diário do
     // dailySendLimit (T8) — mesmo padrão do template-approval-sync.
     TwilioSendersService,
-    TwilioTierSyncProcessor,
     // Cliente de `GET /accounts` do Zernio: valida o zernioAccountId na criação
     // do canal e alimenta o seletor de contas da página Canais.
     ZernioAccountsService,
@@ -262,7 +213,6 @@ const legacyProvider: Provider = {
     ZernioAnalyticsClient,
     ZernioBroadcastSyncService,
     ZernioAnalyticsSyncService,
-    ZernioBroadcastSyncProcessor,
     // ★ ZB — o CLIENTE de escrita do broadcast (POST /broadcasts → /recipients →
     // /send → /cancel). É o que faz a campanha do orgamind APARECER NO PAINEL do
     // Zernio: o envio 1-a-1 usa `POST /inbox/conversations`, que não cria disparo
@@ -277,6 +227,8 @@ const legacyProvider: Provider = {
     // Número por área (C1): associa áreas ao número, valida antes de criar a
     // conexão e lista as áreas de cada número. Só depende de Prisma e Audit.
     SectorChannelService,
+    // Números de provedor desligado: lista (ADMIN) e remoção local (R3/R6).
+    DisabledChannelsService,
     // Estado ao vivo do número (GOZAP/EVOLUTION), com cache de 15 s por canal.
     // Consome GozapInstancesService e EvolutionApiAdapter, já providers daqui.
     ChannelLiveStateService,

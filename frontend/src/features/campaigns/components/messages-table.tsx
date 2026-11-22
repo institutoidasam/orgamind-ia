@@ -75,8 +75,12 @@ const SUGESTAO_POR_CODE: Record<string, string> = {
  *
  * Um código desconhecido cai no próprio código cru: a tela nunca deve ficar
  * MUDA sobre um motivo que o backend registrou, mesmo um que ela não conheça.
+ *
+ * O mesmo mapa rotula o motivo das linhas FAILED que o operador precisa ler sem
+ * decifrar o código (`channel.provider_disabled`: a campanha ficou agendada num
+ * número de integração desligada — somente-Evolution, R12).
  */
-const CANCELLED_REASON_LABELS: Record<string, string> = {
+const REASON_LABELS: Record<string, string> = {
   opted_out: "O contato pediu para sair (opt-out) antes de a mensagem sair.",
   campaign_cancelled:
     "A campanha foi cancelada enquanto esta mensagem ainda estava na fila — ela não saiu.",
@@ -84,6 +88,7 @@ const CANCELLED_REASON_LABELS: Record<string, string> = {
     "Não saiu para não repetir: este contato já recebeu esta campanha por outra linha.",
   duplicate_row_neutralized:
     "Linha duplicada da mesma campanha para o mesmo contato — o envio válido está em outra linha.",
+  "channel.provider_disabled": "Número de integração desligada",
 };
 
 async function motivoDaRecusa(
@@ -253,6 +258,30 @@ export function MessagesTable({ campaignId }: { campaignId: string }) {
   );
 }
 
+/**
+ * O motivo de uma linha FAILED: a mensagem do backend e, abaixo, o rótulo do
+ * código quando a tela o conhece (`REASON_LABELS`) — senão o código cru.
+ */
+function FailedReason({ code, text }: { code: string | null; text: string }) {
+  const label = code ? REASON_LABELS[code] : undefined;
+  return (
+    <div
+      className="max-w-[260px] text-xs text-rose-600 dark:text-rose-400"
+      title={`${code ?? "erro"}: ${text}`}
+    >
+      <div className="line-clamp-2">{text}</div>
+      {label && (
+        <div data-testid="failed-reason" className="mt-0.5 text-[11px] font-medium">
+          {label}
+        </div>
+      )}
+      {code && !label && (
+        <div className="mt-0.5 font-mono text-[10px] text-rose-500/80">{code}</div>
+      )}
+    </div>
+  );
+}
+
 function MessageRow({
   message,
   campaignId,
@@ -309,17 +338,10 @@ function MessageRow({
         <div className="space-y-1">
           <MessageStatusBadge status={message.status} />
           {isFailed && message.errorMessage && (
-            <div
-              className="max-w-[260px] text-xs text-rose-600 dark:text-rose-400"
-              title={`${message.errorCode ?? "erro"}: ${message.errorMessage}`}
-            >
-              <div className="line-clamp-2">{message.errorMessage}</div>
-              {message.errorCode && (
-                <div className="mt-0.5 font-mono text-[10px] text-rose-500/80">
-                  {message.errorCode}
-                </div>
-              )}
-            </div>
+            <FailedReason
+              code={message.errorCode}
+              text={message.errorMessage}
+            />
           )}
           {isCancelled && message.errorCode && (
             <div
@@ -327,7 +349,7 @@ function MessageRow({
               className="max-w-[260px] text-xs text-muted-foreground"
               title={message.errorMessage ?? message.errorCode}
             >
-              {CANCELLED_REASON_LABELS[message.errorCode] ?? message.errorCode}
+              {REASON_LABELS[message.errorCode] ?? message.errorCode}
             </div>
           )}
         </div>

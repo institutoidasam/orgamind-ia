@@ -72,6 +72,8 @@ import {
   type ZernioBroadcastCancelJob,
 } from '../queue/queue.constants';
 import { ValidationError } from '../../shared/errors/domain.error';
+import { ChannelProviderDisabledError } from '../../shared/errors/channel-provider-disabled.error';
+import { isEnabledChannelProvider } from '../../shared/config/enabled-providers';
 import { AuditService } from '../../shared/audit/audit.service';
 import {
   hasExcludeInvalidGroup,
@@ -706,7 +708,7 @@ export class CampaignsService {
     // channel of a different provider. A missing channel isn't checked here
     // — that's the INSTANCE_DELETED guard below (via runChecks), which is
     // unconditional and not overridable.
-    const channel = await this.instancesRepo.findById(input.defaultInstanceId);
+    const channel = await this.findEnabledChannel(input.defaultInstanceId);
     if (channel && channel.provider !== template.provider) {
       throw new CampaignTemplateProviderMismatchError(
         template.provider,
@@ -1867,7 +1869,7 @@ export class CampaignsService {
   }
 
   async run(id: string) {
-    const campaign = await this.repo.findById(id);
+    const campaign = await this.findCampaignForRun(id);
     if (!campaign) throw new CampaignNotFoundError(id);
 
     // T7 — re-validate template×channel provider at dispatch time too: the
@@ -2039,6 +2041,47 @@ export class CampaignsService {
       }
     }
     return select;
+  }
+
+  /**
+   * Canal da campanha, recusando provedor DESLIGADO (só a Evolution está
+   * ligada) com 409 `channel.provider_disabled`. Só `create()` e `run()` (ação
+   * do operador) passam por aqui; o disparo agendado NÃO: `runScheduled`
+   * enfileira e o processor falha cada mensagem com o mesmo código.
+   */
+  private async findEnabledChannel(defaultInstanceId: string) {
+    const channel = await this.instancesRepo.findById(defaultInstanceId);
+    if (channel && !isEnabledChannelProvider(channel.provider)) {
+      throw new ChannelProviderDisabledError(channel.provider);
+    }
+    return channel;
+  }
+
+  /**
+   * Carrega a campanha para o disparo manual e recusa canal de provedor
+   * desligado ANTES do lock e da transição DRAFT->QUEUED: a campanha segue em
+   * DRAFT em vez de ficar RUNNING sem nada enfileirado.
+   */
+  private async findCampaignForRun(id: string) {
+    const campaign = await this.repo.findById(id);
+    if (campaign) await this.findEnabledChannel(campaign.defaultInstanceId);
+    return campaign;
+  }
+
+  /**
+   * ZB — o canal manda por broadcast? Só o ZERNIO com o broadcast ligado e a
+   * fila disponível; provedor desligado nunca usa a fila de broadcast.
+   */
+  private channelUsesBroadcast(
+    channel: Pick<Channel, 'provider' | 'zernioBroadcastEnabled'> | null,
+  ): boolean {
+    return (
+      channel != null &&
+      isEnabledChannelProvider(channel.provider) &&
+      channel.provider === 'ZERNIO' &&
+      channel.zernioBroadcastEnabled === true &&
+      this.broadcastDispatchQueue != null
+    );
   }
 
   /**
@@ -2254,10 +2297,7 @@ export class CampaignsService {
     //
     // É por isso que este é o único ponto tocado: tudo o que protege as 13.400
     // pessoas mora ACIMA desta linha e continua rodando igual.
-    const useBroadcast =
-      channel?.provider === 'ZERNIO' &&
-      channel.zernioBroadcastEnabled === true &&
-      this.broadcastDispatchQueue != null;
+    const useBroadcast = this.channelUsesBroadcast(channel);
     const broadcastMessageIds: string[] = [];
 
     const select = this.buildRecipientSelect(args.variableMap);

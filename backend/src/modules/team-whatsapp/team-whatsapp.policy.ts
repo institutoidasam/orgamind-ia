@@ -1,8 +1,15 @@
 import type { ChannelProvider, Role } from '@prisma/client';
+import {
+  ENABLED_CHANNEL_PROVIDERS,
+  type EnabledChannelProvider,
+} from '../../shared/config/enabled-providers';
 
-/** Provedores não oficiais: aceitam texto livre fora de janela de sessão. */
-export const TEAM_PROVIDERS = ['GOZAP', 'EVOLUTION'] as const;
-export type TeamProvider = (typeof TEAM_PROVIDERS)[number];
+/**
+ * Provedores que o envio da equipe aceita: os ligados (D1). Canal de provedor
+ * desligado vira "sem número" em todo lugar que passa por `effectiveChannel`.
+ */
+export const TEAM_PROVIDERS = ENABLED_CHANNEL_PROVIDERS;
+export type TeamProvider = EnabledChannelProvider;
 
 export function isTeamProvider(
   provider: ChannelProvider,

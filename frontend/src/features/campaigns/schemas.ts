@@ -232,10 +232,9 @@ export const createCampaignSchema = z.object({
    * `convite_atividades` não autoriza `captacao_recursos` (LGPD art. 8º §4º —
    * autorização genérica é nula).
    *
-   * Obrigatória em canal OFICIAL (TWILIO/META/ZERNIO) — o backend recusa a
-   * criação sem ela, e o wizard bloqueia o avanço do passo 1. Opcional em
-   * EVOLUTION (base legada + override), onde o gate segue existindo por força da
-   * LGPD, mas não do contrato com a Meta.
+   * Obrigatória: o backend recusa a criação sem ela, e o wizard bloqueia o
+   * avanço do passo 1 (o gate de consentimento é por finalidade em todo canal;
+   * campanha EVOLUTION sem finalidade nasceria 100% pulada, em silêncio).
    */
   purposeKey: z.string().min(1).optional(),
   /**
@@ -262,8 +261,7 @@ export const createCampaignSchema = z.object({
    * campanha, com a janela de horário comercial (8h–20h) do canal. Espelha
    * `createCampaignSchema.respeitarJanelaDeEnvio` do backend
    * (`backend/src/schemas/contracts/campaign.schema.ts`) — a janela
-   * (`Channel.sendWindow*`) só tem efeito visível em canal DE SESSÃO
-   * (EVOLUTION); canais OFICIAIS (ZERNIO em produção) nunca a respeitaram.
+   * (`Channel.sendWindow*`) vale para o canal EVOLUTION (canal de sessão).
    * `true` (default no backend) mantém o comportamento atual; o wizard já
    * nasce com o toggle ligado.
    */

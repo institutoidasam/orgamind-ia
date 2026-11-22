@@ -5,37 +5,21 @@ import type { ProvidersQueryState } from './resolve-channel';
 /**
  * T15 — A REGRA ÚNICA para achar o canal de uma campanha.
  *
- * A causa do bug: `useInstances()` (GET /whatsapp/instances) só devolve
- * canais EVOLUTION. O cabeçalho de progresso e o passo final do assistente
- * resolviam o canal por ali — então para GOZAP (o canal de PRODUÇÃO),
- * ZERNIO, TWILIO e META o canal buscado ficava `undefined` para sempre, e o
- * envio ficava bloqueado com "Canal não encontrado" mesmo com o canal são.
- * `useProviders()` (GET /whatsapp/providers) lista canais de TODO provedor
- * configurado — este helper decide, de um jeito só, o que fazer com essa
- * query nas DUAS telas.
+ * `useProviders()` (GET /whatsapp/providers) é a fonte do canal nas DUAS
+ * telas (cabeçalho de progresso e passo final do assistente). Este helper
+ * decide, de um jeito só, o que fazer com essa query. Somente-Evolution: só
+ * canal EVOLUTION conta como canal da campanha.
  */
 describe('resolveCampaignChannel', () => {
-  const GOZAP_CHANNEL = {
+  const CANAL = {
     id: 'inst1',
-    name: 'robo',
+    name: 'principal',
     phoneE164: '+559231550101',
     isActive: true,
     isDefault: true,
-    provider: 'GOZAP' as const,
+    provider: 'EVOLUTION' as const,
     dailySendLimit: 500,
     sentToday: 120,
-    sentTodayResetAt: '2026-08-24T13:00:00.000Z',
-  };
-
-  const EVOLUTION_CHANNEL = {
-    id: 'ev1',
-    name: 'principal',
-    phoneE164: '+5511999999999',
-    isActive: true,
-    isDefault: true,
-    provider: 'EVOLUTION' as const,
-    dailySendLimit: 200,
-    sentToday: 10,
     sentTodayResetAt: '2026-08-24T13:00:00.000Z',
   };
 
@@ -61,60 +45,55 @@ describe('resolveCampaignChannel', () => {
 
   it('carregou, mas o id da campanha não está em NENHUM provedor → state "missing"', () => {
     const r = resolveCampaignChannel(
-      query({ data: { providers: [{ provider: 'GOZAP', traits: {} as never, capabilities: [], channels: [] }] } }),
+      query({ data: { providers: [{ provider: 'EVOLUTION', traits: {} as never, capabilities: [], channels: [] }] } }),
       'inst1',
     );
     expect(r).toEqual({ state: 'missing' });
   });
 
-  it('acha um canal GOZAP (o caso hoje travado em produção) → state "found"', () => {
+  it('acha um canal EVOLUTION → state "found"', () => {
     const r = resolveCampaignChannel(
       query({
         data: {
           providers: [
-            { provider: 'GOZAP', traits: {} as never, capabilities: [], channels: [GOZAP_CHANNEL] },
+            { provider: 'EVOLUTION', traits: {} as never, capabilities: [], channels: [CANAL] },
           ],
         },
       }),
       'inst1',
     );
-    expect(r).toEqual({ state: 'found', canal: GOZAP_CHANNEL });
+    expect(r).toEqual({ state: 'found', canal: CANAL });
   });
 
-  it('acha um canal EVOLUTION normalmente (não regride o caso já funcionando)', () => {
-    const r = resolveCampaignChannel(
-      query({
-        data: {
-          providers: [
-            { provider: 'EVOLUTION', traits: {} as never, capabilities: [], channels: [EVOLUTION_CHANNEL] },
-          ],
-        },
-      }),
-      'ev1',
-    );
-    expect(r).toEqual({ state: 'found', canal: EVOLUTION_CHANNEL });
-  });
-
-  it('procura em TODOS os grupos de provedor, não só no primeiro', () => {
-    const r = resolveCampaignChannel(
-      query({
-        data: {
-          providers: [
-            { provider: 'EVOLUTION', traits: {} as never, capabilities: [], channels: [] },
-            { provider: 'GOZAP', traits: {} as never, capabilities: [], channels: [GOZAP_CHANNEL] },
-          ],
-        },
-      }),
-      'inst1',
-    );
-    expect(r).toEqual({ state: 'found', canal: GOZAP_CHANNEL });
-  });
+  /**
+   * Somente-Evolution (R12/R15): campanha só envia por canal EVOLUTION. Um canal
+   * de provedor desligado que ainda apareça na lista (id igual ao da campanha
+   * antiga) NÃO é um canal utilizável — a tela trata como "não encontrado" e o
+   * envio fica travado; quem decide o motivo do bloqueio de verdade é o back.
+   */
+  it.each(['GOZAP', 'TWILIO', 'ZERNIO', 'META'])(
+    'canal %s (provedor desligado) com o id da campanha → "missing", nunca "found"',
+    (provider) => {
+      const legado = { ...CANAL, provider: provider as never };
+      const r = resolveCampaignChannel(
+        query({
+          data: {
+            providers: [
+              { provider: provider as never, traits: {} as never, capabilities: [], channels: [legado] },
+            ],
+          },
+        }),
+        'inst1',
+      );
+      expect(r).toEqual({ state: 'missing' });
+    },
+  );
 
   it('acha mesmo um canal INATIVO — quem decide o que fazer com isso é quem consome (aviso de canal inativo)', () => {
-    const inativo = { ...GOZAP_CHANNEL, isActive: false };
+    const inativo = { ...CANAL, isActive: false };
     const r = resolveCampaignChannel(
       query({
-        data: { providers: [{ provider: 'GOZAP', traits: {} as never, capabilities: [], channels: [inativo] }] },
+        data: { providers: [{ provider: 'EVOLUTION', traits: {} as never, capabilities: [], channels: [inativo] }] },
       }),
       'inst1',
     );
@@ -129,26 +108,26 @@ describe('resolveCampaignChannel', () => {
    * (isError === true e NUNCA houve dado nenhum). Resolve normalmente a
    * partir do cache e só marca `stale: true` para a tela avisar, sem bloquear.
    */
-  it('erro de REFETCH com um canal GOZAP em cache → continua "found" (com stale: true), não trava o envio', () => {
+  it('erro de REFETCH com um canal EVOLUTION em cache → continua "found" (com stale: true), não trava o envio', () => {
     const r = resolveCampaignChannel(
       query({
         isError: true,
         data: {
           providers: [
-            { provider: 'GOZAP', traits: {} as never, capabilities: [], channels: [GOZAP_CHANNEL] },
+            { provider: 'EVOLUTION', traits: {} as never, capabilities: [], channels: [CANAL] },
           ],
         },
       }),
       'inst1',
     );
-    expect(r).toEqual({ state: 'found', canal: GOZAP_CHANNEL, stale: true });
+    expect(r).toEqual({ state: 'found', canal: CANAL, stale: true });
   });
 
   it('erro de refetch e o canal não está no cache → "missing" (com stale: true), nunca finge "found"', () => {
     const r = resolveCampaignChannel(
       query({
         isError: true,
-        data: { providers: [{ provider: 'GOZAP', traits: {} as never, capabilities: [], channels: [] }] },
+        data: { providers: [{ provider: 'EVOLUTION', traits: {} as never, capabilities: [], channels: [] }] },
       }),
       'inst1',
     );
@@ -171,10 +150,10 @@ describe('resolveCampaignChannel', () => {
    * Trata como "não encontrado" de propósito — nunca "found" sem número.
    */
   it('canal presente mas SEM dailySendLimit (contrato incompleto) → "missing", nunca "found" sem quota', () => {
-    const semQuota = { ...GOZAP_CHANNEL, dailySendLimit: undefined };
+    const semQuota = { ...CANAL, dailySendLimit: undefined };
     const r = resolveCampaignChannel(
       query({
-        data: { providers: [{ provider: 'GOZAP', traits: {} as never, capabilities: [], channels: [semQuota] }] },
+        data: { providers: [{ provider: 'EVOLUTION', traits: {} as never, capabilities: [], channels: [semQuota] }] },
       }),
       'inst1',
     );

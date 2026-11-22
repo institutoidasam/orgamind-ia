@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { ChannelProvider } from '@prisma/client';
-import { GozapInstancesService } from './gozap-instances.service';
 import { EvolutionApiAdapter } from './adapters/evolution-api.adapter';
 import type { ConnectionState } from './ports/message-provider.port';
 
@@ -31,11 +30,10 @@ export const LIVE_STATE_TTL_MS = 15_000;
  * Porta do estado ao vivo do número: pergunta ao provedor, em vez de confiar no
  * último evento gravado. Usada pela prévia, pelo POST de envio e pelo processor.
  *
- * - GOZAP: `reconcileConnection` (só `GET /instance/status`). NUNCA
- *   `getConnectionInfo`, que pode abrir sessão no GoZap.
  * - EVOLUTION: `getLiveConnectionState(instância do canal)`. Sem nome, não
  *   chama: sem argumento o adaptador cairia na instância padrão (outro número).
- * - Demais provedores: sem consulta ao vivo, logo `unknown`.
+ * - Demais provedores (desligados, GC5): sem consulta ao vivo e sem chamada
+ *   externa, logo `unknown`.
  *
  * O cache guarda só estados OBSERVADOS (`open`/`connecting`/`close`); `unknown`
  * nunca entra, para que a próxima chamada tente de novo.
@@ -45,10 +43,7 @@ export class ChannelLiveStateService {
   private readonly logger = new Logger(ChannelLiveStateService.name);
   private readonly cache = new Map<string, LiveCheck>();
 
-  constructor(
-    private readonly gozap: GozapInstancesService,
-    private readonly evolution: EvolutionApiAdapter,
-  ) {}
+  constructor(private readonly evolution: EvolutionApiAdapter) {}
 
   async check(channel: LiveCheckChannel): Promise<LiveCheck> {
     const cached = this.cache.get(channel.id);
@@ -102,9 +97,6 @@ export class ChannelLiveStateService {
   private async query(
     channel: LiveCheckChannel,
   ): Promise<ConnectionState | null> {
-    if (channel.provider === 'GOZAP') {
-      return this.gozap.reconcileConnection(channel.id);
-    }
     if (channel.provider === 'EVOLUTION' && channel.evolutionInstanceName) {
       return this.evolution.getLiveConnectionState(
         channel.evolutionInstanceName,

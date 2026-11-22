@@ -59,6 +59,7 @@ const TERMINAIS = new Set(['COMPLETED', 'FAILED', 'CANCELLED']);
 const n = (v: number) => v.toLocaleString('pt-BR');
 /** Mesmo teto de `sendCampaignBatchSchema` (backend) e do `<Input max=…>` abaixo. */
 const MAX_BATCH_SIZE = 5000;
+const CHANNEL_MISSING_NOTICE = 'O número desta campanha não está disponível (pode usar uma integração desligada). Crie uma nova campanha com um número da Evolution.';
 
 /**
  * Mesmo rótulo do Badge de status da página de detalhe da campanha
@@ -442,7 +443,7 @@ export function CampaignProgressHeader({
             data-testid="channel-missing-notice"
             className="w-full text-xs text-destructive"
           >
-            O canal desta campanha não foi encontrado — verifique em Canais.
+            {CHANNEL_MISSING_NOTICE}
           </p>
         )}
         {restam > 0 && !canalInativo && campanhaTerminal && (

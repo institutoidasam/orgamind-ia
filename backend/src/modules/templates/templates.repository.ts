@@ -57,9 +57,9 @@ export class TemplatesRepository {
     });
   }
 
-  listAll(provider?: ChannelProvider): Promise<Template[]> {
+  listAll(providers: readonly ChannelProvider[]): Promise<Template[]> {
     return this.prisma.template.findMany({
-      where: provider ? { provider } : undefined,
+      where: { provider: { in: [...providers] } },
       orderBy: { createdAt: 'desc' },
     });
   }

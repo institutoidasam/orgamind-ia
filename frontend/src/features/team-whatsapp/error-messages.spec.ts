@@ -86,6 +86,7 @@ describe('failureReasonLabel', () => {
     ['team_whatsapp.channel_unverified', 'Não foi possível conferir o número'],
     ['team_whatsapp.channel_unavailable', 'Número indisponível na hora do envio'],
     ['team_whatsapp.channel_invalid', 'Número removido ou inválido'],
+    ['channel.provider_disabled', 'Número de integração desligada'],
     ['gozap.invalid_recipient', 'Número sem WhatsApp ou inválido — confira o telefone no cadastro'],
     ['evolution.number_not_on_whatsapp', 'Número sem WhatsApp ou inválido — confira o telefone no cadastro'],
     ['gozap.timeout', UNCONFIRMED],

@@ -1,3 +1,4 @@
+import { inspect } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mockDeep } from 'vitest-mock-extended';
 import { Logger } from '@nestjs/common';
@@ -11,7 +12,18 @@ import { AuditService } from '../../shared/audit/audit.service';
 import type { MediaStore } from '../../shared/media/media-store.port';
 import type { Env } from '../../shared/config/env.schema';
 
-type Over = { botPausedAt?: Date | null; fallback?: string | null };
+type Over = {
+  botPausedAt?: Date | null;
+  fallback?: string | null;
+  withMedia?: boolean;
+};
+
+const READY_IMAGE = {
+  storageKey: 'k/img.jpg',
+  status: 'READY',
+  mimeType: 'image/jpeg',
+  fileName: 'img.jpg',
+};
 
 function inboundMessage(over: Over) {
   const bot = {
@@ -26,10 +38,10 @@ function inboundMessage(over: Over) {
     id: 'm1',
     conversationId: 'c1',
     direction: 'INBOUND',
-    kind: 'TEXT',
+    kind: over.withMedia ? 'IMAGE' : 'TEXT',
     content: 'oi',
     transcript: null,
-    media: null,
+    media: over.withMedia ? READY_IMAGE : null,
     conversation: {
       id: 'c1',
       phoneE164: '+5592991110001',
@@ -71,7 +83,7 @@ function arrange(over: Over = {}) {
     conversationId: 'dc1',
     messageId: 'dm1',
   });
-  return { svc, dify, chat, chatRepo, audit, redis };
+  return { svc, dify, chat, chatRepo, audit, redis, store };
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -139,6 +151,21 @@ describe('BotReplyService K3-7(e) — Dify falha', () => {
   });
 });
 
+describe('BotReplyService K3-7(e) — trilha do erro do Dify', () => {
+  it('erro do Dify mantém a mensagem no log e na auditoria', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockReturnValue(undefined);
+    const { svc, dify, audit } = arrange();
+    const err = new Error('dify 500');
+    dify.chat.mockRejectedValue(err);
+    await svc.handle('c1', 'm1');
+    expect(audit.log.mock.calls[0][3]).toEqual({
+      botId: 'b1',
+      error: 'dify 500',
+    });
+    expect(warn.mock.calls[0][0]).toEqual({ err, conversationId: 'c1' });
+  });
+});
+
 describe('BotReplyService K3-7(c) — falha ao enviar depois do Dify', () => {
   it('sendBotReply lança — pausa, audita stage send, sem contingência, um envio, log sem texto', async () => {
     const warn = vi.spyOn(Logger.prototype, 'warn');
@@ -202,5 +229,101 @@ describe('BotReplyService K3-7(c) — falha antes do Dify ou do envio', () => {
     await expect(svc.handle('c1', 'm1')).rejects.toThrow('banco caiu');
     expect(chat.sendBotReply.mock.calls).toHaveLength(0);
     expect(redis.eval.mock.calls).toHaveLength(1);
+  });
+});
+
+describe('BotReplyService K3-7(c) — falha de mídia antes do Dify', () => {
+  const audited = [['bot.reply_failed', 'Conversation', 'c1']];
+
+  it.each([
+    ['getBuffer rejeita', 'store'],
+    ['uploadFile rejeita', 'upload'],
+  ])(
+    '%s — contingência, pausa, auditoria, sem Dify, não relança',
+    async (_n, where) => {
+      const { svc, dify, chat, chatRepo, audit, redis, store } = arrange({
+        withMedia: true,
+        fallback: 'Já te respondo!',
+      });
+      if (where === 'store')
+        store.getBuffer.mockRejectedValue(new Error('storage fora'));
+      else dify.uploadFile.mockRejectedValue(new Error('upload fora'));
+      await expect(svc.handle('c1', 'm1')).resolves.toBeUndefined();
+      expect(dify.chat.mock.calls).toHaveLength(0);
+      expect(chat.sendBotReply.mock.calls).toEqual([
+        ['c1', 'Já te respondo!', 'b1'],
+      ]);
+      expect(chatRepo.setBotPaused.mock.calls).toEqual([['c1']]);
+      expect(audit.log.mock.calls.map((c) => c.slice(0, 3))).toEqual(audited);
+      expect(redis.eval.mock.calls).toHaveLength(1);
+    },
+  );
+
+  it('bot sem fallbackMessage — pausa sem enviar nada', async () => {
+    const { svc, dify, chat, chatRepo, audit, redis, store } = arrange({
+      withMedia: true,
+    });
+    store.getBuffer.mockRejectedValue(new Error('storage fora'));
+    await expect(svc.handle('c1', 'm1')).resolves.toBeUndefined();
+    expect(dify.chat.mock.calls).toHaveLength(0);
+    expect(chat.sendBotReply.mock.calls).toHaveLength(0);
+    expect(chatRepo.setBotPaused.mock.calls).toEqual([['c1']]);
+    expect(audit.log.mock.calls.map((c) => c.slice(0, 3))).toEqual(audited);
+    expect(redis.eval.mock.calls).toHaveLength(1);
+  });
+});
+
+// Caminho e nome fictícios, no formato do que storage e upload devolvem.
+const DISK_PATH = '/srv/media/k/img.jpg';
+const SENDER_FILE = 'exame-ficticio.jpg';
+const leakyError = () =>
+  new TypeError(`ENOENT: open ${DISK_PATH} (${SENDER_FILE})`);
+
+describe('BotReplyService K3-7(c) — falha de mídia sem dado pessoal', () => {
+  it.each([
+    ['getBuffer rejeita', 'store'],
+    ['uploadFile rejeita', 'upload'],
+  ])('%s — log e auditoria só com ids, etapa e erro', async (_n, where) => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockReturnValue(undefined);
+    const { svc, dify, audit, store } = arrange({ withMedia: true });
+    if (where === 'store') store.getBuffer.mockRejectedValue(leakyError());
+    else dify.uploadFile.mockRejectedValue(leakyError());
+    await expect(svc.handle('c1', 'm1')).resolves.toBeUndefined();
+    expect(audit.log.mock.calls).toEqual([
+      [
+        'bot.reply_failed',
+        'Conversation',
+        'c1',
+        { botId: 'b1', stage: 'media', errName: 'TypeError' },
+      ],
+    ]);
+    expect(warn.mock.calls).toEqual([
+      [
+        { conversationId: 'c1', botId: 'b1', errName: 'TypeError' },
+        expect.any(String),
+      ],
+    ]);
+    // inspect, não JSON.stringify: este serializa um Error como {} e esconderia o vazamento.
+    const logged = inspect(warn.mock.calls, { depth: null });
+    expect(logged).not.toContain(DISK_PATH);
+    expect(logged).not.toContain(SENDER_FILE);
+  });
+
+  it('contingência que lança — pausa, audita e não relança', async () => {
+    vi.spyOn(Logger.prototype, 'warn').mockReturnValue(undefined);
+    const { svc, chat, chatRepo, audit, store } = arrange({
+      withMedia: true,
+      fallback: 'Já te respondo!',
+    });
+    store.getBuffer.mockRejectedValue(leakyError());
+    chat.sendBotReply.mockRejectedValue(new Error('provedor fora'));
+    await expect(svc.handle('c1', 'm1')).resolves.toBeUndefined();
+    expect(chat.sendBotReply.mock.calls).toHaveLength(1);
+    expect(chatRepo.setBotPaused.mock.calls).toEqual([['c1']]);
+    expect(audit.log.mock.calls[0][3]).toEqual({
+      botId: 'b1',
+      stage: 'media',
+      errName: 'TypeError',
+    });
   });
 });

@@ -8,7 +8,12 @@ import { REDIS_CLIENT } from '../../shared/redis/redis.module';
 import { MEDIA_STORE, type MediaStore } from '../../shared/media/media-store.port';
 import { ChatService } from '../chat/chat.service';
 import { ChatRepository } from '../chat/chat.repository';
-import { DifyClient, type DifyFile } from './dify.client';
+import {
+  DifyClient,
+  type DifyChatArgs,
+  type DifyChatResult,
+  type DifyFile,
+} from './dify.client';
 import { shouldReply } from './bot-reply.guard';
 import type { Env } from '../../shared/config/env.schema';
 
@@ -91,34 +96,34 @@ export class BotReplyService {
       // the identity mid-conversation and make Dify 404 the stored conversation_id. Use the
       // conversation id — a stable identifier for the whole conversation's life.
       const user = conv.id;
-      const files = await this.buildFiles(msg, baseUrl, bot.difyApiKey, user);
+      let files: DifyFile[];
+      try {
+        files = await this.buildFiles(msg, baseUrl, bot.difyApiKey, user);
+      } catch (err) {
+        // Mídia falhou antes do Dify: handoff imediato é seguro (ver buildFiles).
+        await this.handleMediaFailure(
+          conversationId,
+          bot.id,
+          bot.fallbackMessage,
+          err,
+        );
+        return;
+      }
       const query = (msg.content ?? msg.transcript ?? '').trim() || ' ';
 
-      let answer: string;
-      let difyConversationId: string;
-      try {
-        const result = await this.dify.chat({
+      const result = await this.askDify({
+        conversationId,
+        botId: bot.id,
+        fallbackMessage: bot.fallbackMessage,
+        chatArgs: {
           baseUrl, apiKey: bot.difyApiKey, query, user,
           conversationId: conv.difyConversationId,
           inputs: (bot.inputs as Record<string, unknown> | null) ?? {},
           files,
-        });
-        answer = result.answer;
-        difyConversationId = result.conversationId;
-      } catch (err) {
-        // If Dify rejects the stored conversation_id as unknown (404 "Conversation
-        // Not Exists" — e.g. the Dify-side conversation was deleted, or the app/key
-        // changed without a reset), clear it so the NEXT message starts a fresh Dify
-        // conversation instead of looping resume → 404 → handoff.
-        if (conv.difyConversationId && this.isStaleConversationError(err)) {
-          await this.chatRepo.clearDifyConversationId(conversationId);
-        }
-        // DELIBERATE immediate handoff: on a Dify error we pause the bot and hand off to
-        // a human right away, rather than relying on BullMQ retries. This prevents duplicate
-        // replies if a retry succeeds after a timeout where Dify already processed the message.
-        await this.handleFailure(conversationId, bot.id, bot.fallbackMessage, err);
-        return;
-      }
+        },
+      });
+      if (!result) return;
+      const { answer, conversationId: difyConversationId } = result;
 
       if (!conv.difyConversationId && difyConversationId) {
         await this.chatRepo.setDifyConversationId(conversationId, difyConversationId);
@@ -160,6 +165,35 @@ export class BotReplyService {
     }
   }
 
+  // Chama o Dify. Em erro faz o handoff imediato e devolve null.
+  private async askDify(req: {
+    conversationId: string;
+    botId: string;
+    fallbackMessage: string | null;
+    chatArgs: DifyChatArgs;
+  }): Promise<DifyChatResult | null> {
+    const { conversationId, botId, fallbackMessage, chatArgs } = req;
+    try {
+      return await this.dify.chat(chatArgs);
+    } catch (err) {
+      // If Dify rejects the stored conversation_id as unknown (404 "Conversation
+      // Not Exists" — e.g. the Dify-side conversation was deleted, or the app/key
+      // changed without a reset), clear it so the NEXT message starts a fresh Dify
+      // conversation instead of looping resume → 404 → handoff.
+      if (chatArgs.conversationId && this.isStaleConversationError(err)) {
+        await this.chatRepo.clearDifyConversationId(conversationId);
+      }
+      // DELIBERATE immediate handoff: on a Dify error we pause the bot and hand off to
+      // a human right away, rather than relying on BullMQ retries. This prevents duplicate
+      // replies if a retry succeeds after a timeout where Dify already processed the message.
+      await this.handleFailure(conversationId, botId, fallbackMessage, err);
+      return null;
+    }
+  }
+
+  // Falha de storage/upload acontece antes do Dify: nada foi processado, então o
+  // handoff imediato é seguro. Relançar esgotaria as retentativas do BullMQ e
+  // deixaria o cliente sem resposta, sem pausa e sem aviso.
   private async buildFiles(
     msg: { kind: string; media: { storageKey: string | null; status: string; mimeType: string | null; fileName: string | null } | null },
     baseUrl: string,
@@ -195,16 +229,42 @@ export class BotReplyService {
     err: unknown,
   ): Promise<void> {
     this.logger.warn({ err, conversationId }, 'Dify reply failed; pausing bot for handoff');
-    if (fallbackMessage && fallbackMessage.trim().length > 0) {
-      try {
-        await this.chat.sendBotReply(conversationId, fallbackMessage, botId);
-      } catch {
-        // best-effort
-      }
-    }
+    await this.sendFallback(conversationId, botId, fallbackMessage);
     await this.pauseAndAudit(conversationId, botId, {
       error: err instanceof Error ? err.message.slice(0, 300) : String(err),
     });
+  }
+
+  // GT11: a mensagem de erro de storage/upload pode trazer o caminho do disco, o
+  // storageKey ou o nome do arquivo de quem enviou; log e auditoria só com o nome do erro.
+  private async handleMediaFailure(
+    conversationId: string,
+    botId: string,
+    fallbackMessage: string | null,
+    err: unknown,
+  ): Promise<void> {
+    this.logger.warn(
+      { conversationId, botId, errName: errName(err) },
+      'bot media failed; pausing bot for handoff',
+    );
+    await this.sendFallback(conversationId, botId, fallbackMessage);
+    await this.pauseAndAudit(conversationId, botId, {
+      stage: 'media',
+      errName: errName(err),
+    });
+  }
+
+  private async sendFallback(
+    conversationId: string,
+    botId: string,
+    fallbackMessage: string | null,
+  ): Promise<void> {
+    if (!fallbackMessage || fallbackMessage.trim().length === 0) return;
+    try {
+      await this.chat.sendBotReply(conversationId, fallbackMessage, botId);
+    } catch {
+      // best-effort
+    }
   }
 
   // O envio da resposta falhou: pode ter saído, então só pausa e audita (sem

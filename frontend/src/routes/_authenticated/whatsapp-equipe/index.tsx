@@ -20,6 +20,7 @@ import { buildSectorTarget, markableIds, toggleAllMarkable } from '@/features/te
 import { useMessageDraft, type MessageDraft } from '@/features/team-whatsapp/message-draft';
 import { apiErrorCode, teamErrorMessage } from '@/features/team-whatsapp/error-messages';
 import type { SendTarget, TeamAudiencePreview, TeamRoster, TeamTargets } from '@/features/team-whatsapp/schemas';
+import { initialSendFilters, validateSendSearch } from '@/features/team-whatsapp/send-search';
 import { useBackToLastPage } from '@/features/team-whatsapp/use-back-to-last-page';
 import { useDebouncedAudience } from '@/features/team-whatsapp/use-audience-preview';
 import {
@@ -27,6 +28,7 @@ import {
 } from '@/features/team-whatsapp/use-send-filters';
 
 const route = createFileRoute('/_authenticated/whatsapp-equipe/')({
+  validateSearch: validateSendSearch,
   component: TeamWhatsappPage,
 });
 export { route as Route };
@@ -79,7 +81,7 @@ const LIST_CHANGED_TEXT = 'A lista mudou. Marque as pessoas de novo.';
 type Filters = ReturnType<typeof useSendFilters>;
 
 function SendSection({ targets }: { targets: TeamTargets }) {
-  const filters = useSendFilters(targets.today, targets.sectors);
+  const filters = useSendFilters(targets.today, targets.sectors, initialSendFilters(route.useSearch(), targets.sectors));
   // O texto mora aqui (DG12): fechar o diálogo não o perde; sair da página perde.
   const draft = useMessageDraft(filters.purpose, filters.activity);
   if (targets.sectors.length === 0) {

@@ -8,11 +8,13 @@ import type {
 } from '../../schemas/contracts/sector.schema';
 import type { PolicyActor } from '../../shared/authz/person-actions.policy';
 import { hasPermission } from '../../shared/authz/permissions';
+import { todayIn } from '../staff-schedule/civil-date';
 import { nameView } from '../../shared/authz/phone-visibility';
 import { InternalSectorsRepository } from './internal-sectors.repository';
 import type { SectorSummaryRecord } from './internal-sectors.repository';
 import { sectorAuditChanges, type SectorAuditRow } from './sector-audit';
 import { toSectorChannel } from './sector-channel-view';
+import { inactivationGuard } from './sector-usage';
 import {
   assertManagerChangeAllowed,
   canSetSectorManager,
@@ -68,6 +70,7 @@ export class InternalSectorsService {
     return {
       ...toSectorSummary(sector),
       members: withNameView(sector.members, full),
+      usage: await this.repo.usage(id, todayIn(new Date())),
     };
   }
   async create(input: CreateSector, actorId: string, actorRole: Role) {
@@ -108,6 +111,9 @@ export class InternalSectorsService {
             before,
             after,
           }),
+        input.isActive === false
+          ? inactivationGuard(id, todayIn(new Date()))
+          : undefined,
       ),
     ).then(toSectorSummary);
   }

@@ -17,6 +17,14 @@ export const sectorChannelSchema = z.object({
 });
 export type SectorChannel = z.infer<typeof sectorChannelSchema>;
 
+/** E2/E4: uso do setor; `inactivePeople` é só informação (não bloqueia a inativação). */
+export const sectorUsageSchema = z.object({
+  people: z.number().int().min(0),
+  exceptions: z.number().int().min(0),
+  scheduled: z.number().int().min(0),
+  inactivePeople: z.number().int().min(0),
+});
+
 export const sectorInputSchema = z.object({
   name: z.string().trim().min(1).max(120),
   code,

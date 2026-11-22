@@ -7,6 +7,8 @@ import { TeamAlertPanelService } from './team-alert-panel.service';
 import { TeamAlertReminderService } from './team-alert-reminder.service';
 import { TeamAlertController } from './team-alert.controller';
 import { TeamAudienceService } from './team-audience.service';
+import { TeamPanoramaController } from './team-panorama.controller';
+import { TeamPanoramaService } from './team-panorama.service';
 import { TeamWhatsappController } from './team-whatsapp.controller';
 import { TeamWhatsappRepository } from './team-whatsapp.repository';
 import { TeamWhatsappResultsService } from './team-whatsapp-results.service';
@@ -34,7 +36,11 @@ import { TeamWhatsappService } from './team-whatsapp.service';
  */
 @Module({
   imports: [StaffScheduleModule, LevelsModule, WhatsappProvidersModule],
-  controllers: [TeamWhatsappController, TeamAlertController],
+  controllers: [
+    TeamWhatsappController,
+    TeamAlertController,
+    TeamPanoramaController,
+  ],
   providers: [
     TeamWhatsappService,
     TeamAudienceService,
@@ -44,6 +50,7 @@ import { TeamWhatsappService } from './team-whatsapp.service';
     TeamAlertPanelService,
     TeamAlertAckService,
     TeamAlertReminderService,
+    TeamPanoramaService,
     TeamWhatsappRepository,
   ],
   exports: [TeamWhatsappRepository],

@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { ShiftRow } from './shifts.repository';
+import type { ShiftRow, ShiftTrail } from './shifts.repository';
 import { ShiftsService } from './shifts.service';
 
 const FIRST: ShiftRow = {
@@ -20,6 +20,7 @@ const NIGHT: ShiftRow = {
   sortOrder: 2,
 };
 const ACTOR = 'admin-1';
+const TX = { tx: true } as never;
 
 // Repositório em memória: a comparação sem caixa é do repositório (integração);
 // aqui ela não apara espaços, para provar que o serviço apara antes de consultar.
@@ -37,15 +38,31 @@ function harness(rows: ShiftRow[] = [FIRST, NIGHT]) {
     ),
     usage: vi.fn().mockResolvedValue(new Map()),
     maxSortOrder: vi.fn().mockResolvedValue(2),
-    create: vi.fn((data: object) =>
-      Promise.resolve({ id: 'shift_new', isActive: true, ...data }),
+    // Os métodos com trilha chamam o callback como o repositório real (dentro do tx).
+    createWithAudit: vi.fn(async (data: object, trail: ShiftTrail) => {
+      const row = { id: 'shift_new', isActive: true, ...data } as ShiftRow;
+      await trail(TX, null, row);
+      return row;
+    }),
+    updateWithAudit: vi.fn(
+      async (id: string, data: object, trail: ShiftTrail) => {
+        const before = byId(id) as ShiftRow;
+        const row = { ...before, ...data };
+        await trail(TX, before, row);
+        return row;
+      },
     ),
-    update: vi.fn((id: string, data: object) =>
-      Promise.resolve({ ...byId(id), ...data }),
+    reorderWithAudit: vi.fn(
+      async (ids: string[], trail: (...args: unknown[]) => Promise<void>) => {
+        await trail(
+          TX,
+          rows.map((r) => r.name),
+          ids.map((id) => byId(id)?.name),
+        );
+      },
     ),
-    setOrder: vi.fn().mockResolvedValue(undefined),
   };
-  const audit = { log: vi.fn().mockResolvedValue(undefined) };
+  const audit = { recordChange: vi.fn().mockResolvedValue(undefined) };
   const service = new ShiftsService(repo as never, audit as never);
   return { repo, audit, service };
 }
@@ -61,12 +78,15 @@ describe('ShiftsService.create', () => {
       endTime: '06:00',
     });
 
-    expect(repo.create).toHaveBeenCalledWith({
-      name: 'Noite',
-      startTime: '22:00',
-      endTime: '06:00',
-      sortOrder: 8,
-    });
+    expect(repo.createWithAudit).toHaveBeenCalledWith(
+      {
+        name: 'Noite',
+        startTime: '22:00',
+        endTime: '06:00',
+        sortOrder: 8,
+      },
+      expect.any(Function),
+    );
     expect(created).toEqual({
       id: 'shift_new',
       name: 'Noite',
@@ -77,15 +97,19 @@ describe('ShiftsService.create', () => {
       crossesMidnight: true,
       inUse: [],
     });
-    expect(audit.log).toHaveBeenCalledWith(
-      'shift.create',
-      'Shift',
-      'shift_new',
-      {
-        actorId: ACTOR,
-        shiftId: 'shift_new',
-      },
-    );
+    expect(audit.recordChange).toHaveBeenCalledWith(TX, {
+      action: 'shift.create',
+      entity: 'Shift',
+      entityId: 'shift_new',
+      category: 'STRUCTURE',
+      changes: [
+        { field: 'name', before: null, after: 'Noite' },
+        { field: 'startTime', before: null, after: '22:00' },
+        { field: 'endTime', before: null, after: '06:00' },
+        { field: 'isActive', before: null, after: true },
+      ],
+      actorId: ACTOR,
+    });
   });
 });
 
@@ -97,13 +121,13 @@ describe('ShiftsService.create — nome único', () => {
       await expect(
         service.create(ACTOR, { name, startTime: '22:00', endTime: '06:00' }),
       ).rejects.toMatchObject({ status: 409, code: 'shifts.name_taken' });
-      expect(repo.create).not.toHaveBeenCalled();
+      expect(repo.createWithAudit).not.toHaveBeenCalled();
     },
   );
 
   it('corrida no nome único do banco (P2002) → 409 shifts.name_taken', async () => {
     const { repo, service } = harness([FIRST]);
-    repo.create.mockRejectedValue(
+    repo.createWithAudit.mockRejectedValue(
       new Prisma.PrismaClientKnownRequestError('Unique constraint', {
         code: 'P2002',
         clientVersion: 'test',
@@ -128,8 +152,8 @@ describe('ShiftsService.update — desativar', () => {
     await expect(
       service.update(ACTOR, 'shift_first', { isActive: false }),
     ).rejects.toMatchObject({ status: 409, code: 'shifts.in_use' });
-    expect(repo.update).not.toHaveBeenCalled();
-    expect(audit.log).not.toHaveBeenCalled();
+    expect(repo.updateWithAudit).not.toHaveBeenCalled();
+    expect(audit.recordChange).not.toHaveBeenCalled();
   });
 
   it('desativar sem uso → isActive false e auditoria', async () => {
@@ -138,15 +162,19 @@ describe('ShiftsService.update — desativar', () => {
       isActive: false,
     });
     expect(updated).toMatchObject({ id: 'shift_first', isActive: false });
-    expect(repo.update).toHaveBeenCalledWith('shift_first', {
-      isActive: false,
-    });
-    expect(audit.log).toHaveBeenCalledWith(
-      'shift.update',
-      'Shift',
+    expect(repo.updateWithAudit).toHaveBeenCalledWith(
       'shift_first',
-      { actorId: ACTOR, shiftId: 'shift_first' },
+      { isActive: false },
+      expect.any(Function),
     );
+    expect(audit.recordChange).toHaveBeenCalledWith(TX, {
+      action: 'shift.update',
+      entity: 'Shift',
+      entityId: 'shift_first',
+      category: 'STRUCTURE',
+      changes: [{ field: 'isActive', before: true, after: false }],
+      actorId: ACTOR,
+    });
   });
 });
 
@@ -156,12 +184,14 @@ describe('ShiftsService.update — edição', () => {
     const updated = await service.update(ACTOR, 'shift_night', {
       startTime: '21:00',
     });
-    expect(repo.update).toHaveBeenCalledTimes(1);
-    expect(repo.update).toHaveBeenCalledWith('shift_night', {
-      startTime: '21:00',
-    });
-    expect(repo.create).not.toHaveBeenCalled();
-    expect(repo.setOrder).not.toHaveBeenCalled();
+    expect(repo.updateWithAudit).toHaveBeenCalledTimes(1);
+    expect(repo.updateWithAudit).toHaveBeenCalledWith(
+      'shift_night',
+      { startTime: '21:00' },
+      expect.any(Function),
+    );
+    expect(repo.createWithAudit).not.toHaveBeenCalled();
+    expect(repo.reorderWithAudit).not.toHaveBeenCalled();
     expect(updated).toMatchObject({
       startTime: '21:00',
       crossesMidnight: true,
@@ -173,7 +203,7 @@ describe('ShiftsService.update — edição', () => {
     await expect(
       service.update(ACTOR, 'shift_missing', { name: 'Madrugada' }),
     ).rejects.toMatchObject({ status: 404, code: 'shifts.not_found' });
-    expect(repo.update).not.toHaveBeenCalled();
+    expect(repo.updateWithAudit).not.toHaveBeenCalled();
   });
 });
 
@@ -190,8 +220,8 @@ describe('ShiftsService.reorder', () => {
         status: 422,
         code: 'shifts.invalid_order',
       });
-      expect(repo.setOrder).not.toHaveBeenCalled();
-      expect(audit.log).not.toHaveBeenCalled();
+      expect(repo.reorderWithAudit).not.toHaveBeenCalled();
+      expect(audit.recordChange).not.toHaveBeenCalled();
     },
   );
 
@@ -201,16 +231,24 @@ describe('ShiftsService.reorder', () => {
 
     const result = await service.reorder(ACTOR, { ids });
 
-    expect(repo.setOrder).toHaveBeenCalledWith(ids);
-    expect(audit.log).toHaveBeenCalledWith(
-      'shift.reorder',
-      'Shift',
-      undefined,
-      {
-        actorId: ACTOR,
-        shiftIds: ids,
-      },
+    expect(repo.reorderWithAudit).toHaveBeenCalledWith(
+      ids,
+      expect.any(Function),
     );
+    expect(audit.recordChange).toHaveBeenCalledWith(TX, {
+      action: 'shift.reorder',
+      entity: 'Shift',
+      entityId: null,
+      category: 'STRUCTURE',
+      changes: [
+        {
+          field: 'order',
+          before: '1º turno > Noite',
+          after: 'Noite > 1º turno',
+        },
+      ],
+      actorId: ACTOR,
+    });
     expect(result.items).toHaveLength(2);
   });
 });

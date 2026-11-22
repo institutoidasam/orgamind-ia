@@ -31,7 +31,16 @@ export const sectorSchema = sectorSummarySchema.extend({
   updatedAt: z.string(),
 });
 
+/** E4: uso do setor, espelho tolerante da API (contagens ausentes valem 0). */
+export const sectorUsageSchema = z.object({
+  people: z.number().int().nonnegative().default(0),
+  exceptions: z.number().int().nonnegative().default(0),
+  scheduled: z.number().int().nonnegative().default(0),
+  inactivePeople: z.number().int().nonnegative().default(0),
+});
+
 export const sectorDetailSchema = sectorSchema.extend({
+  usage: sectorUsageSchema.nullish(),
   members: z
     .array(
       z.object({
@@ -73,6 +82,7 @@ export const sectorListSchema = z.object({
 export type Sector = z.infer<typeof sectorSchema>;
 export type SectorChannel = z.infer<typeof sectorChannelSchema>;
 export type SectorDetail = z.infer<typeof sectorDetailSchema>;
+export type SectorUsage = z.infer<typeof sectorUsageSchema>;
 export type SectorInput = z.output<typeof sectorInputSchema>;
 export type InternalRole = z.infer<typeof roleSchema>;
 export const INTERNAL_ROLES = roleSchema.options;

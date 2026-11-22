@@ -38,6 +38,7 @@ import {
   type AuthorizationRow,
 } from './person-record';
 import { personAuditChanges, personChangeAction } from './person-audit';
+import { assertReactivationAllowed } from './reactivation-guard';
 import type { AssignmentPatch, AssignmentValues } from './assignment-timeline';
 import { isOpenAssignmentConflict } from './assignment-writer';
 import { todayIn } from '../staff-schedule/civil-date';
@@ -700,6 +701,7 @@ export class UsersService {
         'user.sector_required',
       );
     await this.assertAssignableLevel(input.levelId, user.levelId);
+    await assertReactivationAllowed(this.repo, user, input);
   }
 
   /** Setor informado (string) precisa existir e estar ativo; ausente/null passa. */

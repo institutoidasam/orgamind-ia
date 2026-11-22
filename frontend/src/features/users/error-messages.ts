@@ -13,6 +13,9 @@ const USER_ERROR_MESSAGES: Record<string, string> = {
   "user.reason_required": "Informe o motivo da alteração, de 3 a 200 caracteres.",
   "user.authorization_future_date": "A data da autorização não pode ser futura.",
   "user.has_history": "Esta pessoa tem histórico e não pode ser excluída. Inative o cadastro.",
+  // Reativação recusada (E10, DJ15): mesmo texto do DomainError do back e do mapa de sector-people.
+  "user.sector_inactive": "O setor desta pessoa está inativo. Reative o setor ou troque o setor antes de reativar a pessoa.",
+  "user.level_inactive": "O nível desta pessoa está desativado. Reative o nível ou troque o nível antes de reativar a pessoa.",
 };
 
 /** Mensagem pt-BR do código de erro da API de usuários; undefined = erro genérico. */

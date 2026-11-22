@@ -3,6 +3,7 @@ import { PURPOSE_RULES } from './purpose';
 import type {
   SectorTargetInput, TeamActivityInput, TeamAudienceBase, TeamAudienceRequest, TeamPurpose, TeamSector,
 } from './schemas';
+import type { SendInitial } from './send-search';
 
 /** Dados da atividade como o operador os digita: '' = não informado. */
 export type ActivityDraft = { date: string; time: string; place: string };
@@ -67,11 +68,12 @@ function withBase(prev: Filters, base: TeamAudienceBase): Filters {
 /**
  * Filtros da tela de envio (finalidade, setores, níveis, data, turnos, atividade, "incluir quem está de folga")
  * e a seleção. Mudança que altera quem entra no público limpa a seleção: o que vai no POST é a lista conferida
- * (D4). A data inicial é `today` do servidor (GC5), nunca o relógio do navegador.
+ * (D4). A data inicial é `today` do servidor (GC5), nunca o relógio do navegador; `initial` (setores e data da URL,
+ * só no estado inicial) a substitui quando vem preenchido.
  */
-export function useSendFilters(today: string, sectors: readonly TeamSector[]) {
+export function useSendFilters(today: string, sectors: readonly TeamSector[], initial?: SendInitial) {
   const [filters, setFilters] = useState<Filters>({
-    sectorIds: null, levelIds: [], withoutLevel: false, shiftIds: null, date: today,
+    sectorIds: initial?.sectorIds ?? null, levelIds: [], withoutLevel: false, shiftIds: null, date: initial?.date ?? today,
     purpose: 'shift_notice', base: PURPOSE_RULES.shift_notice.bases[0], includeOff: false,
     activity: NO_ACTIVITY, urgencyReason: '', moment: NOW_MOMENT,
   });

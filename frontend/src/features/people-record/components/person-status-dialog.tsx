@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { describeUserError } from '@/features/users/error-messages';
 import { readApiErrorBody } from '@/lib/api-error';
 import { reasonSchema } from '../reason';
 import { ReasonField } from './reason-field';
@@ -14,9 +15,12 @@ type Props = {
 
 const FALLBACK_ERROR = 'Não foi possível concluir agora. Tente de novo.';
 
-/** Texto do servidor (C9) quando houver; senão a mensagem genérica. */
+/**
+ * Texto do servidor (C9) quando houver; senão o do código conhecido (a reativação recusada, E10,
+ * chega só com `code`, sem `detail`); senão a mensagem genérica.
+ */
 async function describeError(error: unknown): Promise<string> {
-  return (await readApiErrorBody(error))?.detail ?? FALLBACK_ERROR;
+  return (await readApiErrorBody(error))?.detail ?? (await describeUserError(error)) ?? FALLBACK_ERROR;
 }
 
 type FormProps = Omit<Props, 'open'>;

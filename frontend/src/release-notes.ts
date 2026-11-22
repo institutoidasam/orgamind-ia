@@ -31,6 +31,33 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.11.21.1',
+    date: '2026-11-21',
+    title: 'Panorama da fábrica e cuidados ao inativar setor e nível',
+    items: [
+      {
+        text: 'Na Visão geral há o bloco "Operação da fábrica": um cartão por setor com as contagens do dia escolhido por turno, folga, férias e sem escala. Os números são da escala do dia, não de agora. Os nomes só aparecem quando você clica em "Ver pessoas", e "Ver escala" e "Enviar mensagem" abrem a escala e o envio já com o setor e a data. Supervisor e Operador veem só os setores que gerem.',
+        where: '/dashboard',
+      },
+      {
+        text: 'Um setor com pessoas ativas, exceções de escala de hoje em diante ou envios agendados não é mais inativado: a tela mostra o que prende o setor e o que fazer para liberar. Setor sem uso pede confirmação antes de ser inativado.',
+        where: '/setores',
+      },
+      {
+        text: 'Um nível com pessoas ativas não é mais desativado: a tela mostra quantas são e manda trocar o nível no cadastro delas. Nível sem uso pede confirmação antes de ser desativado.',
+        where: '/niveis',
+      },
+      {
+        text: 'A trilha de alterações de turno e de nível mostra o antes e depois, inclusive a ordem (Início, Término, Nome, Situação e Ordem).',
+        where: '/trilha',
+      },
+      {
+        text: 'Reativar uma pessoa que está em setor ou nível inativo é recusado, com o aviso para reativar o setor ou o nível, ou trocar o dela, antes.',
+        where: '/users',
+      },
+    ],
+  },
+  {
     version: '2026.11.20.3',
     date: '2026-11-20',
     title: 'WhatsApp da equipe: alerta urgente com confirmação "OK"',

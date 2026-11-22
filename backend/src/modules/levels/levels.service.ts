@@ -11,7 +11,11 @@ import {
   levelNameTaken,
   levelNotFound,
 } from './levels.errors';
+import type { AuditChange } from '../../shared/audit/audit-change';
+import { orderChange } from '../../shared/audit/audit-order';
 import { AuditService } from '../../shared/audit/audit.service';
+import { levelAuditChanges, levelEvent } from './level-audit';
+import { deactivationGuard } from './level-usage';
 import { type LevelUpdateData, LevelsRepository } from './levels.repository';
 
 // Só os campos enviados.
@@ -48,8 +52,10 @@ function mapNameTaken(error: unknown): never {
 }
 
 /**
- * Níveis (só ADMIN). Nível não se apaga e desativar não é bloqueado por uso:
- * a pessoa e o histórico ficam com ele; só some do cadastro novo e do filtro.
+ * Níveis (só ADMIN). Nível não se apaga. Desativar com pessoa ativa é bloqueado
+ * (`levels.in_use` 409, conferido na transação da gravação); só pessoa inativa
+ * não bloqueia: ela e o histórico ficam com o nível, que só some do cadastro
+ * novo e do filtro.
  */
 @Injectable()
 export class LevelsService {
@@ -66,12 +72,19 @@ export class LevelsService {
     const name = input.name.trim();
     await this.assertNameFree(name);
     const sortOrder = (await this.repo.maxSortOrder()) + 1;
-    const row = await this.repo.create({ name, sortOrder }).catch(mapNameTaken);
-    await this.audit.log('level.create', 'StaffLevel', row.id, {
-      actorId,
-      levelId: row.id,
-    });
-    return row;
+    return this.repo
+      .createWithAudit({ name, sortOrder }, (tx, before, after) =>
+        this.record(
+          tx,
+          levelEvent(
+            'level.create',
+            actorId,
+            after.id,
+            levelAuditChanges(before, after),
+          ),
+        ),
+      )
+      .catch(mapNameTaken);
   }
 
   async update(
@@ -82,12 +95,23 @@ export class LevelsService {
     if (!(await this.repo.findById(id))) throw levelNotFound();
     const data = updateData(input);
     if (data.name !== undefined) await this.assertNameFree(data.name, id);
-    const row = await this.repo.update(id, data).catch(mapNameTaken);
-    await this.audit.log('level.update', 'StaffLevel', id, {
-      actorId,
-      levelId: id,
-    });
-    return row;
+    return this.repo
+      .updateWithAudit(
+        id,
+        data,
+        (tx, before, after) =>
+          this.record(
+            tx,
+            levelEvent(
+              'level.update',
+              actorId,
+              id,
+              levelAuditChanges(before, after),
+            ),
+          ),
+        data.isActive === false ? deactivationGuard(id) : undefined,
+      )
+      .catch(mapNameTaken);
   }
 
   async reorder(
@@ -96,11 +120,21 @@ export class LevelsService {
   ): Promise<LevelListResponse> {
     const allIds = (await this.repo.list()).map((row) => row.id);
     if (!isPermutation(ids, allIds)) throw invalidLevelOrder();
-    await this.repo.setOrder(ids);
-    await this.audit.log('level.reorder', 'StaffLevel', undefined, {
-      actorId,
-    });
+    await this.repo.reorderWithAudit(ids, (tx, before, after) =>
+      this.record(
+        tx,
+        levelEvent('level.reorder', actorId, null, orderChange(before, after)),
+      ),
+    );
     return this.list();
+  }
+
+  /** Grava o evento no `tx` do nível; `null` (nada mudou) não grava. */
+  private async record(
+    tx: Prisma.TransactionClient,
+    event: AuditChange | null,
+  ): Promise<void> {
+    if (event) await this.audit.recordChange(tx, event);
   }
 
   private async assertNameFree(name: string, exceptId?: string): Promise<void> {

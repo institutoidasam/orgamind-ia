@@ -27,6 +27,8 @@ export type HandoverFrom = { id: string; name: string | null; own: boolean };
 const OWN_TITLE = "Passar minhas pendências";
 const NOTE_HINT = "Vai para cada pendência como 'Passagem de turno: …'.";
 const SELECT_CLASS = "h-9 rounded-lg border bg-card px-2 text-sm";
+const TRUNCATED_TEXT =
+  "A lista pode estar incompleta porque há mais de 2.000 pendências abertas. Confira depois se ficou alguma com esta pessoa.";
 
 function titleOf(from: HandoverFrom): string {
   return from.own
@@ -93,12 +95,27 @@ type ChecklistProps = {
   onToggle: (id: string) => void;
 };
 
+/** Aviso da leitura cortada em 2.000 abertas: a lista (mesmo vazia) pode não ter todas as de quem sai. */
+function TruncatedNotice() {
+  return (
+    <p role="status" className="text-sm text-muted-foreground">
+      {TRUNCATED_TEXT}
+    </p>
+  );
+}
+
 function Checklist({ query, unchecked, onToggle }: ChecklistProps) {
   if (query.isError)
     return <p role="alert">Não foi possível carregar as pendências.</p>;
   if (!query.data) return <p>Carregando pendências…</p>;
-  const { items, total } = query.data;
-  if (items.length === 0) return <p>Nenhuma pendência em tratativa.</p>;
+  const { items, total, truncated } = query.data;
+  if (items.length === 0)
+    return (
+      <>
+        <p>Nenhuma pendência em tratativa.</p>
+        {truncated && <TruncatedNotice />}
+      </>
+    );
   return (
     <fieldset className="space-y-2">
       <legend className="text-sm font-medium">Pendências em tratativa</legend>
@@ -119,6 +136,7 @@ function Checklist({ query, unchecked, onToggle }: ChecklistProps) {
           {`Mostrando ${items.length} de ${total}. Passe estas e abra de novo para passar as demais.`}
         </p>
       )}
+      {truncated && <TruncatedNotice />}
     </fieldset>
   );
 }

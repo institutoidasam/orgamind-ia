@@ -13,6 +13,7 @@ describe("describeUserError", () => {
     ["user.reason_required", 422, "Informe o motivo da alteração, de 3 a 200 caracteres."],
     ["user.authorization_future_date", 422, "A data da autorização não pode ser futura."],
     ["user.has_history", 409, "Esta pessoa tem histórico e não pode ser excluída. Inative o cadastro."],
+    ["user.concurrent_admin_change", 409, "Outra pessoa alterou este cadastro agora. Recarregue a página e tente de novo."],
   ])("%s vira a mensagem em pt-BR", async (code, status, message) => {
     expect(await describeUserError(httpError(code, status))).toBe(message);
   });

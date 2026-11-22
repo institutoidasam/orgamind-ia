@@ -31,6 +31,20 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.11.21.5',
+    date: '2026-11-21',
+    title: 'Mídia ilegível e avisos na passagem de pendências',
+    items: [
+      {
+        text: 'Se o robô não conseguir ler uma mídia enviada pelo contato, ele pausa e a conversa passa para a equipe.',
+      },
+      {
+        text: 'Ao passar pendências, a tela avisa quando você não tem permissão para isso e quando a lista pode estar incompleta, para você conferir se alguma ficou com a pessoa.',
+        where: '/pendencias-equipe',
+      },
+    ],
+  },
+  {
     version: '2026.11.21.4',
     date: '2026-11-21',
     title: 'Passagem de turno',

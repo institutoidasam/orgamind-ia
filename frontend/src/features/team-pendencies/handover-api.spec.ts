@@ -190,6 +190,16 @@ describe("handover-api: usePendencyHandover, erros", () => {
       "team_whatsapp.not_handler",
       "Só um administrador pode passar as pendências de outra pessoa.",
     ],
+    [
+      403,
+      "team_whatsapp.forbidden",
+      "Você não tem permissão para passar pendências. Fale com um administrador.",
+    ],
+    [
+      403,
+      "auth.permission_denied",
+      "Você não tem permissão para passar pendências. Fale com um administrador.",
+    ],
     [500, "outro", "Não foi possível passar o turno. Tente de novo."],
   ])("erro %i %s — textos de DT9", async (status, code, text) => {
     post.mockImplementation(() => {

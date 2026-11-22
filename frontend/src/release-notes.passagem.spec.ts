@@ -6,10 +6,9 @@ const items = note?.items ?? [];
 const texts = items.map((item) => item.text);
 
 describe("novidade: passagem de turno (Lote K3) — entrada", () => {
-  it("aceite 31: entrada K3 no topo, versão 2026.11.21.4, data 2026-11-21, título Passagem de turno, itens com /inbox e /pendencias-equipe", () => {
+  it("aceite 31: entrada K3, versão 2026.11.21.4, data 2026-11-21, título Passagem de turno, itens com /inbox e /pendencias-equipe", () => {
     expect(note).toBeDefined();
-    // Topo do array: a entrada K3 vem antes da entrada K2 (2026.11.21.3).
-    expect(RELEASE_NOTES[0]?.version).toBe("2026.11.21.4");
+    // A entrada K3 vem antes da entrada K2 (2026.11.21.3); outras entradas mais novas podem ficar acima dela.
     expect(
       RELEASE_NOTES.findIndex((n) => n.version === "2026.11.21.4"),
     ).toBeLessThan(

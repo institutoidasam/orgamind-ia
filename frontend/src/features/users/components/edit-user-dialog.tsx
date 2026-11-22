@@ -28,7 +28,7 @@ type Form = UseFormReturn<EditUserFormValues>;
 
 export function EditUserDialog({ user, open, onOpenChange, isSelf }: Props) {
   const state = useEditUserForm(user, isSelf, onOpenChange);
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>Editar usuário</DialogTitle></DialogHeader><EditUserForm state={state} user={user} isSelf={isSelf} onCancel={() => onOpenChange(false)} /></DialogContent></Dialog>;
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>Editar usuário</DialogTitle></DialogHeader><EditUserForm state={state} user={user} isSelf={isSelf} onCancel={() => onOpenChange(false)} /></DialogContent></Dialog>;
 }
 
 type Initial = { phone: string; authorization: ReturnType<typeof authorizationChoiceOf> };

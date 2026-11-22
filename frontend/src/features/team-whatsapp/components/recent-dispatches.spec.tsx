@@ -28,12 +28,39 @@ const base: Item = {
   state: 'DISPATCHED',
   scheduledFor: null,
   firedAt: null,
+  purpose: null,
+  base: null,
+  activity: null,
+  urgencyReason: null,
 };
 
 const paging = { page: 1, pageSize: 20, total: 1, onPageChange: vi.fn() };
 const renderItem = (extra: Partial<Item> = {}) =>
   render(<RecentDispatches items={[{ ...base, ...extra }]} paging={paging} />);
 const cells = () => within(screen.getAllByRole('row')[1]).getAllByRole('cell');
+
+describe('RecentDispatches: envio a uma pessoa', () => {
+  it('I1: alvo pessoa não mostra finalidade, base nem regra anterior', () => {
+    renderItem({ target: { type: 'user', id: 'u1', label: 'Ana Souza', shift: null }, sectors: [] });
+    expect(cells()[2]).toHaveTextContent('Ana Souza');
+    expect(cells()[3]).toBeEmptyDOMElement();
+    expect(screen.queryByText(/regra anterior/)).not.toBeInTheDocument();
+  });
+});
+
+describe('RecentDispatches: finalidade', () => {
+  it('lista mostra Finalidade e a atividade; envio antigo mostra —', () => {
+    const { unmount } = renderItem({
+      purpose: 'meeting', base: 'assigned', activity: { date: '2026-11-25', time: '09:30', place: 'Sala 2' },
+    });
+    expect(screen.getByRole('columnheader', { name: 'Finalidade' })).toBeInTheDocument();
+    expect(cells()[3]).toHaveTextContent('ReuniãoEquipe vinculada25/11/2026 às 09:30 · Sala 2');
+    unmount();
+    renderItem();
+    expect(cells()[3]).toHaveTextContent('—equipe em serviço (regra anterior)');
+    expect(cells()[3]).not.toHaveTextContent('Reunião');
+  });
+});
 
 describe('RecentDispatches: contagens por situação', () => {
   it.each([
@@ -44,14 +71,14 @@ describe('RecentDispatches: contagens por situação', () => {
     ],
   ])('%j mostra só as partes não zero, na ordem do ciclo', (parts, text) => {
     renderItem({ counts: { ...counts, ...parts } });
-    expect(cells()[4]).toHaveTextContent(text);
-    expect(cells()[4]).not.toHaveTextContent('Enviado');
-    expect(cells()[4]).not.toHaveTextContent('Enfileirados');
+    expect(cells()[5]).toHaveTextContent(text);
+    expect(cells()[5]).not.toHaveTextContent('Enviado');
+    expect(cells()[5]).not.toHaveTextContent('Enfileirados');
   });
 
   it('envio agendado mostra o selo e a contagem de agendados', () => {
     renderItem({ state: 'SCHEDULED', counts: { ...counts, scheduled: 2 } });
-    expect(cells()[4]).toHaveTextContent('AgendadoAgendado 2');
+    expect(cells()[5]).toHaveTextContent('AgendadoAgendado 2');
   });
 });
 
@@ -71,16 +98,16 @@ describe('RecentDispatches: resultado e números', () => {
         { name: 'Comercial', phoneE164: null, count: 2 },
       ],
     });
-    expect(cells()[3]).toHaveTextContent('+5592999990000 (4)');
-    expect(cells()[3]).toHaveTextContent('Comercial (2)');
+    expect(cells()[4]).toHaveTextContent('+5592999990000 (4)');
+    expect(cells()[4]).toHaveTextContent('Comercial (2)');
   });
 
   it('número removido depois do envio e envio sem números são tratados', () => {
     const { unmount } = renderItem({ channels: [{ name: null, phoneE164: null, count: 3 }] });
-    expect(cells()[3]).toHaveTextContent('Número removido');
+    expect(cells()[4]).toHaveTextContent('Número removido');
     unmount();
     renderItem({ channels: [] });
-    expect(cells()[3]).toHaveTextContent('—');
+    expect(cells()[4]).toHaveTextContent('—');
   });
 });
 

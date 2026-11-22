@@ -8,6 +8,7 @@ import type {
   TeamRosterPerson,
 } from '../../schemas/contracts/team-whatsapp.schema';
 import { nameView } from '../../shared/authz/phone-visibility';
+import { purposeDetail } from './dispatch-purpose-view';
 import type { DispatchRecipientsQuery } from './dto/dispatch-recipients-query.dto';
 import { dispatchNotFound, teamForbidden } from './team-whatsapp.errors';
 import {
@@ -171,6 +172,9 @@ export class TeamWhatsappResultsService {
       this.repo.channelsByDispatch(ids),
       this.leftOut(dispatchId, row.roster, full),
     ]);
+    const sectors = row.sectors
+      .map((s) => ({ id: s.sectorId, name: s.sectorName }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
     return {
       id: row.id,
       targetLabel: nameView(row.targetLabel, { full }),
@@ -180,12 +184,12 @@ export class TeamWhatsappResultsService {
       scheduledFor: iso(row.scheduledFor),
       firedAt: iso(row.firedAt),
       author: authorView(row.author, full),
-      sectors: row.sectors
-        .map((s) => ({ id: s.sectorId, name: s.sectorName }))
-        .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR')),
+      sectors,
       counts: countsByDispatch(statuses).get(dispatchId) ?? zeroCounts(),
       channels: channelsByDispatch(channels).get(dispatchId) ?? [],
       leftOut,
+      // F3: finalidade, painel e excluídos lidos do gravado; envio antigo → null/[].
+      ...purposeDetail(row, sectors, full),
     };
   }
 

@@ -5,6 +5,7 @@ import type { AuditService } from '../../shared/audit/audit.service';
 import { actorWith } from '../../shared/authz/actor.test-fixtures';
 import { TeamWhatsappResultsService } from './team-whatsapp-results.service';
 import { TeamWhatsappScheduleService } from './team-whatsapp-schedule.service';
+import type { CreateTeamDispatchInput } from './dto/create-team-dispatch.dto';
 import type { TeamActor } from './team-whatsapp.policy';
 import type {
   DispatchDetailRow,
@@ -28,6 +29,7 @@ import {
   sector,
   type Harness,
 } from './team-whatsapp.test-fixtures';
+import { withAudienceKey } from './team-whatsapp.sector-send.test-fixtures';
 
 // D11: pessoa criada de contato sem nome tem o número como nome. Sem a chave
 // `telefone.ver_completo` a SAÍDA mostra a máscara; o que é gravado fica real.
@@ -122,13 +124,18 @@ describe('nome-telefone na saída — roster', () => {
 const noPhone = (id: string, name: string): TeamMember =>
   member({ id, name, phoneE164: null, ...onShift(SHIFT_FIRST) });
 const ana = member({ id: 'ana', name: 'Ana', ...onShift(SHIFT_FIRST) });
-const toSector = (actor: TeamActor, people: TeamMember[]) => {
+const toSector = async (actor: TeamActor, people: TeamMember[]) => {
   h.repo.findActor.mockResolvedValue(actor);
   givenSector(h, people);
-  return h.service.dispatch(actor.id, {
+  const input: CreateTeamDispatchInput = {
     text: 'Oi',
+    purpose: 'shift_notice',
     target: { type: 'sector', sectorIds: ['s1'], date: DATE },
-  });
+  };
+  return h.service.dispatch(
+    actor.id,
+    await withAudienceKey(h, actor.id, input),
+  );
 };
 const saved = () => h.repo.createDispatch.mock.calls[0][0];
 
@@ -182,6 +189,12 @@ const dispatchRow = (): TeamDispatchRow => ({
   state: 'DISPATCHED',
   scheduledFor: null,
   firedAt: null,
+  purpose: null,
+  audienceBase: null,
+  activityDate: null,
+  activityTime: null,
+  activityPlace: null,
+  urgencyReason: null,
   author: { id: 'sk', name: NUM, email: null },
   sectors: [],
 });
@@ -247,6 +260,17 @@ const detailRow = (
   scheduledFor: null,
   firedAt: null,
   roster,
+  rosterDate: null,
+  includeOff: false,
+  purpose: null,
+  audienceBase: null,
+  activityDate: null,
+  activityTime: null,
+  activityPlace: null,
+  urgencyReason: null,
+  audienceRule: null,
+  audienceExcluded: null,
+  schedulePolicy: null,
   author: { id: 'sk', name: NUM },
   sectors: [],
 });

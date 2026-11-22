@@ -1,4 +1,4 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { keepPreviousData, skipToken, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api-client';
 import {
   cancelDispatchResponseSchema,
@@ -8,6 +8,7 @@ import {
   dispatchResultSchema,
   retryResultSchema,
   scheduledListSchema,
+  teamAudiencePreviewSchema,
   teamPersonRouteSchema,
   teamRosterSchema,
   teamTargetsSchema,
@@ -18,6 +19,7 @@ import {
   type RecipientStatus,
   type RetryInput,
   type ScheduledList,
+  type TeamAudienceRequest,
 } from './schemas';
 
 export type { SendTarget } from './schemas';
@@ -25,6 +27,9 @@ export type { SendTarget } from './schemas';
 /** Depois disso, um envio ainda `QUEUED` deixa de ser consultado (evita polling infinito). */
 export const POLL_WINDOW_MS = 60 * 60_000;
 const POLL_INTERVAL_MS = 10_000;
+
+/** Prefixo da chave das consultas de prévia: quem as invalida (ex.: o envio recusado por público mudado) usa este. */
+export const AUDIENCE_PREVIEW_KEY = ['team-whatsapp', 'preview'] as const;
 
 /** Itens por página do histórico e dos agendados (o servidor aceita 1..50). */
 export const PAGE_SIZE = 20;
@@ -62,6 +67,28 @@ export function useTeamPersonRoute(userId: string) {
       teamPersonRouteSchema.parse(
         await api.get('internal/team-whatsapp/person-route', { searchParams: { userId } }).json(),
       ),
+  });
+}
+
+/**
+ * Prévia do público (CF1): POST sem efeito colateral, com a regra e as pessoas que o envio teria. `null` não
+ * busca (o chamador ainda não tem setor, data ou finalidade). O debounce de 300 ms é do chamador; enquanto
+ * a prévia do novo corpo chega, `placeholderData` mantém a anterior (a tela confere `isPlaceholderData`).
+ */
+export function useAudiencePreview(body: TeamAudienceRequest | null) {
+  return useQuery({
+    queryKey: [...AUDIENCE_PREVIEW_KEY, body],
+    retry: false,
+    queryFn:
+      body === null
+        ? skipToken
+        : async () =>
+            teamAudiencePreviewSchema.parse(
+              await api.post('internal/team-whatsapp/dispatches/preview', { json: body }).json(),
+            ),
+    // Sempre confere de novo: o público depende da escala de agora, e `isFresh` da tela exige a resposta do corpo atual.
+    staleTime: 0,
+    placeholderData: keepPreviousData,
   });
 }
 

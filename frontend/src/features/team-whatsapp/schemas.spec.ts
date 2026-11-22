@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { PREVIEW_RESPONSE } from './audience-preview.test-fixtures';
 import {
   dispatchDetailSchema, dispatchListSchema, dispatchRecipientPageSchema, retryResultSchema, rosterMemberSchema,
-  teamPersonRouteSchema, teamRosterSchema,
+  teamAudiencePreviewSchema, teamPersonRouteSchema, teamRosterSchema,
 } from './schemas';
 
 const base = {
@@ -18,6 +19,52 @@ const ZERO = {
 const page = { total: 2, page: 1, pageSize: 20 };
 const shift = { id: 'sh1', name: 'Noite', startTime: '22:00', endTime: '6h' };
 const target = (label: string) => ({ type: 'sector', id: 's1', label, shift });
+
+describe('teamAudiencePreviewSchema', () => {
+  it('prévia valida a resposta do servidor', () => {
+    expect(teamAudiencePreviewSchema.parse(PREVIEW_RESPONSE)).toEqual(PREVIEW_RESPONSE);
+    const semChave = { ...PREVIEW_RESPONSE, audienceKey: undefined };
+    expect(teamAudiencePreviewSchema.safeParse(semChave).success).toBe(false);
+    const motivoNovo = { ...PREVIEW_RESPONSE, excluded: [{ ...PREVIEW_RESPONSE.excluded[0], reason: 'inactive' }] };
+    expect(teamAudiencePreviewSchema.safeParse(motivoNovo).success).toBe(false);
+  });
+});
+
+const antigo = { purpose: null, base: null, activity: null, urgencyReason: null };
+const item = { ...base, id: 'd1', target: target('Produção'), state: 'DISPATCHED', scheduledFor: null, counts: ZERO };
+const detail = {
+  id: 'd1', targetLabel: 'Produção', text: 'Oi', state: 'DISPATCHED', createdAt: base.createdAt, scheduledFor: null,
+  firedAt: null, author: null, sectors: [], channels: [], counts: ZERO,
+  leftOut: { unselected: [], off: [] },
+};
+
+describe('finalidade no histórico', () => {
+  it('lista e detalhe aceitam envio antigo com campos nulos', () => {
+    const lista = dispatchListSchema.parse({ items: [{ ...item, ...antigo }], ...page });
+    expect(lista.items[0]).toMatchObject(antigo);
+    const detalhe = dispatchDetailSchema.parse({ ...detail, ...antigo, rule: null, excluded: [] });
+    expect(detalhe).toMatchObject({ purpose: null, base: null, rule: null, excluded: [] });
+  });
+
+  it('detalhe de envio novo traz a finalidade, a regra e os excluídos com motivo', () => {
+    const novo = { ...detail, purpose: 'meeting', base: 'assigned', rule: PREVIEW_RESPONSE.rule, excluded: PREVIEW_RESPONSE.excluded };
+    const detalhe = dispatchDetailSchema.parse(novo);
+    expect(detalhe).toMatchObject({ purpose: 'meeting', base: 'assigned' });
+    expect(detalhe.excluded[0].reason).toBe('day_off');
+  });
+});
+
+describe('finalidade no histórico: campos obrigatórios (T12-m1)', () => {
+  it('envio sem os campos da finalidade estoura no parse em vez de virar regra anterior', () => {
+    expect(dispatchListSchema.safeParse({ items: [item], ...page }).success).toBe(false);
+    expect(dispatchDetailSchema.safeParse({ ...detail, purpose: null, base: null }).success).toBe(false);
+    expect(dispatchDetailSchema.safeParse({ ...detail, base: null, rule: null }).success).toBe(false);
+  });
+
+  it('excluded ausente vira lista vazia', () => {
+    expect(dispatchDetailSchema.parse({ ...detail, ...antigo, rule: null }).excluded).toEqual([]);
+  });
+});
 
 describe('rosterMemberSchema: telefone (CB5)', () => {
   const rosterMember = {
@@ -40,11 +87,11 @@ describe('dispatchListSchema', () => {
     const parsed = dispatchListSchema.parse({
       items: [
         {
-          ...base, id: 'd1', target: target('Produção · Noite · 21/10'), state: 'SCHEDULED',
+          ...base, ...antigo, id: 'd1', target: target('Produção · Noite · 21/10'), state: 'SCHEDULED',
           scheduledFor: '2026-10-22T02:00:00.000Z', counts: { ...ZERO, scheduled: 1 },
         },
         {
-          ...base, id: 'd2', target: target('RH, TI · Noite · 20/10'), state: 'CANCELLED', scheduledFor: null,
+          ...base, ...antigo, id: 'd2', target: target('RH, TI · Noite · 20/10'), state: 'CANCELLED', scheduledFor: null,
           sectors: [{ id: 'rh', name: 'RH' }, { id: 'ti', name: 'TI' }],
           channels: [{ name: 'GoZap Principal', phoneE164: '+5592999990000', count: 2 }, { name: null, phoneE164: null, count: 1 }],
           counts: { ...ZERO, skipped: 1, cancelled: 1, read: 1 },
@@ -99,7 +146,7 @@ describe('resultado do envio (C5, C6)', () => {
   const detailWith = (leftOut: unknown) => ({
     id: 'd1', targetLabel: 'TI', text: 'Oi', state: 'DISPATCHED', createdAt: '2026-10-21T12:00:00.000Z',
     scheduledFor: null, firedAt: null, author: { id: 'a1', name: 'Ada' }, sectors: [{ id: 's1', name: 'TI' }],
-    counts: ZERO, channels: [{ name: null, phoneE164: null, count: 1 }], leftOut,
+    counts: ZERO, channels: [{ name: null, phoneE164: null, count: 1 }], leftOut, ...antigo, rule: null,
   });
 
   it('lê o detalhe com quem ficou de fora no formato da pessoa do roster do back', () => {

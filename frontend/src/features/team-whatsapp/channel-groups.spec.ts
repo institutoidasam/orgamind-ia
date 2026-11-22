@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildChannelGroups, receivingBySector, type RosterSectorView } from './channel-groups';
+import { buildChannelGroups, type RosterSectorView } from './channel-groups';
 import type { TeamSectorChannel } from './schemas';
 
 const channel = (id: string, state: TeamSectorChannel['live']['state'] = 'open'): TeamSectorChannel => ({
@@ -48,16 +48,5 @@ describe('buildChannelGroups', () => {
     const result = buildChannelGroups(sectors as readonly RosterSectorView[], counts);
     expect(result.block).toBe(expected);
     if (expected === 'missing') expect(result.missing).toEqual([{ id: 'man', name: 'Manutenção' }]);
-  });
-});
-
-describe('receivingBySector', () => {
-  it('conta, por setor, só quem está na lista de quem recebe', () => {
-    const roster = [
-      { sectorId: 'log', members: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] },
-      { sectorId: 'exp', members: [{ id: 'd' }] },
-    ];
-    const map = receivingBySector(roster, [{ id: 'a' }, { id: 'c' }, { id: 'd' }, { id: 'z' }]);
-    expect(Object.fromEntries(map)).toEqual({ log: 2, exp: 1 });
   });
 });

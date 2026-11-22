@@ -23,17 +23,3 @@ export function overnightInProgress(
   );
   return shift ? { date: addDays(todayIn(now), -1), shift } : null;
 }
-
-/**
- * Filtro da seleção manual sobre a lista elegível da escala da data. `null` =
- * seleção inválida (algum id fora da lista). Ids repetidos contam uma vez.
- */
-export function selectMembers<M extends { id: string }>(
-  eligible: readonly M[],
-  userIds: readonly string[] | undefined,
-): M[] | null {
-  if (!userIds) return [...eligible];
-  const wanted = new Set(userIds);
-  const picked = eligible.filter((m) => wanted.has(m.id));
-  return picked.length === wanted.size ? picked : null;
-}

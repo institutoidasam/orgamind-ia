@@ -17,6 +17,24 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+describe('novidade: finalidade do WhatsApp da equipe', () => {
+  const note = RELEASE_NOTES.find((n) => n.version === '2026.11.20');
+  const texts = (note?.items ?? []).map((item) => item.text);
+
+  it('abre a lista, linka a tela de WhatsApp da equipe e diz que férias nunca recebem (sentença 1)', () => {
+    expect(RELEASE_NOTES[0]).toBe(note);
+    expect(note?.items.some((item) => item.where === '/whatsapp-equipe')).toBe(true);
+    expect(texts.some((t) => t.includes('"Incluir quem está de folga"') && t.includes('não inclui mais quem está de férias'))).toBe(true);
+    expect(texts.some((t) => t.includes('Férias nunca recebem'))).toBe(true);
+  });
+
+  it('pede para recarregar a página aberta antes da atualização (DF13)', () => {
+    expect(texts).toContain(
+      'Se a tela de WhatsApp da equipe já estava aberta antes da atualização, recarregue a página antes de enviar.',
+    );
+  });
+});
+
 describe('RELEASE_NOTES', () => {
   it('não é vazio', () => {
     // latestRelease() devolve RELEASE_NOTES[0] sem checar limites — um

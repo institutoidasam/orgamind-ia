@@ -1,91 +1,55 @@
 import { formatDayMonth } from '@/lib/civil-date';
-import type { LeftOutPerson, RecipientPreview, RosterMember, SendTarget, TeamLevel } from './schemas';
+import type {
+  LeftOutPerson, RecipientPreview, SendTarget, TeamAudiencePerson, TeamAudiencePreview, TeamExcludedPerson,
+} from './schemas';
 
-export const memberName = (m: RosterMember): string => m.name ?? m.email ?? 'Sem nome';
+/** Quem vai receber, como a prévia do servidor o devolve (o telefone vem mascarado ou não, conforme a permissão). */
+export type ReceivingPerson = TeamAudiencePreview['included'][number];
 
-/** Tem telefone (`hasPhone`, DB8) e não está `NAO_AUTORIZADO` (C8); `contactAuthorization` ausente = autorizado. */
-export const canReceive = (m: RosterMember): boolean => m.hasPhone && m.contactAuthorization !== 'NAO_AUTORIZADO';
-
-/** Tem telefone, mas está `NAO_AUTORIZADO`: fica de fora, em "Contato não autorizado". Sem telefone vale "Sem telefone". */
-export const isNotAuthorized = (m: RosterMember): boolean => m.hasPhone && m.contactAuthorization === 'NAO_AUTORIZADO';
-
-/** Filtro de nível do envio: vazio e sem `withoutLevel` = todos (C5). */
-export type LevelFilter = { levelIds: readonly string[]; withoutLevel: boolean };
-
-/** Quem passa no filtro de nível: tem um dos níveis, ou não tem nível e `withoutLevel`. */
-export function filterByLevel(members: readonly RosterMember[], { levelIds, withoutLevel }: LevelFilter): RosterMember[] {
-  if (levelIds.length === 0 && !withoutLevel) return [...members];
-  return members.filter((m) => (m.level ? levelIds.includes(m.level.id) : withoutLevel));
-}
+/** Uma área da lista "Vão receber": a que o servidor usa para mandar (`sectorId`, CF3). */
+export type AreaGroup = { sectorId: string; name: string; people: ReceivingPerson[] };
 
 /**
- * Lista da tela, na ordem do back: ativos escalados (WORK) em algum dos turnos escolhidos; sem
- * turnos (`shiftIds` vazio = "Todos os turnos"), todo WORK, mais quem está de folga se `includeOff`.
- * Quem não tem escala (NONE) nunca entra (D2). `includeOff` é ignorado com turnos escolhidos.
+ * Quem vai receber, por área, na ordem dos setores da regra. A pessoa traz a área por onde o servidor manda
+ * (remanejado A→B: B na base em serviço, A na vinculada) e conta uma vez, só nessa área.
  */
-export function eligibleMembers(
-  members: readonly RosterMember[],
-  shiftIds: readonly string[],
-  includeOff: boolean,
-): RosterMember[] {
-  const all = shiftIds.length === 0;
-  return members.filter(({ isActive, situation }) => {
-    if (!isActive) return false;
-    if (situation.kind === 'OFF') return all && includeOff;
-    return situation.kind === 'WORK' && (all || shiftIds.includes(situation.shiftId));
-  });
-}
-
-/** Grupo "De folga": folga ou férias entre as pessoas do setor (visitante não conta). */
-export function offMembers(members: readonly RosterMember[]): RosterMember[] {
-  return members.filter((m) => m.isActive && m.situation.kind === 'OFF' && !m.fromOtherSector);
-}
-
-/** Sem escala e sem turno no cadastro: não entram em nenhum turno. */
-export function noScheduleCount(members: readonly RosterMember[]): number {
-  return members.filter((m) => m.isActive && m.situation.kind === 'NONE').length;
-}
-
-/** Ids marcados que seguem na lista e podem receber, na ordem do back (não na do clique). */
-export function selectedIdsIn(visible: readonly RosterMember[], selected: ReadonlySet<string>): string[] {
-  return visible.filter((m) => canReceive(m) && selected.has(m.id)).map((m) => m.id);
-}
-
-/** Destinatários de origem de autorização não verificada; `selectedIds` null = todos que recebem. */
-export function unverifiedCount(members: readonly RosterMember[], selectedIds: readonly string[] | null): number {
-  return members.filter((m) => (
-    canReceive(m) && m.authorizationUnverified === true && (!selectedIds || selectedIds.includes(m.id))
-  )).length;
-}
-
-/** Marca todos os habilitados; se já estavam todos marcados, desmarca. */
-export function toggleAllEnabled(visible: readonly RosterMember[], selected: ReadonlySet<string>): Set<string> {
-  const enabled = visible.filter(canReceive).map((m) => m.id);
-  const allOn = enabled.length > 0 && enabled.every((id) => selected.has(id));
-  const next = new Set(selected);
-  for (const id of enabled) {
-    if (allOn) next.delete(id);
-    else next.add(id);
+export function receivingByArea({ rule, included }: TeamAudiencePreview): AreaGroup[] {
+  const groups = rule.sectors.map(({ id, name }): AreaGroup => ({ sectorId: id, name, people: [] }));
+  for (const person of included) {
+    let group = groups.find((g) => g.sectorId === person.sectorId);
+    if (!group) {
+      group = { sectorId: person.sectorId, name: person.sectorName, people: [] };
+      groups.push(group);
+    }
+    group.people.push(person);
   }
-  return next;
+  return groups;
 }
 
-const preview = (m: RosterMember): RecipientPreview => ({ id: m.id, name: memberName(m) });
+/** Candidatos que só ficaram de fora porque há seleção ("Não selecionado"): a tela os deixa marcar. */
+export function unselectedPeople({ excluded }: Pick<TeamAudiencePreview, 'excluded'>): TeamExcludedPerson[] {
+  return excluded.filter((p) => p.reason === 'not_selected');
+}
 
-/**
- * Quem fica de fora da lista conferida, na ordem da lista: sem telefone (`no_phone`), contato não
- * autorizado (`not_authorized`) e, quando há seleção ("só os marcados"), quem pode receber e não foi
- * marcado (`unselected`). `null` = todos.
- */
-export function leftOutPeople(
-  members: readonly RosterMember[],
-  selectedIds: readonly string[] | null,
-): LeftOutPerson[] {
-  return members.flatMap((m): LeftOutPerson[] => {
-    if (!m.hasPhone) return [{ name: memberName(m), reason: 'no_phone' }];
-    if (isNotAuthorized(m)) return [{ name: memberName(m), reason: 'not_authorized' }];
-    return selectedIds && !selectedIds.includes(m.id) ? [{ name: memberName(m), reason: 'unselected' }] : [];
-  });
+/** Quem está fora por motivo próprio (Folga, Férias, Sem telefone...): só informativo, sem caixa de marcar (C3). */
+export function leftOutByReason({ excluded }: Pick<TeamAudiencePreview, 'excluded'>): TeamExcludedPerson[] {
+  return excluded.filter((p) => p.reason !== 'not_selected');
+}
+
+/** Ids que a tela deixa marcar: os que vão receber e os "Não selecionado". */
+export function markableIds(preview: TeamAudiencePreview): string[] {
+  return [...preview.included, ...unselectedPeople(preview)].map((p) => p.userId);
+}
+
+/** Marca todos os marcáveis; se já estavam todos marcados, limpa a seleção (volta a "todos"). */
+export function toggleAllMarkable(ids: readonly string[], selected: ReadonlySet<string>): Set<string> {
+  const allOn = ids.length > 0 && ids.every((id) => selected.has(id));
+  return allOn ? new Set() : new Set([...selected, ...ids]);
+}
+
+/** Marcados que a prévia manteve em "Vão receber" (quem foi marcado e está de fora fica de fora, com o motivo). */
+export function markedReceiving(included: readonly ReceivingPerson[], selected: ReadonlySet<string>): ReceivingPerson[] {
+  return included.filter((p) => selected.has(p.userId));
 }
 
 const SEM_NIVEL = 'Sem nível';
@@ -96,73 +60,62 @@ function namesLabel(names: readonly string[]): string {
   return names.length > 2 ? `${shown} +${names.length - 2}` : shown;
 }
 
-/** Nomes dos níveis do filtro pela ordem de `levels` (sortOrder), "Sem nível" por último. */
-function levelNames(levels: readonly TeamLevel[], { levelIds, withoutLevel }: LevelFilter): string[] {
-  const chosen = levels.filter((l) => levelIds.includes(l.id)).map((l) => l.name);
-  return withoutLevel ? [...chosen, SEM_NIVEL] : chosen;
-}
-
-type LabelInput = {
-  sectorNames: readonly string[];
-  levelNames: readonly string[];
-  /** Nomes dos turnos escolhidos, na ordem dos turnos; vazio = "todos os turnos". */
-  shiftNames: readonly string[];
-  date: string;
-  selectedCount: number | null;
-};
-
-/** Mesmo rótulo que o back grava em `targetLabel` (GC12). */
-function sectorLabel(input: LabelInput): string {
-  const sectors = [...input.sectorNames].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+/** Mesmo rótulo que o back grava em `targetLabel` (GC12), montado da regra que o servidor aplicou. */
+function sectorLabel({ rule }: TeamAudiencePreview, selectedCount: number | null): string {
+  const sectors = rule.sectors.map((s) => s.name).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const levels = [...rule.levels.map((l) => l.name), ...(rule.withoutLevel ? [SEM_NIVEL] : [])];
   return [
     namesLabel(sectors),
-    ...(input.levelNames.length > 0 ? [namesLabel(input.levelNames)] : []),
-    input.shiftNames.length > 0 ? namesLabel(input.shiftNames) : 'todos os turnos',
-    formatDayMonth(input.date),
-    ...(input.selectedCount === null ? [] : [`seleção de ${input.selectedCount}`]),
+    ...(levels.length > 0 ? [namesLabel(levels)] : []),
+    rule.shifts ? namesLabel(rule.shifts.map((s) => s.name)) : 'todos os turnos',
+    formatDayMonth(rule.rosterDate),
+    ...(selectedCount === null ? [] : [`seleção de ${selectedCount}`]),
   ].join(' · ');
 }
 
-type SectorTargetInput = {
-  /** Setores da lista conferida, com todos os membros (o filtro de nível é aplicado aqui). */
-  sectors: readonly { id: string; name: string; members: readonly RosterMember[] }[];
-  /** Níveis ativos (para os nomes do rótulo). */
-  levels: readonly TeamLevel[];
-  levelFilter: LevelFilter;
-  /** Turnos ativos, na ordem de `listActiveShifts` (a do rótulo). */
-  shifts: readonly { id: string; name: string }[];
-  /** Turnos escolhidos; vazio = "Todos os turnos". */
-  shiftIds: readonly string[];
-  date: string;
-  includeOff: boolean;
-  /** null = "Enviar para todos"; senão, os marcados. */
-  selectedIds: readonly string[] | null;
+const recipient = (p: TeamAudiencePerson): RecipientPreview => ({ id: p.userId, name: p.name });
+
+const LEFT_OUT_REASON: Partial<Record<TeamExcludedPerson['reason'], LeftOutPerson['reason']>> = {
+  not_selected: 'unselected',
+  no_phone: 'no_phone',
+  not_authorized: 'not_authorized',
 };
 
-export function buildSectorTarget(input: SectorTargetInput): SendTarget {
-  const { date, selectedIds, levelFilter } = input;
-  const includeOff = input.shiftIds.length === 0 && input.includeOff;
-  const visible = input.sectors.flatMap((s) => (
-    eligibleMembers(filterByLevel(s.members, levelFilter), input.shiftIds, includeOff)
-  ));
-  const chosen = selectedIds ? visible.filter((m) => canReceive(m) && selectedIds.includes(m.id)) : null;
+/** Quem a confirmação ainda sabe mostrar como "fica de fora"; os outros motivos são do diálogo novo (T15). */
+function leftOutOf(excluded: readonly TeamExcludedPerson[]): LeftOutPerson[] {
+  return excluded.flatMap(({ name, reason }): LeftOutPerson[] => {
+    const known = LEFT_OUT_REASON[reason];
+    return known ? [{ name, reason: known }] : [];
+  });
+}
+
+type SectorTargetInput = {
+  /** Prévia do corpo atual (a que o operador viu). */
+  preview: TeamAudiencePreview;
+  /** Setores pedidos, na ordem da tela (a mesma da consulta da escala). */
+  sectorIds: readonly string[];
+  /** Ids marcados, os mesmos que foram na prévia; vazio = "Enviar para todos". */
+  selectedIds: readonly string[];
+};
+
+/**
+ * Alvo do diálogo de envio, com a lista conferida: pessoas e regra vêm da prévia do servidor, não do quadro. O "seleção
+ * de N" conta os ids marcados, como o `targetLabel` que o servidor grava, e não só os que a prévia manteve.
+ */
+export function buildSectorTarget({ preview, sectorIds, selectedIds }: SectorTargetInput): SendTarget {
+  const { rule, included, excluded } = preview;
+  const marked = selectedIds.length > 0;
   return {
     type: 'sector',
-    sectorIds: input.sectors.map((s) => s.id),
-    levelIds: [...levelFilter.levelIds],
-    withoutLevel: levelFilter.withoutLevel,
-    label: sectorLabel({
-      sectorNames: input.sectors.map((s) => s.name),
-      levelNames: levelNames(input.levels, levelFilter),
-      shiftNames: input.shifts.filter((s) => input.shiftIds.includes(s.id)).map((s) => s.name),
-      date,
-      selectedCount: selectedIds ? selectedIds.length : null,
-    }),
-    date,
-    shiftIds: [...input.shiftIds],
-    includeOff,
-    userIds: selectedIds ? [...selectedIds] : null,
-    recipients: (chosen ?? visible.filter(canReceive)).map(preview),
-    leftOut: leftOutPeople(visible, selectedIds),
+    sectorIds: [...sectorIds],
+    levelIds: rule.levels.map((l) => l.id),
+    withoutLevel: rule.withoutLevel,
+    label: sectorLabel(preview, marked ? selectedIds.length : null),
+    date: rule.rosterDate,
+    shiftIds: rule.shifts?.map((s) => s.id) ?? [],
+    includeOff: rule.includeOff,
+    userIds: marked ? [...selectedIds] : null,
+    recipients: included.map(recipient),
+    leftOut: leftOutOf(excluded),
   };
 }

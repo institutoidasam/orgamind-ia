@@ -12,6 +12,7 @@ import {
   sector,
   type Harness,
 } from './team-whatsapp.test-fixtures';
+import { withAudienceKey } from './team-whatsapp.sector-send.test-fixtures';
 
 // R5 (anti-objetivo): envio a um setor sem nível é exatamente o de hoje. O
 // literal abaixo foi copiado da chamada real de `createDispatch` antes da T7;
@@ -90,39 +91,32 @@ const TODAY = {
   text: 'Oi',
   // T7 (C6): uma linha por setor; `targetId` segue = o setor (o primeiro).
   sectors: [{ sectorId: PROD, sectorName: 'Produção' }],
-  roster: {
-    working: [
-      {
-        userId: 'bia',
-        name: 'Bia',
-        jobTitle: 'Técnica',
-        shiftName: 'Noite',
-        reason: null,
-        sectorName: 'Produção',
-        levelName: null,
-      },
-      {
-        userId: 'joao',
-        name: 'João',
-        jobTitle: 'Operador',
-        shiftName: 'Noite',
-        reason: null,
-        sectorName: 'Produção',
-        levelName: null,
-      },
-    ],
-    off: [
-      {
-        userId: 'maria',
-        name: 'Maria',
-        jobTitle: 'Técnica',
-        shiftName: null,
-        reason: 'VACATION',
-        sectorName: 'Produção',
-        levelName: null,
-      },
-    ],
-  },
+  // DF4: envio novo grava roster null; a finalidade, a base e os excluídos
+  // (inclusive o pulado sem telefone, DF3) vão nas colunas próprias.
+  roster: null,
+  purpose: 'SHIFT_NOTICE',
+  audienceBase: 'ON_DUTY',
+  audienceExcluded: [
+    {
+      userId: 'maria',
+      name: 'Maria',
+      sectorId: PROD,
+      sectorName: 'Produção',
+      // Turno considerado: o do vínculo (a pessoa está de férias, sem escala).
+      shiftName: 'Noite',
+      levelName: null,
+      reason: 'vacation',
+    },
+    {
+      userId: 'bia',
+      name: 'Bia',
+      sectorId: PROD,
+      sectorName: 'Produção',
+      shiftName: 'Noite',
+      levelName: null,
+      reason: 'no_phone',
+    },
+  ],
 };
 // T7: setor em que a pessoa entrou; nível só a partir da T8b (null).
 const PROD_SNAPSHOT = {
@@ -159,6 +153,23 @@ const recipientsOf = (pending: 'QUEUED' | 'SCHEDULED') => [
   },
 ];
 
+// O corpo passa pelo schema (apelidos, D9) e leva a impressão do público (CF2);
+// a chave de zeros só satisfaz o schema e o helper a troca pela calculada.
+const sendProd = async (when: 'now' | 'shift_start', shift: object) => {
+  const parsed = createTeamDispatchSchema.parse({
+    channelId: 'c1',
+    text: 'Oi',
+    purpose: 'shift_notice',
+    audienceKey: '0'.repeat(64),
+    when,
+    target: { type: 'sector', sectorIds: [PROD], date: DATE, ...shift },
+  });
+  return h.service.dispatch(
+    ADMIN.id,
+    await withAudienceKey(h, ADMIN.id, parsed),
+  );
+};
+
 // D9: `shiftId` (apelido) e `shiftIds: [id]` chegam ao mesmo envio de hoje.
 describe.each([
   ['shiftId', { shiftId: NOITE.id }],
@@ -177,15 +188,7 @@ describe.each([
   ] as const)(
     'createDispatch recebe o mesmo de hoje (%s)',
     async (when, pending, extra) => {
-      await h.service.dispatch(
-        ADMIN.id,
-        createTeamDispatchSchema.parse({
-          channelId: 'c1',
-          text: 'Oi',
-          when,
-          target: { type: 'sector', sectorIds: [PROD], date: DATE, ...shift },
-        }),
-      );
+      await sendProd(when, shift);
       expect(h.repo.createDispatch.mock.calls).toHaveLength(1);
       const created = h.repo.createDispatch.mock.calls[0][0];
       expect(created).toMatchObject({

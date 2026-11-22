@@ -1,11 +1,16 @@
 import { describe, it, expect, vi } from 'vitest';
-import { Test } from '@nestjs/testing';
+import { Test, type TestingModule } from '@nestjs/testing';
+import { ConfigService } from '@nestjs/config';
 import { getQueueToken } from '@nestjs/bullmq';
 import { AppModule } from '../../app.module';
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { REDIS_CLIENT } from '../../shared/redis/redis.module';
 import { QUEUE_NAMES } from '../queue/queue.constants';
 import { ChannelLiveStateService } from '../whatsapp-providers/channel-live-state.service';
+import { ConsentService } from '../consent/consent.service';
+import { LevelsRepository } from '../levels/levels.repository';
+import { TeamAudienceService } from './team-audience.service';
+import { TeamWhatsappRepository } from './team-whatsapp.repository';
 import { TeamWhatsappService } from './team-whatsapp.service';
 
 // O `ConfigModule.forRoot()` valida o env no IMPORT; `vi.hoisted` roda antes
@@ -28,6 +33,40 @@ vi.hoisted(() => {
   });
 });
 
+/** Prisma e Redis são dublês; as filas, também. Compila uma vez para o arquivo. */
+async function compileApp(): Promise<TestingModule> {
+  const fakeRedis = {
+    set: vi.fn(),
+    get: vi.fn(),
+    del: vi.fn(),
+    pttl: vi.fn(),
+    incr: vi.fn(),
+    expire: vi.fn(),
+    quit: vi.fn(),
+    on: vi.fn(),
+    duplicate: vi.fn(function (this: unknown) {
+      return this;
+    }),
+  };
+  const builder = Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(PrismaService)
+    .useValue({ $connect: vi.fn(), $disconnect: vi.fn(), $on: vi.fn() })
+    .overrideProvider(REDIS_CLIENT)
+    .useValue(fakeRedis);
+  for (const name of Object.values(QUEUE_NAMES)) {
+    builder.overrideProvider(getQueueToken(name)).useValue({
+      add: vi.fn(),
+      getJobs: vi.fn().mockResolvedValue([]),
+      on: vi.fn(),
+      close: vi.fn(),
+    });
+  }
+  return builder.compile();
+}
+
+let compiled: Promise<TestingModule> | undefined;
+const app = () => (compiled ??= compileApp());
+
 /**
  * O TeamWhatsappModule importa o WhatsappProvidersModule (porta do estado ao
  * vivo, D7). Ciclo de módulos ou provider fora de escopo não aparece em `tsc`
@@ -36,38 +75,34 @@ vi.hoisted(() => {
  */
 describe('TeamWhatsappModule — o grafo de DI resolve (sem ciclo)', () => {
   it('compila o AppModule e injeta o ChannelLiveStateService no TeamWhatsappService', async () => {
-    const fakeRedis = {
-      set: vi.fn(),
-      get: vi.fn(),
-      del: vi.fn(),
-      pttl: vi.fn(),
-      incr: vi.fn(),
-      expire: vi.fn(),
-      quit: vi.fn(),
-      on: vi.fn(),
-      duplicate: vi.fn(function (this: unknown) {
-        return this;
-      }),
-    };
-    const builder = Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(PrismaService)
-      .useValue({ $connect: vi.fn(), $disconnect: vi.fn(), $on: vi.fn() })
-      .overrideProvider(REDIS_CLIENT)
-      .useValue(fakeRedis);
-    for (const name of Object.values(QUEUE_NAMES)) {
-      builder.overrideProvider(getQueueToken(name)).useValue({
-        add: vi.fn(),
-        getJobs: vi.fn().mockResolvedValue([]),
-        on: vi.fn(),
-        close: vi.fn(),
-      });
-    }
-
-    const moduleRef = await builder.compile();
+    const moduleRef = await app();
 
     const team = moduleRef.get(TeamWhatsappService, { strict: false });
     expect((team as unknown as { live: unknown }).live).toBeInstanceOf(
       ChannelLiveStateService,
+    );
+  }, 60_000);
+});
+
+/** T7: o serviço do público (prévia e envio) recebe as 4 dependências de CF9 no boot. */
+describe('TeamWhatsappModule — TeamAudienceService no grafo', () => {
+  it('injeta repositório, consentimento, níveis e ConfigService no TeamAudienceService', async () => {
+    const moduleRef = await app();
+
+    const audience = moduleRef.get(TeamAudienceService, { strict: false });
+    const deps = audience as unknown as Record<string, unknown>;
+    expect(deps.repo).toBeInstanceOf(TeamWhatsappRepository);
+    expect(deps.consent).toBeInstanceOf(ConsentService);
+    expect(deps.levels).toBeInstanceOf(LevelsRepository);
+    expect(deps.config).toBeInstanceOf(ConfigService);
+  }, 60_000);
+
+  it('injeta o TeamAudienceService no TeamWhatsappService (envio para setor)', async () => {
+    const moduleRef = await app();
+
+    const team = moduleRef.get(TeamWhatsappService, { strict: false });
+    expect((team as unknown as { audience: unknown }).audience).toBeInstanceOf(
+      TeamAudienceService,
     );
   }, 60_000);
 });

@@ -1,6 +1,9 @@
 import { channelLabel, countParts, OFF_REASON_LABEL } from '../error-messages';
-import type { DispatchDetail, LeftOutRosterPerson } from '../schemas';
+import { BASE_LABEL, LEGACY_BASE_LABEL, PURPOSE_LABEL } from '../labels';
+import type { DispatchDetail, LeftOutRosterPerson, TeamExclusionReason } from '../schemas';
+import { ExcludedGroups } from './excluded-groups';
 import { RecipientTable } from './recipient-table';
+import { RulePanel } from './rule-panel';
 
 const STATE_LABEL = { SCHEDULED: 'Agendado', CANCELLED: 'Cancelado' } as const;
 
@@ -62,7 +65,48 @@ function LeftOut({ leftOut, showSector }: { leftOut: DispatchDetail['leftOut']; 
   );
 }
 
-/** Tela de resultado: topo com o envio e as contagens, quem ficou de fora e a lista por nome. */
+/**
+ * Envio a uma pessoa não tem finalidade nem base (não muda nesta etapa): o detalhe não traz o alvo, mas todo
+ * envio a setor grava ao menos um setor (migração D5) e o envio a uma pessoa grava `sectors: []`.
+ */
+const isPersonTarget = (dispatch: DispatchDetail): boolean => dispatch.sectors.length === 0;
+
+/** Envio a setor anterior à finalidade (C5, GF13): finalidade `—` e base `equipe em serviço (regra anterior)`. */
+function LegacyRule({ dispatch }: { dispatch: DispatchDetail }) {
+  const purpose = dispatch.purpose ? PURPOSE_LABEL[dispatch.purpose] : '—';
+  const base = dispatch.base ? BASE_LABEL[dispatch.base] : LEGACY_BASE_LABEL;
+  return <p className="text-sm text-muted-foreground">{`Finalidade: ${purpose} · Base: ${base}`}</p>;
+}
+
+/**
+ * Motivos de telefone: o servidor grava essas pessoas como excluídas E como destinatários `SKIPPED` (DF3).
+ * É o mesmo conjunto de `PHONE_SKIP` do back.
+ */
+const PHONE_EXCLUSIONS: ReadonlySet<TeamExclusionReason> = new Set(['no_phone', 'suppressed', 'not_authorized']);
+
+/**
+ * "No público": quem foi de fato para a fila ou o agendamento, como o `included` da prévia (aceite 12). A soma das
+ * situações conta também os pulados por telefone, que já aparecem em "De fora": sai uma vez cada um.
+ */
+function audienceCount({ counts, excluded }: DispatchDetail): number {
+  const recorded = Object.values(counts).reduce((sum, count) => sum + count, 0);
+  return recorded - excluded.filter((p) => PHONE_EXCLUSIONS.has(p.reason)).length;
+}
+
+/** Com regra gravada, o painel e os excluídos por motivo; sem ela (envio antigo), só `leftOut` vale. */
+function Audience({ dispatch }: { dispatch: DispatchDetail }) {
+  if (!dispatch.rule) {
+    return <LeftOut leftOut={dispatch.leftOut} showSector={dispatch.sectors.length > 1} />;
+  }
+  return (
+    <>
+      <RulePanel rule={dispatch.rule} includedCount={audienceCount(dispatch)} excludedCount={dispatch.excluded.length} />
+      <ExcludedGroups excluded={dispatch.excluded} />
+    </>
+  );
+}
+
+/** Tela de resultado: topo com o envio e as contagens, a regra e quem ficou de fora, e a lista por nome. */
 export function DispatchResult({ dispatch }: { dispatch: DispatchDetail }) {
   return (
     <div className="space-y-6">
@@ -74,13 +118,14 @@ export function DispatchResult({ dispatch }: { dispatch: DispatchDetail }) {
           {whenText(dispatch)}
           {dispatch.state !== 'DISPATCHED' && ` · ${STATE_LABEL[dispatch.state]}`}
         </p>
+        {!dispatch.rule && !isPersonTarget(dispatch) && <LegacyRule dispatch={dispatch} />}
         <p className="whitespace-pre-wrap rounded-md border p-3 text-sm" style={{ borderColor: 'var(--border)' }}>
           {dispatch.text}
         </p>
         <Channels channels={dispatch.channels} />
         <Counts counts={dispatch.counts} />
       </header>
-      <LeftOut leftOut={dispatch.leftOut} showSector={dispatch.sectors.length > 1} />
+      <Audience dispatch={dispatch} />
       <RecipientTable dispatchId={dispatch.id} failedCount={dispatch.counts.failed} />
     </div>
   );

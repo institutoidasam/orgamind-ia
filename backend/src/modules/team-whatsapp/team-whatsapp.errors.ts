@@ -3,6 +3,7 @@ import {
   DomainError,
   ForbiddenError,
 } from '../../shared/errors/domain.error';
+import type { TeamAudiencePreview } from '../../schemas/contracts/team-whatsapp.schema';
 
 /** Fora da política (remetente, alvo ou setor): 403 único, sem detalhar o motivo. */
 export function teamForbidden(): ForbiddenError {
@@ -20,12 +21,9 @@ export function broadSendDenied(): ForbiddenError {
   );
 }
 
+/** Público vazio: ninguém para receber (trava `no_recipients`). */
 export function noRecipients(): DomainError {
-  return new DomainError({
-    code: 'team_whatsapp.no_recipients',
-    message: 'Nenhum destinatário válido',
-    status: 422,
-  });
+  return blocked(audienceBlock('no_recipients'));
 }
 
 /** Número da área fechado (`close`/`connecting`) na hora do envio imediato (D7): nada é criado. */
@@ -46,11 +44,7 @@ export function channelUnverified(): ConflictError {
 
 /** Área do envio sem número efetivo (D2): trava o envio inteiro (GC7); nada é criado. */
 export function sectorWithoutNumber(): DomainError {
-  return new DomainError({
-    code: 'team_whatsapp.sector_without_number',
-    message: 'Há área sem número neste envio',
-    status: 422,
-  });
+  return blocked(audienceBlock('sector_without_number'));
 }
 
 /** Alvo pessoa sem área na data (D8): sem área não há número; nada é criado. */
@@ -100,11 +94,7 @@ export function tooManyPeople(): DomainError {
 
 /** "No início do turno" com o início (data + turno, em Manaus) agora ou no passado. */
 export function scheduleInPast(): DomainError {
-  return new DomainError({
-    code: 'team_whatsapp.schedule_in_past',
-    message: 'O início deste turno já passou',
-    status: 422,
-  });
+  return blocked(audienceBlock('schedule_in_past'));
 }
 
 export function dispatchNotFound(): DomainError {
@@ -121,4 +111,94 @@ export function notCancellable(): ConflictError {
     'Envio não está mais agendado',
     'team_whatsapp.not_cancellable',
   );
+}
+
+/**
+ * CF4: a impressão do público calculada no envio não bate com a da prévia
+ * (outra pessoa, outro motivo ou outro telefone): nada é criado.
+ */
+export function audienceChanged(): ConflictError {
+  return new ConflictError(
+    'O público mudou depois da prévia. Confira de novo antes de enviar.',
+    'team_whatsapp.audience_changed',
+  );
+}
+
+/** Erro de regra da finalidade (DF8): 422 na prévia e no envio, antes do alcance. */
+function ruleError(code: string, message: string): DomainError {
+  return new DomainError({
+    code: `team_whatsapp.${code}`,
+    message,
+    status: 422,
+  });
+}
+
+/** Base diferente da fixada pela finalidade (só o Alinhamento escolhe). */
+export function invalidBase(): DomainError {
+  return ruleError(
+    'invalid_base',
+    'A base do público desta finalidade é fixa.',
+  );
+}
+
+/** "Incluir folga" pedido na base em serviço. */
+export function invalidOffOption(): DomainError {
+  return ruleError(
+    'invalid_off_option',
+    'A equipe em serviço não tem a opção de incluir quem está de folga.',
+  );
+}
+
+/** Momento do disparo fora dos permitidos pela finalidade. */
+export function whenNotAllowed(): DomainError {
+  return ruleError(
+    'when_not_allowed',
+    'Esta finalidade não pode ser enviada nesse momento.',
+  );
+}
+
+/** Data de referência (`target.date`) diferente da data da atividade. */
+export function invalidReferenceDate(): DomainError {
+  return ruleError(
+    'invalid_reference_date',
+    'A data de referência precisa ser a data da atividade.',
+  );
+}
+
+/**
+ * CF4: texto de cada trava do botão, na ordem fixa em que saem (prévia: lista;
+ * envio: 422 com a primeira). As chaves são os códigos sem o prefixo.
+ */
+export const BLOCK_TEXT = {
+  empty_text: 'Escreva a mensagem.',
+  // Reunião, Palestra e Hora extra; o Alinhamento usa MISSING_ACTIVITY_DATE_TIME_TEXT.
+  missing_activity: 'Informe a data, a hora e o local da atividade.',
+  missing_urgency_reason: 'Informe o motivo da urgência.',
+  overtime_without_selection: 'Marque pelo menos uma pessoa para a hora extra.',
+  schedule_in_past: 'O início deste turno já passou',
+  after_activity_start: 'A mensagem precisa sair antes do início da atividade.',
+  // Público vazio.
+  no_recipients: 'Nenhum destinatário válido',
+  sector_without_number: 'Há área sem número neste envio',
+} as const;
+
+/** Alinhamento com atividade incompleta: mesmo código `missing_activity`, sem exigir o local. */
+export const MISSING_ACTIVITY_DATE_TIME_TEXT =
+  'Informe a data e a hora da atividade.';
+
+export type BlockCode = keyof typeof BLOCK_TEXT;
+
+/** Trava como sai na prévia: código com o prefixo e texto (o de CF4, salvo o dado). */
+export type AudienceBlock = TeamAudiencePreview['blocks'][number];
+
+export function audienceBlock(
+  code: BlockCode,
+  message: string = BLOCK_TEXT[code],
+): AudienceBlock {
+  return { code: `team_whatsapp.${code}`, message };
+}
+
+/** Envio com trava: 422 com o código e o texto da primeira trava da lista. */
+export function blocked(block: AudienceBlock): DomainError {
+  return new DomainError({ ...block, status: 422 });
 }

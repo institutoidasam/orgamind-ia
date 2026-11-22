@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createFileRoute } from '@tanstack/react-router';
 import { HTTPError } from 'ky';
 import { QueryErrorFallback } from '@/components/query-error-fallback';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Skeleton } from '@/components/ui/skeleton';
 import { usePermission } from '@/features/permissions/use-permission';
 import {
@@ -9,19 +10,18 @@ import {
 } from '@/features/team-whatsapp/api';
 import { InProgressNotice } from '@/features/team-whatsapp/components/in-progress-notice';
 import { PagedError } from '@/features/team-whatsapp/components/paged-error';
+import { PurposeFields } from '@/features/team-whatsapp/components/purpose-fields';
 import { RecentDispatches } from '@/features/team-whatsapp/components/recent-dispatches';
 import { ScheduledDispatches } from '@/features/team-whatsapp/components/scheduled-dispatches';
 import { SendWhatsappDialog } from '@/features/team-whatsapp/components/send-whatsapp-dialog';
-import { MemberSelection, type SectorGroup } from '@/features/team-whatsapp/components/member-selection';
+import { MemberSelection } from '@/features/team-whatsapp/components/member-selection';
 import { SectorShiftPicker } from '@/features/team-whatsapp/components/sector-shift-picker';
-import {
-  buildSectorTarget, eligibleMembers, filterByLevel, noScheduleCount, offMembers, selectedIdsIn, toggleAllEnabled,
-  type LevelFilter,
-} from '@/features/team-whatsapp/member-filter';
+import { buildSectorTarget, markableIds, toggleAllMarkable } from '@/features/team-whatsapp/member-filter';
 import { apiErrorCode, teamErrorMessage } from '@/features/team-whatsapp/error-messages';
-import type { SendTarget, TeamRoster, TeamTargets } from '@/features/team-whatsapp/schemas';
+import type { SendTarget, TeamAudiencePreview, TeamRoster, TeamTargets } from '@/features/team-whatsapp/schemas';
 import { useBackToLastPage } from '@/features/team-whatsapp/use-back-to-last-page';
-import { useSendFilters } from '@/features/team-whatsapp/use-send-filters';
+import { useDebouncedAudience } from '@/features/team-whatsapp/use-audience-preview';
+import { referenceDate, showsScreenDate, useSendFilters, usesScreenDate } from '@/features/team-whatsapp/use-send-filters';
 
 const route = createFileRoute('/_authenticated/whatsapp-equipe/')({
   component: TeamWhatsappPage,
@@ -46,7 +46,6 @@ function PageHeader() {
 function TeamWhatsappPage() {
   const targets = useTeamTargets();
   const canSend = usePermission('equipe.enviar');
-  const [target, setTarget] = useState<SendTarget | null>(null);
   return (
     <div className="space-y-6">
       <PageHeader />
@@ -55,7 +54,7 @@ function TeamWhatsappPage() {
       {targets.data && (
         <>
           {canSend ? (
-            <SendSection targets={targets.data} onSend={setTarget} />
+            <SendSection targets={targets.data} />
           ) : (
             <p className="rounded-md border p-6 text-sm text-muted-foreground">{NO_SEND_PERMISSION_TEXT}</p>
           )}
@@ -63,30 +62,33 @@ function TeamWhatsappPage() {
           <RecentSection />
         </>
       )}
-      {target && (
-        <SendWhatsappDialog open target={target} onOpenChange={(open) => { if (!open) setTarget(null); }} />
-      )}
     </div>
   );
 }
 
 const TOO_MANY_PEOPLE = 'team_whatsapp.too_many_people';
+const INVALID_SELECTION = 'team_whatsapp.invalid_selection';
 const NO_SECTORS_TEXT = 'Nenhum setor ativo para envio. Cadastre setores em Setores.';
+const NEEDS_CHOICE_TEXT = 'Escolha o setor, a data e o turno';
+const NEEDS_ACTIVITY_DATE_TEXT = 'Escolha o setor e o turno e informe a data da atividade';
+const LIST_CHANGED_TEXT = 'A lista mudou. Marque as pessoas de novo.';
 
 type Filters = ReturnType<typeof useSendFilters>;
-type SendProps = { targets: TeamTargets; onSend: (target: SendTarget) => void };
 
-function SendSection({ targets, onSend }: SendProps) {
+function SendSection({ targets }: { targets: TeamTargets }) {
   const filters = useSendFilters(targets.today, targets.sectors);
   if (targets.sectors.length === 0) {
     return <p className="rounded-md border p-6 text-sm text-muted-foreground">{NO_SECTORS_TEXT}</p>;
   }
-  const { sectorIds, shiftIds, date } = filters;
+  const { sectorIds, shiftIds, date, purpose } = filters;
   const { inProgress } = targets;
-  const ready = sectorIds.length > 0 && filters.shiftsPicked && date !== '';
+  // A data de referência (GF4) é a que a prévia e o envio usam; a da tela só vale sem atividade.
+  const reference = referenceDate(filters);
+  const ready = sectorIds.length > 0 && filters.shiftsPicked && reference !== '';
   return (
     <section className="space-y-4">
-      {inProgress && (
+      <PurposeFields filters={filters} />
+      {inProgress && usesScreenDate(purpose) && (
         <InProgressNotice
           inProgress={inProgress}
           current={{ date, shiftIds }}
@@ -96,104 +98,140 @@ function SendSection({ targets, onSend }: SendProps) {
       <SectorShiftPicker
         sectors={targets.sectors} levels={targets.levels} shifts={targets.shifts}
         sectorIds={sectorIds} levelIds={filters.levelIds} withoutLevel={filters.withoutLevel}
-        date={date} shiftIds={shiftIds} shiftsPicked={filters.shiftsPicked}
+        date={date} showDate={showsScreenDate(filters)} shiftIds={shiftIds} shiftsPicked={filters.shiftsPicked}
         onSectorsChange={filters.pickSectors} onLevelsChange={filters.pickLevels}
         onDateChange={filters.pickDate} onShiftsChange={filters.pickShifts}
       />
       {ready ? (
-        <RosterSection targets={targets} filters={filters} picked={{ sectorIds, date, shiftIds }} onSend={onSend} />
+        <AudienceSection targets={targets} filters={filters} reference={reference} />
       ) : (
-        <p className="rounded-md border p-6 text-sm text-muted-foreground">Escolha o setor, a data e o turno</p>
+        <p className="rounded-md border p-6 text-sm text-muted-foreground">
+          {reference === '' && !usesScreenDate(purpose) ? NEEDS_ACTIVITY_DATE_TEXT : NEEDS_CHOICE_TEXT}
+        </p>
       )}
     </section>
   );
 }
 
-type RosterSectionProps = {
-  targets: TeamTargets;
-  filters: Filters;
-  picked: { sectorIds: string[]; date: string; shiftIds: string[] };
-  onSend: (target: SendTarget) => void;
-};
-
 /**
- * Erro da escala: o 422 `too_many_people` diz para escolher menos setores (GC11); os demais ficam com
- * o texto do servidor. Sempre com `Tentar novamente` (D14).
+ * `code` do corpo do erro da API, lido de forma assíncrona; vazio enquanto não lê ou sem erro. `onCode` (estável)
+ * recebe o código assim que ele é lido.
  */
-function RosterError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
-  const [known, setKnown] = useState<string | null>(null);
+function useErrorCode(error: unknown, onCode: (code: string | undefined) => void): string | undefined {
+  const [read, setRead] = useState<{ error: unknown; code: string | undefined } | null>(null);
   useEffect(() => {
     let cancelled = false;
-    void apiErrorCode(error).then((code) => {
-      if (!cancelled) setKnown(code === TOO_MANY_PEOPLE ? teamErrorMessage(code) : null);
-    });
+    if (error) {
+      void apiErrorCode(error).then((code) => {
+        if (cancelled) return;
+        setRead({ error, code });
+        onCode(code);
+      });
+    }
     return () => { cancelled = true; };
-  }, [error]);
-  const shown = useMemo(() => (known ? new Error(known) : error), [known, error]);
+  }, [error, onCode]);
+  return error && read?.error === error ? read.code : undefined;
+}
+
+/**
+ * Erro da prévia: o 422 `too_many_people` diz para escolher menos setores (GC11); os demais ficam com
+ * o texto do servidor (o 403 também, como hoje). Sempre com `Tentar novamente` (D14).
+ */
+function PreviewError({ error, code, onRetry }: { error: unknown; code: string | undefined; onRetry: () => void }) {
+  const shown = useMemo(() => (code === TOO_MANY_PEOPLE ? new Error(teamErrorMessage(code)) : error), [code, error]);
   return <QueryErrorFallback error={shown} onRetry={onRetry} />;
 }
 
-function RosterSection({ targets, filters, picked, onSend }: RosterSectionProps) {
-  const roster = useTeamRoster(picked.sectorIds, picked.date);
-  if (roster.isLoading) return <Skeleton className="h-40 w-full" />;
-  if (roster.isError) return <RosterError error={roster.error} onRetry={() => roster.refetch()} />;
-  if (!roster.data) return null;
-  return <RosterList roster={roster.data} targets={targets} filters={filters} shiftIds={picked.shiftIds} onSend={onSend} />;
-}
-
-type RosterListProps = {
-  roster: TeamRoster;
+type AudienceProps = {
   targets: TeamTargets;
   filters: Filters;
-  shiftIds: string[];
-  onSend: (target: SendTarget) => void;
+  /** Data de referência: a da escala que o GET roster lê. */
+  reference: string;
+};
+
+/**
+ * O público vem da prévia do servidor (F1): "Vão receber" e "Ficam de fora" mudam quando os filtros ou a seleção
+ * mudam. O GET roster fica só para o número da área, o estado do número e o início dos turnos (`shiftStarts`).
+ * Marcado que perdeu a relação com o setor (422 `invalid_selection`): limpa a seleção, avisa e pede a prévia de novo.
+ */
+function AudienceSection({ targets, filters, reference }: AudienceProps) {
+  const audience = useDebouncedAudience(filters);
+  const roster = useTeamRoster(filters.sectorIds, reference);
+  const [listChanged, setListChanged] = useState(false);
+  const { setSelected } = filters;
+  const clearIfInvalid = useCallback((errorCode: string | undefined) => {
+    if (errorCode !== INVALID_SELECTION) return;
+    setSelected(new Set());
+    setListChanged(true);
+  }, [setSelected]);
+  const code = useErrorCode(audience.error, clearIfInvalid);
+  const { preview, error } = audience;
+  return (
+    <div className="space-y-3">
+      {listChanged && (
+        <Alert><AlertDescription>{LIST_CHANGED_TEXT}</AlertDescription></Alert>
+      )}
+      {preview && (
+        <AudienceList
+          preview={preview} isFresh={audience.isFresh} filters={filters} shiftStarts={roster.data?.shiftStarts ?? []}
+          targets={targets} onMarked={() => setListChanged(false)}
+        />
+      )}
+      {!preview && error && code !== INVALID_SELECTION && (
+        <PreviewError error={error} code={code} onRetry={() => audience.refetch()} />
+      )}
+      {!preview && !error && <Skeleton className="h-40 w-full" />}
+    </div>
+  );
+}
+
+type ListProps = {
+  preview: TeamAudiencePreview;
+  isFresh: boolean;
+  filters: Filters;
+  shiftStarts: TeamRoster['shiftStarts'];
+  targets: TeamTargets;
+  onMarked: () => void;
 };
 
 /** Anexa o início do turno (ISO do servidor + hora gravada) para o diálogo habilitar o agendamento. */
-function withShiftStart(roster: TeamRoster, targets: TeamTargets, target: SendTarget): SendTarget {
+function withShiftStart(shiftStarts: TeamRoster['shiftStarts'], targets: TeamTargets, target: SendTarget): SendTarget {
   if (target.type !== 'sector' || target.shiftIds.length !== 1) return target;
   const [shiftId] = target.shiftIds;
-  const startsAt = roster.shiftStarts.find((s) => s.shiftId === shiftId)?.startsAt;
+  const startsAt = shiftStarts.find((s) => s.shiftId === shiftId)?.startsAt;
   const startTime = targets.shifts.find((s) => s.id === shiftId)?.startTime;
   return startsAt && startTime ? { ...target, shiftStart: { startsAt, startTime } } : target;
 }
 
-function RosterList({ roster, targets, filters, shiftIds, onSend }: RosterListProps) {
-  const { includeOff, selected } = filters;
-  const levelFilter: LevelFilter = { levelIds: filters.levelIds, withoutLevel: filters.withoutLevel };
-  const shiftNames = new Map(targets.shifts.map((s) => [s.id, s.name]));
-  // O filtro de nível vale para quem trabalha e para quem está de folga: a lista conferida é a que o servidor refaz.
-  const groups: SectorGroup[] = roster.sectors.map((s) => {
-    const members = filterByLevel(s.members, levelFilter);
-    return {
-      sectorId: s.sectorId,
-      name: s.name,
-      empty: !s.members.some((m) => m.isActive),
-      visible: eligibleMembers(members, shiftIds, includeOff),
-      off: offMembers(members),
-      noSchedule: noScheduleCount(members),
-    };
-  });
-  const visible = groups.flatMap((g) => g.visible);
-  const build = (selectedIds: string[] | null) =>
-    withShiftStart(roster, targets, buildSectorTarget({
-      sectors: roster.sectors.map((s) => ({ id: s.sectorId, name: s.name, members: s.members })),
-      levels: targets.levels, levelFilter, shifts: targets.shifts, shiftIds,
-      date: roster.date, includeOff, selectedIds,
-    }));
+/**
+ * A lista e o diálogo de envio. O diálogo recebe a prévia que a tela mostra (a viva) e `isFresh`: só libera o envio
+ * com a prévia do corpo atual e manda o `audienceKey` dela (F1, C4). O 409 fecha o diálogo e relê a prévia.
+ */
+function AudienceList({ preview, isFresh, filters, shiftStarts, targets, onMarked }: ListProps) {
+  const { selected } = filters;
+  // O estado guarda o alvo do clique, sem `shiftStart`: o roster pode chegar depois de o diálogo abrir.
+  const [clicked, setTarget] = useState<SendTarget | null>(null);
+  const target = clicked && withShiftStart(shiftStarts, targets, clicked);
+  // Os ids marcados são os mesmos que foram na prévia: o que o operador confere é o que o diálogo leva.
+  const build = (selectedIds: string[]) => buildSectorTarget({ preview, sectorIds: filters.sectorIds, selectedIds });
   return (
-    <MemberSelection
-      shiftIds={shiftIds}
-      groups={groups}
-      includeOff={includeOff}
-      shiftNames={shiftNames}
-      selected={selected}
-      onToggle={filters.toggle}
-      onToggleOff={filters.toggleOff}
-      onToggleAll={() => filters.setSelected(toggleAllEnabled(visible, selected))}
-      onSendAll={() => onSend(build(null))}
-      onSendSelected={() => onSend(build(selectedIdsIn(visible, selected)))}
-    />
+    <>
+      <MemberSelection
+        preview={preview}
+        isFresh={isFresh}
+        selected={selected}
+        onToggle={(id) => { onMarked(); filters.toggle(id); }}
+        onToggleAll={() => { onMarked(); filters.setSelected(toggleAllMarkable(markableIds(preview), selected)); }}
+        onSendAll={() => setTarget(build([]))}
+        onSendSelected={() => setTarget(build([...selected].sort()))}
+      />
+      {target?.type === 'sector' && (
+        <SendWhatsappDialog
+          open target={target} audience={{ preview, isFresh }}
+          onOpenChange={(open) => { if (!open) setTarget(null); }}
+        />
+      )}
+    </>
   );
 }
 

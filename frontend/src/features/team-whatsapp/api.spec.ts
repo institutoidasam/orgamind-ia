@@ -8,11 +8,12 @@ const get = vi.fn();
 vi.mock('@/lib/api-client', () => ({ api: { post: (...a: unknown[]) => post(...a), get: (...a: unknown[]) => get(...a) } }));
 
 import {
-  detailPollInterval, dispatchPollInterval, PAGE_SIZE, POLL_WINDOW_MS, RECIPIENT_PAGE_SIZE, scheduledPollInterval,
-  useCancelDispatch, useCreateTeamDispatch, useDispatchRecipients, useRetryRecipients, useScheduledDispatches,
-  useTeamDispatch, useTeamDispatches, useTeamPersonRoute, useTeamRoster,
+  AUDIENCE_PREVIEW_KEY, detailPollInterval, dispatchPollInterval, PAGE_SIZE, POLL_WINDOW_MS, RECIPIENT_PAGE_SIZE, scheduledPollInterval,
+  useAudiencePreview, useCancelDispatch, useCreateTeamDispatch, useDispatchRecipients, useRetryRecipients,
+  useScheduledDispatches, useTeamDispatch, useTeamDispatches, useTeamPersonRoute, useTeamRoster,
 } from './api';
-import type { DispatchDetail, DispatchList, ScheduledList } from './schemas';
+import { PREVIEW_RESPONSE } from './audience-preview.test-fixtures';
+import type { DispatchDetail, DispatchList, ScheduledList, TeamAudienceRequest } from './schemas';
 
 const NOW = Date.parse('2026-10-16T12:00:00Z');
 
@@ -37,10 +38,46 @@ function list(queued: number, ageMs: number, firedAgoMs?: number): DispatchList 
       state: 'DISPATCHED',
       scheduledFor: null,
       firedAt: firedAgoMs === undefined ? null : ago(firedAgoMs),
+      purpose: null,
+      base: null,
+      activity: null,
+      urgencyReason: null,
     }],
     ...PAGE_META,
   };
 }
+
+describe('useAudiencePreview', () => {
+  const wrapperFor = (qc: QueryClient) => ({ children }: { children: React.ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: qc }, children);
+  const body: TeamAudienceRequest = {
+    text: '',
+    purpose: 'shift_notice',
+    target: { type: 'sector', sectorIds: ['s1'], date: '2026-11-20', shiftIds: ['sh1'] },
+  };
+
+  it('useAudiencePreview faz POST em dispatches/preview e não chama com corpo nulo', async () => {
+    post.mockClear();
+    post.mockReturnValue({ json: () => Promise.resolve(PREVIEW_RESPONSE) });
+    const qc = new QueryClient();
+    const nulo = renderHook(() => useAudiencePreview(null), { wrapper: wrapperFor(qc) });
+    expect(nulo.result.current.fetchStatus).toBe('idle');
+    expect(post).not.toHaveBeenCalled();
+    const { result } = renderHook(() => useAudiencePreview(body), { wrapper: wrapperFor(qc) });
+    await waitFor(() => expect(result.current.data).toEqual(PREVIEW_RESPONSE));
+    expect(post).toHaveBeenCalledWith('internal/team-whatsapp/dispatches/preview', { json: body });
+    expect(qc.getQueryData(['team-whatsapp', 'preview', body])).toEqual(PREVIEW_RESPONSE);
+    expect(qc.getQueryData([...AUDIENCE_PREVIEW_KEY, body])).toEqual(PREVIEW_RESPONSE);
+  });
+
+  it('resposta fora do contrato vira erro, sem repetir a chamada', async () => {
+    post.mockClear();
+    post.mockReturnValue({ json: () => Promise.resolve({ ...PREVIEW_RESPONSE, audienceKey: undefined }) });
+    const { result } = renderHook(() => useAudiencePreview(body), { wrapper: wrapperFor(new QueryClient()) });
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('dispatchPollInterval', () => {
   beforeEach(() => vi.spyOn(Date, 'now').mockReturnValue(NOW));
@@ -71,7 +108,7 @@ function detail(queued: number, ageMs: number, firedAgoMs?: number): DispatchDet
     firedAt: firedAgoMs === undefined ? null : ago(firedAgoMs),
     createdAt: ago(ageMs), author: { id: 'a1', name: 'Ada' },
     sectors: [{ id: 's1', name: 'Compras' }], channels: [], counts: { ...ZERO_COUNTS, queued },
-    leftOut: { unselected: [], off: [] },
+    leftOut: { unselected: [], off: [] }, purpose: null, base: null, rule: null, excluded: [],
   };
 }
 

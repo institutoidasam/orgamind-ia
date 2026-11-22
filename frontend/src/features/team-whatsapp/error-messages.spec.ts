@@ -8,6 +8,40 @@ import {
 const httpError = (status: number, body: object) =>
   new HTTPError(new Response(JSON.stringify(body), { status }), new Request('https://x'), {} as never);
 
+describe('regra do público e travas (CF4)', () => {
+  it('audience_changed e as travas têm texto', () => {
+    expect(teamErrorMessage('team_whatsapp.audience_changed'))
+      .toBe('O público mudou depois da prévia. Confira de novo antes de enviar.');
+    const regras = [
+      ['invalid_base', 'A base do público desta finalidade é fixa.'],
+      ['invalid_off_option', 'A equipe em serviço não tem a opção de incluir quem está de folga.'],
+      ['when_not_allowed', 'Esta finalidade não pode ser enviada nesse momento.'],
+      ['invalid_reference_date', 'A data de referência precisa ser a data da atividade.'],
+      ['empty_text', 'Escreva a mensagem.'],
+      ['missing_activity', 'Informe a data, a hora e o local da atividade.'],
+      ['missing_urgency_reason', 'Informe o motivo da urgência.'],
+      ['overtime_without_selection', 'Marque pelo menos uma pessoa para a hora extra.'],
+      ['after_activity_start', 'A mensagem precisa sair antes do início da atividade.'],
+    ];
+    for (const [code, text] of regras) expect(teamErrorMessage(`team_whatsapp.${code}`)).toBe(text);
+  });
+
+  it('o 409 audience_changed lido do corpo do erro chega com o texto, no envio', async () => {
+    const err = httpError(409, { code: 'team_whatsapp.audience_changed' });
+    expect(await apiErrorText(err, teamErrorMessage)).toBe('O público mudou depois da prévia. Confira de novo antes de enviar.');
+  });
+});
+
+describe('travas no 422 do envio (CF4)', () => {
+  it('missing_activity mostra o detail do servidor (o Alinhamento não exige o local); sem detail, o texto fixo', async () => {
+    const missing = { code: 'team_whatsapp.missing_activity', title: 'Dado da atividade' };
+    expect(await apiErrorText(httpError(422, { ...missing, detail: 'Informe a data e a hora da atividade.' }), teamErrorMessage))
+      .toBe('Informe a data e a hora da atividade.');
+    expect(await apiErrorText(httpError(422, missing), teamErrorMessage))
+      .toBe('Informe a data, a hora e o local da atividade.');
+  });
+});
+
 describe('recusas por permissão (DB10, B4)', () => {
   it('broad_send_denied mostra o texto da spec', () => {
     expect(teamErrorMessage('team_whatsapp.broad_send_denied')).toBe(
@@ -43,7 +77,7 @@ describe('teamErrorMessage', () => {
     ['team_whatsapp.no_sector', 'Esta pessoa não tem área. Coloque-a num setor antes de enviar.'],
     ['team_whatsapp.channel_disconnected', 'Um número deste envio está desconectado. Veja na prévia qual é.'],
     ['team_whatsapp.channel_unverified', 'Não foi possível conferir o número. Tente de novo'],
-    ['team_whatsapp.no_recipients', 'Ninguém neste destino tem telefone válido para receber.'],
+    ['team_whatsapp.no_recipients', 'Ninguém deste envio pode receber a mensagem. Confira o telefone e a autorização de contato e, no envio para setor, quem ficou de fora.'],
     ['team_whatsapp.invalid_selection', 'A lista de pessoas mudou. Atualize a página e confira de novo.'],
     ['team_whatsapp.invalid_level', 'Nível inválido. Atualize a página e tente de novo.'],
     ['team_whatsapp.invalid_shift', 'Este turno não está mais disponível. Atualize a página.'],

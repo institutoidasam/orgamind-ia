@@ -9,17 +9,32 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { formatDayMonth } from '@/lib/civil-date';
 import { useAuthStore } from '@/stores/auth.store';
-import { useCreateTeamDispatch, useTeamPersonRoute, useTeamRoster } from '../api';
-import { buildChannelGroups, receivingBySector, type ChannelGroupsResult } from '../channel-groups';
-import { apiErrorCode, PACING_HINT, SKIP_REASON_LABEL, teamErrorMessage } from '../error-messages';
-import type { CreateDispatchInput, DispatchResult, LeftOutPerson, SendTarget } from '../schemas';
+import { AUDIENCE_PREVIEW_KEY, useCreateTeamDispatch, useTeamPersonRoute, useTeamRoster } from '../api';
+import { buildChannelGroups, type ChannelGroupsResult } from '../channel-groups';
+import { apiErrorCode, apiErrorText, PACING_HINT, SKIP_REASON_LABEL, teamErrorMessage } from '../error-messages';
+import { receivingByArea } from '../member-filter';
+import { PURPOSE_RULES } from '../purpose';
+import type {
+  CreateDispatchInput, DispatchResult, SendTarget, TeamActivity, TeamAudiencePreview, TeamPurpose,
+} from '../schemas';
 import { ChannelGroups, NoSectorNotice, UnverifiedNotice } from './channel-groups';
+import { ExcludedGroups } from './excluded-groups';
+import { RulePanel } from './rule-panel';
 
 const MAX_TEXT = 2000;
 
-type Props = { open: boolean; onOpenChange: (open: boolean) => void; target: SendTarget };
+/** A prévia que a tela mostra agora (a viva) e se é a do corpo atual (`isFresh`, T14): só então o envio libera. */
+export type SendAudience = { preview: TeamAudiencePreview; isFresh: boolean };
 
 type SectorTarget = Extract<SendTarget, { type: 'sector' }>;
+type UserTarget = Extract<SendTarget, { type: 'user' }>;
+
+type Props = { open: boolean; onOpenChange: (open: boolean) => void } & (
+  | { target: UserTarget; audience?: undefined }
+  | { target: SectorTarget; audience: SendAudience }
+);
+
+type FormArgs = { target: SendTarget; audience: SendAudience | undefined; onOpenChange: (open: boolean) => void };
 
 /**
  * Corpo do POST: sempre leva a data conferida; "todos os turnos" não manda `shiftIds`,
@@ -51,22 +66,53 @@ function PeopleList({ title, lines }: { title: string; lines: string[] }) {
   );
 }
 
-const LEFT_OUT_REASON: Record<LeftOutPerson['reason'], string> = {
-  unselected: 'não selecionado',
-  no_phone: 'sem telefone',
-  not_authorized: 'contato não autorizado',
-};
-
-function SectorPeople({ target }: { target: SectorTarget }) {
-  const { recipients, leftOut } = target;
+/** Revisão do público (C4): a regra como o servidor a aplicou, quem recebe e quem fica de fora, com o motivo. */
+function AudienceReview({ preview }: { preview: TeamAudiencePreview }) {
+  const { rule, included, excluded } = preview;
   return (
     <div className="space-y-3">
-      <PeopleList title={`Vão receber (${recipients.length})`} lines={recipients.map((p) => p.name)} />
-      {leftOut.length > 0 && (
-        <PeopleList title={`Ficam de fora (${leftOut.length})`} lines={leftOut.map((p) => `${p.name} · ${LEFT_OUT_REASON[p.reason]}`)} />
-      )}
+      <RulePanel rule={rule} includedCount={included.length} excludedCount={excluded.length} />
+      <PeopleList title={`Vão receber (${included.length})`} lines={included.map((p) => p.name)} />
+      <div className="max-h-60 overflow-y-auto">
+        <ExcludedGroups excluded={excluded} title="Ficam de fora" />
+      </div>
     </div>
   );
+}
+
+type Block = TeamAudiencePreview['blocks'][number];
+
+const EMPTY_TEXT_CODE = 'team_whatsapp.empty_text';
+const AUDIENCE_CHANGED_CODE = 'team_whatsapp.audience_changed';
+
+/**
+ * Travas perto do botão, na ordem do servidor (CF4). A prévia vai com `text: ''` (DF11): a trava do texto sai da
+ * lista dela e é conferida aqui, com o mesmo texto e na mesma posição (a primeira).
+ */
+function sendBlocks(preview: TeamAudiencePreview, text: string): Block[] {
+  const fromServer = preview.blocks.filter((b) => b.code !== EMPTY_TEXT_CODE);
+  if (text.trim() !== '') return fromServer;
+  return [{ code: EMPTY_TEXT_CODE, message: teamErrorMessage(EMPTY_TEXT_CODE) }, ...fromServer];
+}
+
+type AudienceFields = Pick<CreateDispatchInput, 'purpose' | 'base' | 'activity' | 'urgencyReason' | 'audienceKey'>;
+
+/** Atividade que a prévia aplicou, de volta no formato do corpo: só o que veio preenchido. */
+function activityInput({ date, time, place }: TeamActivity): NonNullable<CreateDispatchInput['activity']> {
+  return { ...(date ? { date } : {}), ...(time ? { time } : {}), ...(place ? { place } : {}) };
+}
+
+/** Finalidade, base, atividade e motivo da regra da prévia vista, mais a impressão dela (`audienceKey`, CF2). */
+function audienceFields({ preview }: SendAudience): AudienceFields {
+  const { rule, audienceKey } = preview;
+  const activity = rule.activity ? activityInput(rule.activity) : null;
+  return {
+    purpose: rule.purpose,
+    base: rule.base,
+    audienceKey,
+    ...(activity && Object.keys(activity).length > 0 ? { activity } : {}),
+    ...(rule.urgencyReason ? { urgencyReason: rule.urgencyReason } : {}),
+  };
 }
 
 type When = 'now' | 'shift_start';
@@ -102,12 +148,17 @@ type RouteCheck =
 
 const NO_GROUPS: ChannelGroupsResult = { groups: [], missing: [], block: null };
 
-type RouteData = { sectorTarget: SectorTarget | null; roster: ReturnType<typeof useTeamRoster>['data']; person: ReturnType<typeof useTeamPersonRoute>['data'] };
+type RouteData = {
+  sectorTarget: SectorTarget | null;
+  roster: ReturnType<typeof useTeamRoster>['data'];
+  person: ReturnType<typeof useTeamPersonRoute>['data'];
+  /** Quantas pessoas recebem em cada área (`sectorId` -> n). */
+  receiving: ReadonlyMap<string, number>;
+};
 
-function readCheck({ sectorTarget, roster, person }: RouteData): RouteCheck | null {
+function readCheck({ sectorTarget, roster, person, receiving }: RouteData): RouteCheck | null {
   if (sectorTarget) {
     if (!roster) return null;
-    const receiving = receivingBySector(roster.sectors, sectorTarget.recipients);
     return { status: 'ready', noSector: false, view: buildChannelGroups(roster.sectors, receiving) };
   }
   if (!person) return null;
@@ -123,15 +174,26 @@ function checkOf(isError: boolean, data: RouteData): RouteCheck {
 }
 
 /**
+ * Quantas pessoas recebem em cada área: pela área que o servidor manda (`sectorId` da prévia, CF3), não pelo quadro
+ * da escala. Remanejado conta uma vez, na área da prévia.
+ */
+function receivingCounts(audience: SendAudience | undefined): Map<string, number> {
+  const groups = audience ? receivingByArea(audience.preview) : [];
+  return new Map(groups.map((g) => [g.sectorId, g.people.length]));
+}
+
+/**
  * Por qual número cada área (ou a pessoa) envia, com o estado ao vivo. A consulta é a mesma da
  * escala da tela: reconsultar atualiza os dois. Erro, mesmo com dado antigo, vale como "não conferido".
+ * A escala só dá o número da área e o estado dele; quem conta em cada área é a prévia.
  */
-function useRouteCheck(target: SendTarget) {
+function useRouteCheck(target: SendTarget, audience: SendAudience | undefined) {
   const sectorTarget = target.type === 'sector' ? target : null;
   const roster = useTeamRoster(sectorTarget?.sectorIds ?? [], sectorTarget?.date ?? '');
   const person = useTeamPersonRoute(target.type === 'user' ? target.userId : '');
   const query = sectorTarget ? roster : person;
-  const check = checkOf(query.isError, { sectorTarget, roster: roster.data, person: person.data });
+  const receiving = receivingCounts(audience);
+  const check = checkOf(query.isError, { sectorTarget, roster: roster.data, person: person.data, receiving });
   return { check, checking: query.isFetching, recheck: () => { void query.refetch(); } };
 }
 
@@ -148,35 +210,59 @@ const STALE_ROUTE_CODES = new Set([
   'team_whatsapp.channel_disconnected', 'team_whatsapp.channel_unverified',
 ]);
 
-function useSendForm({ target, onOpenChange }: Pick<Props, 'target' | 'onOpenChange'>) {
+/**
+ * Envio e recusas. 409 `audience_changed`: fecha a confirmação, avisa com o texto do servidor e relê a prévia
+ * (a tela mostra o público novo antes de outro envio). Os demais erros ficam no diálogo; o 422 de regra traz o
+ * texto do servidor quando o código está em `SERVER_TEXT_CODES`.
+ */
+function useSubmit({ target, audience, onOpenChange }: FormArgs) {
   const qc = useQueryClient();
-  const { check, checking, recheck } = useRouteCheck(target);
   const send = useCreateTeamDispatch();
-  const [text, setText] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState<When>('now');
-  const gates = sendGates(check, checking);
-  const hasText = text.trim() !== '' && !send.isPending;
 
-  async function submit(when: When) {
+  async function fail(err: unknown) {
+    const code = await apiErrorCode(err);
+    if (code === AUDIENCE_CHANGED_CODE) {
+      toast.error(teamErrorMessage(code));
+      void qc.invalidateQueries({ queryKey: AUDIENCE_PREVIEW_KEY });
+      onOpenChange(false);
+      return;
+    }
+    setError(await apiErrorText(err, teamErrorMessage));
+    if (code && STALE_ROUTE_CODES.has(code)) {
+      void qc.invalidateQueries({ queryKey: ['team-whatsapp', target.type === 'user' ? 'person-route' : 'roster'] });
+    }
+  }
+
+  async function submit(text: string, when: When) {
     setError(null);
     setMode(when);
     try {
-      const body = { text, target: requestTarget(target) };
+      const body: CreateDispatchInput = { text, target: requestTarget(target), ...(audience ? audienceFields(audience) : {}) };
       const result = await send.mutateAsync(when === 'shift_start' ? { ...body, when } : body);
       notifyDone(result, target);
       onOpenChange(false);
     } catch (err) {
-      const code = await apiErrorCode(err);
-      setError(teamErrorMessage(code));
-      if (code && STALE_ROUTE_CODES.has(code)) {
-        void qc.invalidateQueries({ queryKey: ['team-whatsapp', target.type === 'user' ? 'person-route' : 'roster'] });
-      }
+      await fail(err);
     }
   }
+  return { error, mode, pending: send.isPending, submit };
+}
+
+/** Só libera o envio com a prévia do corpo atual, sem nenhuma trava (a do texto inclusive) e com o número aberto. */
+function useSendForm(args: FormArgs) {
+  const { check, checking, recheck } = useRouteCheck(args.target, args.audience);
+  const { error, mode, pending, submit } = useSubmit(args);
+  const [text, setText] = useState('');
+  const gates = sendGates(check, checking);
+  const blocks = args.audience ? sendBlocks(args.audience.preview, text) : [];
+  const fresh = args.audience?.isFresh ?? true;
+  const ready = text.trim() !== '' && !pending && fresh && blocks.length === 0;
   return {
-    check, recheck, text, setText, error, pending: send.isPending, mode, submit,
-    canSendNow: hasText && gates.now, canSchedule: hasText && gates.schedule,
+    check, recheck, text, setText, error, blocks, fresh, pending, mode,
+    submit: (when: When) => submit(text, when),
+    canSendNow: ready && gates.now, canSchedule: ready && gates.schedule,
   };
 }
 
@@ -189,12 +275,18 @@ function RoutePreview({ form }: { form: ReturnType<typeof useSendForm> }) {
   return <ChannelGroups view={check.view} isAdmin={isAdmin} onRecheck={recheck} />;
 }
 
-type FooterProps = { form: ReturnType<typeof useSendForm>; target: SendTarget; onClose: () => void };
+type FooterProps = { form: ReturnType<typeof useSendForm>; option: ScheduleOption; onClose: () => void };
 
 type ScheduleOption = { show: boolean; blocked: boolean; note: string | null };
 
-/** "No início do turno": um turno com início conhecido; com vários aparece bloqueado, com o motivo (D9). */
-function scheduleOption(target: SendTarget): ScheduleOption {
+const NO_SCHEDULE: ScheduleOption = { show: false, blocked: true, note: null };
+
+/**
+ * "No início do turno": só no Aviso de turno (a finalidade que o permite) com um turno de início conhecido; com vários
+ * aparece bloqueado, com o motivo (D9). Urgência, Reunião e as demais só têm "Enviar agora".
+ */
+function scheduleOption(target: SendTarget, purpose: TeamPurpose | undefined): ScheduleOption {
+  if (purpose && !PURPOSE_RULES[purpose].when.includes('shift_start')) return NO_SCHEDULE;
   const start = shiftStartOf(target);
   if (start) {
     const passed = hasStarted(start.startsAt);
@@ -204,8 +296,22 @@ function scheduleOption(target: SendTarget): ScheduleOption {
   return { show: several, blocked: true, note: several ? ONE_SHIFT_ONLY_TEXT : null };
 }
 
-function DialogActions({ form, target, onClose }: FooterProps) {
-  const option = scheduleOption(target);
+/** Cada trava por extenso, perto do botão (C4); a lista fica velha enquanto a prévia se atualiza. */
+function SendBlocks({ form }: { form: ReturnType<typeof useSendForm> }) {
+  const { blocks, fresh } = form;
+  return (
+    <>
+      {!fresh && <p className="text-sm text-muted-foreground">Atualizando a lista…</p>}
+      {blocks.length > 0 && (
+        <ul aria-label="Travas do envio" className="list-disc space-y-0.5 pl-5 text-sm text-destructive">
+          {blocks.map((b) => <li key={b.code}>{b.message}</li>)}
+        </ul>
+      )}
+    </>
+  );
+}
+
+function DialogActions({ form, option, onClose }: FooterProps) {
   return (
     <>
       {option.note && <p className="w-full text-sm text-muted-foreground">{option.note}</p>}
@@ -224,17 +330,18 @@ function DialogActions({ form, target, onClose }: FooterProps) {
   );
 }
 
-export function SendWhatsappDialog({ open, onOpenChange, target }: Props) {
-  const form = useSendForm({ target, onOpenChange });
+export function SendWhatsappDialog({ open, onOpenChange, target, audience }: Props) {
+  const form = useSendForm({ target, audience, onOpenChange });
+  const option = scheduleOption(target, audience?.preview.rule.purpose);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
           <DialogTitle>Enviar WhatsApp</DialogTitle>
           <DialogDescription>{target.label}</DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
-          {target.type === 'sector' && <SectorPeople target={target} />}
+          {audience && <AudienceReview preview={audience.preview} />}
           <RoutePreview form={form} />
           <div className="space-y-2">
             <Label htmlFor="team-whatsapp-text">Mensagem</Label>
@@ -242,8 +349,9 @@ export function SendWhatsappDialog({ open, onOpenChange, target }: Props) {
             <p className="text-right text-xs text-muted-foreground">{form.text.length}/{MAX_TEXT}</p>
           </div>
           {form.error && <p role="alert" className="text-sm text-destructive">{form.error}</p>}
+          <SendBlocks form={form} />
         </div>
-        <DialogActions form={form} target={target} onClose={() => onOpenChange(false)} />
+        <DialogActions form={form} option={option} onClose={() => onOpenChange(false)} />
       </DialogContent>
     </Dialog>
   );

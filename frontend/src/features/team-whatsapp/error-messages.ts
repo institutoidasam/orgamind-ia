@@ -16,7 +16,8 @@ const TEAM_ERROR_MESSAGES: Record<string, string> = {
   'team_whatsapp.channel_disconnected':
     'Um número deste envio está desconectado. Veja na prévia qual é.',
   'team_whatsapp.channel_unverified': 'Não foi possível conferir o número. Tente de novo',
-  'team_whatsapp.no_recipients': 'Ninguém neste destino tem telefone válido para receber.',
+  'team_whatsapp.no_recipients':
+    'Ninguém deste envio pode receber a mensagem. Confira o telefone e a autorização de contato e, no envio para setor, quem ficou de fora.',
   'team_whatsapp.invalid_selection':
     'A lista de pessoas mudou. Atualize a página e confira de novo.',
   'team_whatsapp.invalid_level': 'Nível inválido. Atualize a página e tente de novo.',
@@ -28,12 +29,27 @@ const TEAM_ERROR_MESSAGES: Record<string, string> = {
   // B4: o servidor recusa o envio a todos os setores ativos sem `equipe.disparo_amplo`.
   'team_whatsapp.broad_send_denied':
     'Você não tem permissão para enviar a todos os setores de uma vez. Desmarque um setor ou peça ao administrador.',
+  // CF4: o público mudou depois da prévia (409 no envio) e os erros de regra (422, prévia e envio).
+  'team_whatsapp.audience_changed': 'O público mudou depois da prévia. Confira de novo antes de enviar.',
+  'team_whatsapp.invalid_base': 'A base do público desta finalidade é fixa.',
+  'team_whatsapp.invalid_off_option': 'A equipe em serviço não tem a opção de incluir quem está de folga.',
+  'team_whatsapp.when_not_allowed': 'Esta finalidade não pode ser enviada nesse momento.',
+  'team_whatsapp.invalid_reference_date': 'A data de referência precisa ser a data da atividade.',
+  // CF4: travas, que a prévia lista e o envio recusa com 422 (a primeira da ordem do servidor).
+  'team_whatsapp.empty_text': 'Escreva a mensagem.',
+  'team_whatsapp.missing_activity': 'Informe a data, a hora e o local da atividade.',
+  'team_whatsapp.missing_urgency_reason': 'Informe o motivo da urgência.',
+  'team_whatsapp.overtime_without_selection': 'Marque pelo menos uma pessoa para a hora extra.',
+  'team_whatsapp.after_activity_start': 'A mensagem precisa sair antes do início da atividade.',
   // DB10: aqui só `equipe.enviar` barra criar, cancelar e repetir; o texto do servidor, quando vem, vale mais.
   'auth.permission_denied': 'Você não tem permissão para enviar WhatsApp à equipe.',
 };
 
-/** O texto vem do servidor porque diz qual ação não é permitida (DB10). */
-const SERVER_TEXT_CODES = new Set(['auth.permission_denied']);
+/**
+ * O texto vem do servidor porque diz qual ação não é permitida (DB10) ou qual dado falta: o `missing_activity` do
+ * Alinhamento pede só data e hora, e o texto fixo daqui diria que o local é obrigatório.
+ */
+const SERVER_TEXT_CODES = new Set(['auth.permission_denied', 'team_whatsapp.missing_activity']);
 
 export const SKIP_REASON_LABEL = {
   NO_PHONE: 'sem telefone',

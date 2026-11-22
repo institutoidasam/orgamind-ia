@@ -82,6 +82,71 @@ export const teamPersonRouteSchema = z.object({
   channel: teamSectorChannelSchema.nullable(),
 });
 
+/** Finalidade do envio à equipe (CF2/CF3): o servidor recusa envio a setor sem ela. */
+export const teamPurposeSchema = z.enum(['shift_notice', 'meeting', 'alignment', 'lecture', 'overtime', 'urgency']);
+
+/** Base do público: quem a escala põe para trabalhar, ou quem tem o setor e o turno no vínculo da data. */
+export const teamAudienceBaseSchema = z.enum(['on_duty', 'assigned']);
+
+/** Por que alguém ficou de fora da prévia (GF6). */
+export const teamExclusionReasonSchema = z.enum([
+  'not_selected', 'day_off', 'vacation', 'other_sector', 'other_shift', 'no_phone', 'not_authorized', 'suppressed',
+]);
+
+/** Política do agendado; nula no F (agendado sem política = regra antiga), o G a preenche. */
+export const teamSchedulePolicySchema = z.enum(['immediate', 'frozen_recheck']);
+
+/** Atividade que a mensagem anuncia (reunião, palestra, hora extra); tudo nulo = sem atividade. */
+export const teamActivitySchema = z.object({
+  date: civilDateSchema.nullable(),
+  time: z.string().nullable(),
+  place: z.string().nullable(),
+});
+
+const namedRefSchema = z.object({ id: z.string(), name: z.string() });
+
+/** A regra do público como o servidor a aplicou (painel da regra). `shifts` null = todos os turnos. */
+export const teamAudienceRuleViewSchema = z.object({
+  purpose: teamPurposeSchema,
+  base: teamAudienceBaseSchema,
+  includeOff: z.boolean(),
+  rosterDate: civilDateSchema,
+  sectors: namedRefSchema.array(),
+  shifts: namedRefSchema.array().nullable(),
+  levels: namedRefSchema.array(),
+  withoutLevel: z.boolean(),
+  // null = sem seleção nominal (todos da lista).
+  selectedCount: z.number().int().nullable(),
+  activity: teamActivitySchema.nullable(),
+  urgencyReason: z.string().nullable(),
+  when: z.enum(['now', 'shift_start']),
+  scheduledFor: z.string().nullable(),
+  schedulePolicy: teamSchedulePolicySchema.nullable(),
+});
+
+/** Pessoa da prévia; `sectorId` = área por onde o servidor manda (é com ele que o front agrupa e conta). */
+export const teamAudiencePersonSchema = z.object({
+  userId: z.string(),
+  name: z.string(),
+  sectorId: z.string(),
+  sectorName: z.string(),
+  shiftName: z.string().nullable(),
+  levelName: z.string().nullable(),
+});
+
+export const teamExcludedPersonSchema = teamAudiencePersonSchema.extend({ reason: teamExclusionReasonSchema });
+
+/** `POST /internal/team-whatsapp/dispatches/preview` (CF3): o público que o envio teria. */
+export const teamAudiencePreviewSchema = z.object({
+  // Impressão do público; vai de volta no envio (`audienceKey`) e o servidor confere (409 se mudou).
+  audienceKey: z.string(),
+  rule: teamAudienceRuleViewSchema,
+  included: teamAudiencePersonSchema.extend({ phone: z.string().nullable() }).array(),
+  excluded: teamExcludedPersonSchema.array(),
+  // Travas na ordem do servidor; vazia = pode enviar.
+  blocks: z.object({ code: z.string(), message: z.string() }).array(),
+});
+
 /** Turno gravado no envio; tolerante como o `teamShiftSnapshotSchema` do back (sem regex HH:mm). */
 export const shiftSnapshotSchema = z.object({
   id: z.string(),
@@ -162,6 +227,12 @@ export const dispatchListSchema = z.object({
       scheduledFor: z.string().nullable(),
       // Hora real do disparo do agendado (ISO); null = imediato ou não disparado.
       firedAt: z.string().nullable(),
+      // Finalidade, base e atividade do envio; null = envio anterior à finalidade. A chave é obrigatória: um
+      // envio novo sem ela estoura no parse em vez de aparecer como "regra anterior".
+      purpose: teamPurposeSchema.nullable(),
+      base: teamAudienceBaseSchema.nullable(),
+      activity: teamActivitySchema.nullable(),
+      urgencyReason: z.string().nullable(),
     })
     .array(),
   ...pageMetaShape,
@@ -199,6 +270,12 @@ export const dispatchDetailSchema = z.object({
   channels: z.object({ ...channelRefShape, count }).array(),
   counts: dispatchCountsSchema,
   leftOut: z.object({ unselected: leftOutPersonSchema.array(), off: leftOutPersonSchema.array() }),
+  // Envio com finalidade: base, regra aplicada e excluídos com motivo (sem telefone). Envio antigo: nulos e
+  // `excluded` vazio, e só `leftOut` vale. As chaves nulas são obrigatórias, como na lista.
+  purpose: teamPurposeSchema.nullable(),
+  base: teamAudienceBaseSchema.nullable(),
+  rule: teamAudienceRuleViewSchema.nullable(),
+  excluded: teamExcludedPersonSchema.array().default([]),
 });
 
 /** `GET /internal/team-whatsapp/dispatches/:id/recipients` (C5): uma página de destinatários. */
@@ -264,6 +341,15 @@ export type DispatchList = z.infer<typeof dispatchListSchema>;
 export type RecipientStatus = z.infer<typeof recipientStatusSchema>;
 export type DispatchCounts = z.infer<typeof dispatchCountsSchema>;
 export type DispatchDetail = z.infer<typeof dispatchDetailSchema>;
+export type TeamPurpose = z.infer<typeof teamPurposeSchema>;
+export type TeamAudienceBase = z.infer<typeof teamAudienceBaseSchema>;
+export type TeamExclusionReason = z.infer<typeof teamExclusionReasonSchema>;
+export type TeamSchedulePolicy = z.infer<typeof teamSchedulePolicySchema>;
+export type TeamActivity = z.infer<typeof teamActivitySchema>;
+export type TeamAudienceRuleView = z.infer<typeof teamAudienceRuleViewSchema>;
+export type TeamAudiencePerson = z.infer<typeof teamAudiencePersonSchema>;
+export type TeamExcludedPerson = z.infer<typeof teamExcludedPersonSchema>;
+export type TeamAudiencePreview = z.infer<typeof teamAudiencePreviewSchema>;
 export type DispatchRecipientPage = z.infer<typeof dispatchRecipientPageSchema>;
 export type DispatchRecipient = DispatchRecipientPage['items'][number];
 export type LeftOutRosterPerson = z.infer<typeof leftOutPersonSchema>;
@@ -298,21 +384,43 @@ export type SendTarget =
       leftOut: LeftOutPerson[]; // ficam de fora, com o motivo
     };
 
-/** Corpo de `POST /internal/team-whatsapp/dispatches`. */
-export type CreateDispatchInput = {
+/** Atividade que o operador informa (CF2): `time` em HH:mm; `place` o servidor apara e limita a 120. */
+export type TeamActivityInput = { date?: string; time?: string; place?: string };
+
+/** Alvo setor do corpo da prévia e do envio (CF2). */
+export type SectorTargetInput = {
+  type: 'sector';
+  sectorIds: string[];
+  date: string;
+  shiftIds?: string[]; // 1..20; ausente = todos os turnos
+  userIds?: string[]; // 0..500 na prévia; 1..500 no envio, quando presente
+  includeOff?: boolean; // só folga; na base em serviço o servidor recusa (422 invalid_off_option)
+  levelIds?: string[];
+  withoutLevel?: boolean;
+};
+
+/** Campos da finalidade, comuns à prévia e ao envio a setor (CF2). */
+type AudienceFields = {
   text: string;
-  /** Padrão 'now'; 'shift_start' só com alvo setor + exatamente um turno (D9). */
+  /** Padrão 'now'; 'shift_start' só no Aviso de turno com exatamente um turno (D9). */
   when?: 'now' | 'shift_start';
-  target:
-    | { type: 'user'; userId: string }
-    | {
-        type: 'sector';
-        sectorIds: string[];
-        date: string;
-        shiftIds?: string[]; // 1..20; ausente = todos os turnos
-        userIds?: string[];
-        includeOff?: boolean; // só sem `shiftIds`
-        levelIds?: string[];
-        withoutLevel?: boolean;
-      };
+  /** Obrigatória com alvo setor; proibida com alvo pessoa (400). */
+  purpose?: TeamPurpose;
+  /** Ausente = a fixa ou padrão da finalidade. */
+  base?: TeamAudienceBase;
+  activity?: TeamActivityInput;
+  urgencyReason?: string;
+  /** Impressão da prévia conferida; obrigatória no envio a setor, ignorada na prévia. */
+  audienceKey?: string;
+};
+
+/**
+ * Corpo de `POST /internal/team-whatsapp/dispatches/preview` (CF2): só alvo setor; `text` pode ir vazio (DF11).
+ * Sem `audienceKey` (é a impressão que a prévia devolve): a chave da consulta não muda com ela.
+ */
+export type TeamAudienceRequest = Omit<AudienceFields, 'audienceKey'> & { target: SectorTargetInput };
+
+/** Corpo de `POST /internal/team-whatsapp/dispatches`. */
+export type CreateDispatchInput = AudienceFields & {
+  target: { type: 'user'; userId: string } | SectorTargetInput;
 };

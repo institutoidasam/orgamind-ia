@@ -31,6 +31,31 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.11.20',
+    date: '2026-11-20',
+    title: 'WhatsApp da equipe com finalidade e prévia do público',
+    items: [
+      {
+        text: 'Ao enviar para um setor, escolha primeiro a finalidade: Aviso de turno, Reunião, Alinhamento, Palestra, Hora extra ou Urgência. Cada uma pede os dados certos (data, hora e local da atividade, motivo da urgência) e já define quem entra no público.',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'A prévia mostra quem vai receber e quem fica de fora, agrupado por motivo, e o painel da regra explica o público antes de você confirmar. O que impede o envio aparece por extenso perto do botão.',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'A opção "Incluir quem está de folga" não inclui mais quem está de férias. Férias nunca recebem.',
+      },
+      {
+        text: 'No histórico, cada envio mostra a finalidade, a base e os dados da atividade; ao abrir o resultado, você vê o painel da regra e quem ficou de fora, por motivo. Envios feitos antes aparecem como equipe em serviço (regra anterior).',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'Se a tela de WhatsApp da equipe já estava aberta antes da atualização, recarregue a página antes de enviar.',
+      },
+    ],
+  },
+  {
     version: '2026.11.19.4',
     date: '2026-11-19',
     title: 'Importar pessoas por planilha',

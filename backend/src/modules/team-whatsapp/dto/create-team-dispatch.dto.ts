@@ -1,35 +1,51 @@
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 import { civilDateSchema } from '../../../schemas/contracts/civil-date.schema';
+import { hhmmSchema } from '../../../schemas/contracts/shift.schema';
+import {
+  teamAudienceBaseSchema,
+  teamPurposeSchema,
+  teamWhenSchema,
+} from '../../../schemas/contracts/team-whatsapp.schema';
 
 const MAX_SECTORS = 100;
 const MAX_LEVELS = 50;
 export const MAX_SHIFTS = 20;
+const MAX_SELECTED = 500;
+const MAX_TEXT = 2000;
+const MAX_PLACE = 120;
+const MAX_URGENCY_REASON = 200;
+// Impressão do público devolvida pela prévia (HMAC-SHA256 em hex).
+const AUDIENCE_KEY = /^[0-9a-f]{64}$/;
 
 /**
- * Alvo setor (C5/C7). `date` = data da escala refeita no servidor, valendo para
- * todos os setores; `includeOff` acrescenta quem está de folga/férias e só vale
- * em "Todos os turnos" (sem `shiftIds`). Nível: sem `levelIds` (ou vazio) e sem `withoutLevel` =
+ * Alvo setor (C5/C7). `date` = data de referência (escala e vínculo), valendo
+ * para todos os setores; `includeOff` (ausente = false) acrescenta quem está de
+ * folga, com qualquer seleção de turnos. Nível: sem `levelIds` (ou vazio) e sem `withoutLevel` =
  * todos; senão passa quem tem um dos níveis, ou não tem nível e `withoutLevel`.
  */
-const sectorTargetSchema = z
-  .object({
-    type: z.literal('sector'),
-    sectorIds: z.array(z.string().min(1)).min(1).max(MAX_SECTORS),
-    // Ids de Shift ativos (D9); ausente = todos os turnos (só quem tem WORK no dia).
-    shiftIds: z.array(z.string().min(1)).min(1).max(MAX_SHIFTS).optional(),
-    // Seleção manual: só estes recebem; o servidor revalida contra a escala da data.
-    userIds: z.array(z.string().min(1)).min(1).max(500).optional(),
-    date: civilDateSchema,
-    includeOff: z.boolean().optional(),
-    // Ids de StaffLevel ativos; o servidor recusa inexistente ou inativo (422).
-    levelIds: z.array(z.string().min(1)).max(MAX_LEVELS).optional(),
-    withoutLevel: z.boolean().optional(),
-  })
-  .refine((t) => !(t.includeOff === true && t.shiftIds !== undefined), {
-    message: 'includeOff só vale sem shiftIds (todos os turnos)',
-    path: ['includeOff'],
-  });
+const sectorTargetSchema = z.object({
+  type: z.literal('sector'),
+  sectorIds: z.array(z.string().min(1)).min(1).max(MAX_SECTORS),
+  // Ids de Shift ativos (D9); ausente = todos os turnos.
+  shiftIds: z.array(z.string().min(1)).min(1).max(MAX_SHIFTS).optional(),
+  // Seleção nominal: só restringe; o servidor confere contra o público da data.
+  // Vazia só na prévia (a hora extra vê os candidatos antes de marcar alguém).
+  userIds: z.array(z.string().min(1)).max(MAX_SELECTED).optional(),
+  date: civilDateSchema,
+  includeOff: z.boolean().optional(),
+  // Ids de StaffLevel ativos; o servidor recusa inexistente ou inativo (422).
+  levelIds: z.array(z.string().min(1)).max(MAX_LEVELS).optional(),
+  withoutLevel: z.boolean().optional(),
+});
+/** No envio, a seleção nominal, quando vem, tem de 1 a 500 ids. */
+const sendSectorTargetSchema = sectorTargetSchema.extend({
+  userIds: z.array(z.string().min(1)).min(1).max(MAX_SELECTED).optional(),
+});
+const userTargetSchema = z.object({
+  type: z.literal('user'),
+  userId: z.string().min(1),
+});
 
 /**
  * Apelido de lista (D7/D9): `single` sozinho (aba aberta no deploy) vira
@@ -57,40 +73,105 @@ const targetAliases = (raw: unknown, ctx: z.RefinementCtx): unknown =>
   shiftIdAlias(sectorIdAlias(raw, ctx), ctx);
 
 /**
- * Corpo do POST /internal/team-whatsapp/dispatches. Texto livre de 1 a 2000
- * caracteres, sem template nem variáveis; o conteúdo não é aparado, mas
- * só-espaços é inválido. `when` (C7): ausente = `'now'`; `'shift_start'` agenda
- * para o início do turno na data e exige alvo setor com exatamente um turno
- * (D9). `channelId` é aceito e ignorado (C3: aba aberta durante o deploy).
+ * Atividade (GF11): data, hora `HH:mm` e local (aparado, até 120). Todos
+ * opcionais aqui: a finalidade decide o que falta, e a falta vira trava.
  */
-export const createTeamDispatchSchema = z
+const activityInputSchema = z.object({
+  date: civilDateSchema.optional(),
+  time: hhmmSchema.optional(),
+  place: z.string().trim().max(MAX_PLACE).optional(),
+});
+
+/**
+ * Campos comuns à prévia e ao envio (CF2). O texto não é aparado. `when`
+ * (C7): ausente = `'now'`; `'shift_start'` agenda para o início do turno na
+ * data. `base` ausente = a fixa/padrão da finalidade. `urgencyReason` aparado,
+ * até 200.
+ */
+const audienceFields = {
+  text: z.string().max(MAX_TEXT),
+  when: teamWhenSchema.optional(),
+  base: teamAudienceBaseSchema.optional(),
+  activity: activityInputSchema.optional(),
+  urgencyReason: z.string().trim().max(MAX_URGENCY_REASON).optional(),
+};
+
+/** `'shift_start'` exige alvo setor com exatamente um turno (D9). */
+const shiftStartAllowed = (b: {
+  when?: string;
+  target: { type: string; shiftIds?: string[] };
+}) =>
+  b.when !== 'shift_start' ||
+  (b.target.type === 'sector' && new Set(b.target.shiftIds).size === 1);
+const shiftStartIssue = {
+  message: "when 'shift_start' exige alvo setor com exatamente um turno",
+  path: ['when'],
+};
+
+/**
+ * Corpo do POST /internal/team-whatsapp/dispatches/preview (C4). Só alvo
+ * setor (alvo pessoa → 400) e sempre com finalidade. Aceita texto vazio e
+ * seleção vazia (as travas voltam como lista); `audienceKey` é ignorada (só o
+ * limite de 64 do envio vale).
+ */
+export const teamAudienceRequestSchema = z
   .object({
-    channelId: z.string().optional(),
-    text: z
-      .string()
-      .min(1)
-      .max(2000)
-      .refine((s) => s.trim().length > 0, 'Texto vazio'),
-    when: z.enum(['now', 'shift_start']).optional(),
-    target: z.preprocess(
-      targetAliases,
-      z.discriminatedUnion('type', [
-        z.object({ type: z.literal('user'), userId: z.string().min(1) }),
-        sectorTargetSchema,
-      ]),
-    ),
+    ...audienceFields,
+    purpose: teamPurposeSchema,
+    audienceKey: z.string().max(64).optional(),
+    target: z.preprocess(targetAliases, sectorTargetSchema),
   })
-  .refine(
-    (b) =>
-      b.when !== 'shift_start' ||
-      (b.target.type === 'sector' && new Set(b.target.shiftIds).size === 1),
-    {
-      message: "when 'shift_start' exige alvo setor com exatamente um turno",
-      path: ['when'],
-    },
-  );
+  .refine(shiftStartAllowed, shiftStartIssue);
+
+const sendBodySchema = z.object({
+  channelId: z.string().optional(),
+  ...audienceFields,
+  purpose: teamPurposeSchema.optional(),
+  audienceKey: z.string().regex(AUDIENCE_KEY).optional(),
+  target: z.preprocess(
+    targetAliases,
+    z.discriminatedUnion('type', [userTargetSchema, sendSectorTargetSchema]),
+  ),
+});
+
+function issue(ctx: z.RefinementCtx, path: string, message: string): void {
+  ctx.addIssue({ code: 'custom', path: [path], message });
+}
+
+/**
+ * Alvo pessoa não muda (GF1): sem finalidade e com texto não vazio (400).
+ * Alvo setor exige a finalidade e a impressão do público da prévia; texto
+ * vazio passa e vira a trava 422 `empty_text` (DF7).
+ */
+function sendRules(b: z.output<typeof sendBodySchema>, ctx: z.RefinementCtx) {
+  if (b.target.type === 'user') {
+    if (b.purpose !== undefined)
+      issue(ctx, 'purpose', 'Envio a uma pessoa não tem finalidade');
+    if (b.text.trim().length === 0) issue(ctx, 'text', 'Texto vazio');
+    return;
+  }
+  if (b.purpose === undefined)
+    issue(ctx, 'purpose', 'Envio para setor exige a finalidade');
+  if (b.audienceKey === undefined)
+    issue(ctx, 'audienceKey', 'Envio para setor exige a impressão da prévia');
+}
+
+/**
+ * Corpo do POST /internal/team-whatsapp/dispatches: os campos da prévia, com
+ * `audienceKey` (hex de 64) obrigatória no alvo setor. `channelId` é aceito e
+ * ignorado (C3: aba aberta durante o deploy).
+ */
+export const createTeamDispatchSchema = sendBodySchema
+  .superRefine(sendRules)
+  .refine(shiftStartAllowed, shiftStartIssue);
 
 export class CreateTeamDispatchDto extends createZodDto(
   createTeamDispatchSchema,
 ) {}
 export type CreateTeamDispatchInput = z.infer<typeof createTeamDispatchSchema>;
+
+export class PreviewTeamDispatchDto extends createZodDto(
+  teamAudienceRequestSchema,
+) {}
+export type TeamAudienceRequest = z.infer<typeof teamAudienceRequestSchema>;
+export type SectorTargetInput = TeamAudienceRequest['target'];

@@ -39,6 +39,7 @@ test('admin cadastra usuário com telefone e vê o número formatado na lista', 
   await dialog.getByLabel('Telefone (WhatsApp)').fill(typedPhone);
   await dialog.getByRole('combobox', { name: 'Perfil' }).click();
   await page.getByRole('option', { name: 'Administrador' }).click();
+  await dialog.getByRole('radio', { name: 'Sem autorização registrada' }).click();
 
   const created = page.waitForResponse(
     (r) => r.url().endsWith('/users') && r.request().method() === 'POST',

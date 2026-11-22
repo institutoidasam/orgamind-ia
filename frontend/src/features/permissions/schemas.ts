@@ -3,7 +3,7 @@ import { PERMISSION_KEYS } from './keys';
 
 /**
  * Espelho de `permissionMatrixSchema` (backend/src/schemas/contracts/permissions.schema.ts, CB7).
- * Chave fora das 8 conhecidas derruba a leitura de propósito: tela que grava
+ * Chave fora das 9 conhecidas derruba a leitura de propósito: tela que grava
  * permissão não pode descartar em silêncio o que não entende.
  */
 const permissionKeySchema = z.enum(PERMISSION_KEYS);

@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ExportScheduleMenu } from '@/features/people-export/components/export-schedule-menu';
 import { usePermission } from '@/features/permissions/use-permission';
 import { useScheduleBoard, useScheduleOptions } from '@/features/staff-schedule/api';
 import { ExceptionDialog, type ExceptionTarget } from '@/features/staff-schedule/components/exception-dialog';
@@ -75,6 +76,7 @@ function ScheduleContent({ options }: { options: ScheduleOptions }) {
         <PeriodControls
           mode={mode}
           range={range}
+          sectorId={sectorId}
           onModeChange={setMode}
           onStep={(direction) => setAnchor(stepAnchor(mode, anchor, direction))}
         />
@@ -136,11 +138,12 @@ function SectorField({ sectors, sectorId, onChange }: SectorFieldProps) {
 type PeriodControlsProps = {
   mode: PeriodMode;
   range: { from: string; to: string };
+  sectorId: string | null;
   onModeChange: (mode: PeriodMode) => void;
   onStep: (direction: -1 | 1) => void;
 };
 
-function PeriodControls({ mode, range, onModeChange, onStep }: PeriodControlsProps) {
+function PeriodControls({ mode, range, sectorId, onModeChange, onStep }: PeriodControlsProps) {
   return (
     <div className="flex flex-wrap items-center gap-3">
       <Tabs value={mode} onValueChange={(value) => onModeChange(value as PeriodMode)}>
@@ -160,6 +163,7 @@ function PeriodControls({ mode, range, onModeChange, onStep }: PeriodControlsPro
           <ChevronRight className="size-4" aria-hidden />
         </Button>
       </div>
+      {sectorId && <ExportScheduleMenu sectorId={sectorId} from={range.from} to={range.to} />}
     </div>
   );
 }

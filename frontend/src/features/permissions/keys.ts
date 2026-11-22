@@ -10,15 +10,28 @@ export const PERMISSION_KEYS = [
   'equipe.enviar',
   'equipe.disparo_amplo',
   'trilha.consultar',
+  'pessoas.exportar',
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
 
 export type UserRole = 'ADMIN' | 'SUPERVISOR' | 'OPERATOR' | 'VIEWER';
 
-/** Matriz inicial: ADMIN e VIEWER são fixos (todas / nenhuma) e não passam por ela. */
+/**
+ * Matriz inicial: ADMIN e VIEWER são fixos (todas / nenhuma) e não passam por ela.
+ * SUPERVISOR e OPERATOR listam as chaves uma a uma: chave nova nasce desmarcada
+ * (`pessoas.exportar` é só do administrador até alguém conceder).
+ */
 const DEFAULT_MATRIX = {
-  SUPERVISOR: PERMISSION_KEYS.filter((key) => key !== 'estrutura.manter'),
+  SUPERVISOR: [
+    'pessoas.editar',
+    'pessoas.inativar',
+    'escala.alterar',
+    'telefone.ver_completo',
+    'equipe.enviar',
+    'equipe.disparo_amplo',
+    'trilha.consultar',
+  ],
   OPERATOR: [
     'pessoas.editar',
     'escala.alterar',
@@ -69,6 +82,11 @@ export const PERMISSION_LABELS: Record<PermissionKey, { name: string; descriptio
     name: 'Consultar o histórico das pessoas',
     description:
       'Ver o histórico de alterações das pessoas dos setores que gerencia. A trilha completa é só do administrador.',
+  },
+  'pessoas.exportar': {
+    name: 'Exportar pessoas e escala',
+    description:
+      'Baixar a lista de pessoas e a escala em CSV ou XLSX. Quem não é administrador exporta só os setores que gerencia.',
   },
 };
 

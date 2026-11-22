@@ -7,6 +7,33 @@ import {
   formatAuditValue,
 } from './labels';
 
+describe('rótulos da trilha: planilhas', () => {
+  it('categoria Planilhas e ações Exportou pessoas e Exportou escala', () => {
+    expect(categoryLabel('SPREADSHEET')).toBe('Planilhas');
+    expect(actionLabel('people.export')).toBe('Exportou pessoas');
+    expect(actionLabel('schedule.export')).toBe('Exportou escala');
+  });
+
+  it('campos da exportação com rótulo e valores traduzidos', () => {
+    expect(fieldLabel('format')).toBe('Formato');
+    expect(fieldLabel('statusFilter')).toBe('Situação');
+    expect(fieldLabel('referenceDate')).toBe('Data de referência');
+    expect(fieldLabel('rowCount')).toBe('Linhas');
+    expect(fieldLabel('phoneVisibility')).toBe('Telefone');
+    expect(fieldLabel('periodFrom')).toBe('De');
+    expect(fieldLabel('periodTo')).toBe('Até');
+    expect(formatAuditValue('statusFilter', 'active')).toBe('Ativas');
+    expect(formatAuditValue('statusFilter', 'inactive')).toBe('Inativas');
+    expect(formatAuditValue('statusFilter', 'all')).toBe('Todas');
+    expect(formatAuditValue('phoneVisibility', 'full')).toBe('Completo');
+    expect(formatAuditValue('phoneVisibility', 'masked')).toBe('Mascarado');
+    expect(formatAuditValue('phoneVisibility', 'partial')).toBe('Completo em parte');
+    expect(formatAuditValue('referenceDate', '2026-11-19')).toBe('19/11/2026');
+    expect(formatAuditValue('periodFrom', '2026-11-01')).toBe('01/11/2026');
+    expect(formatAuditValue('periodTo', '2026-11-30')).toBe('30/11/2026');
+  });
+});
+
 describe('rótulos da trilha: permissões por papel', () => {
   it('campo <chave>:<PAPEL> vira "<nome da permissão> (<Papel>)", sem chave nem papel crus', () => {
     expect(fieldLabel('escala.alterar:OPERATOR')).toBe('Alterar a escala (Operador)');

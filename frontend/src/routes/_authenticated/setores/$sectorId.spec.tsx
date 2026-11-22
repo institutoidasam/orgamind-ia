@@ -55,6 +55,10 @@ vi.mock('@/features/internal-admin/api', () => ({
 }));
 vi.mock('@/features/internal-admin/components/sector-form', () => ({ SectorForm: () => <button>Salvar setor</button> }));
 vi.mock('sonner', () => ({ toast: { success: mocks.toastSuccess, error: mocks.toastError } }));
+vi.mock('@/features/people-export/components/export-people-dialog', () => ({
+  ExportPeopleDialog: ({ open, defaultSectorId }: { open: boolean; defaultSectorId?: string }) =>
+    open ? <div role="dialog">{`Exportar pessoas (setor ${defaultSectorId})`}</div> : null,
+}));
 
 import { Route } from './$sectorId';
 
@@ -323,5 +327,35 @@ describe('/setores/$sectorId: adicionar pessoas', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
     await userEvent.setup().click(screen.getByRole('button', { name: 'Adicionar pessoas' }));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+});
+
+describe('/setores/$sectorId: botão Exportar', () => {
+  beforeEach(() => {
+    mocks.role = 'SUPERVISOR';
+  });
+  const headerOf = () => screen.getByRole('heading', { name: 'Produção.' }).closest('header') as HTMLElement;
+
+  it('Exportar aparece no cabeçalho para quem tem pessoas.exportar e abre com o setor da página', async () => {
+    mocks.permissions = ['pessoas.exportar'];
+    render(<route.component />);
+
+    await userEvent.setup().click(buttonIn(headerOf(), 'Exportar'));
+
+    expect(screen.getByRole('dialog')).toHaveTextContent('Exportar pessoas (setor s1)');
+  });
+
+  it('Exportar não aparece sem pessoas.exportar', () => {
+    mocks.permissions = [];
+    render(<route.component />);
+    expect(within(headerOf()).queryByRole('button', { name: 'Exportar' })).not.toBeInTheDocument();
+  });
+
+  it('em setor que não gerencia (pessoas 403) não mostra Exportar, mesmo com a chave', () => {
+    mocks.permissions = ['pessoas.exportar', 'estrutura.manter'];
+    mocks.people.mockReturnValue({ data: undefined, isError: true, error: forbidden() });
+    render(<route.component />);
+    expect(screen.getByRole('heading', { name: 'Produção.' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Exportar' })).not.toBeInTheDocument();
   });
 });

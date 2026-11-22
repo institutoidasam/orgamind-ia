@@ -2,6 +2,8 @@ import type { ConversationSummary } from '../schemas';
 import { initials } from '@/lib/initials';
 import { instanceColor } from '../instance-color';
 import { ProviderBadge } from '@/features/whatsapp/provider-scope';
+import { assigneeLabel, situationOf } from '../situation';
+import { SituationBadge } from './situation-badge';
 
 function timeShort(iso: string | null): string {
   if (!iso) return '';
@@ -61,11 +63,11 @@ export function ConversationRow({
         </span>
         <span className="flex items-center justify-between gap-2">
           <span className="truncate text-xs" style={{ color: 'var(--foreground-muted)' }}>{c.lastMessagePreview ?? ''}</span>
-          <span className="flex shrink-0 items-center gap-1.5">
+          <span className="flex shrink-0 items-center gap-1.5"><SituationBadge situation={situationOf(c)} />
             {c.assignedUserId ? (
               <span
                 data-testid="assignee-badge"
-                title={c.assignedUserName ?? undefined}
+                title={assigneeLabel(c.assignedUserName, c.assignedUserActive) ?? undefined}
                 className="grid size-4 place-items-center rounded-full text-[8px] font-bold"
                 style={{ background: 'var(--brand-primary)', color: 'var(--surface)' }}
               >

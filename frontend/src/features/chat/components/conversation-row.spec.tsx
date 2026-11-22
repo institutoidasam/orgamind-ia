@@ -20,6 +20,14 @@ const base: ConversationSummary = {
   unreadCount: 0,
 };
 
+describe('ConversationRow atendente inativo (K1-8)', () => {
+  it('o título das iniciais mostra "(inativo)", como no cabeçalho', () => {
+    const c = { ...base, assignedUserId: 'u9', assignedUserName: 'Ana Lima', assignedUserActive: false };
+    render(<ConversationRow c={c} active={false} onClick={vi.fn()} />);
+    expect(screen.getByTestId('assignee-badge')).toHaveAttribute('title', 'Ana Lima (inativo)');
+  });
+});
+
 describe('ConversationRow instance badge', () => {
   it('shows the instance name when showInstanceBadge is true', () => {
     render(<ConversationRow c={base} active={false} showInstanceBadge onClick={vi.fn()} />);

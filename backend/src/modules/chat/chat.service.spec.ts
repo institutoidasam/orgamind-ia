@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mockDeep, type MockProxy } from 'vitest-mock-extended';
 import { ChatService } from './chat.service';
 import { ChatRepository } from './chat.repository';
@@ -7,6 +7,10 @@ import { WhatsappProvidersService } from '../whatsapp-providers/whatsapp-provide
 import { PrismaService } from '../../shared/prisma/prisma.service';
 import { AuditService } from '../../shared/audit/audit.service';
 import { WhatsappSendError } from '../whatsapp-providers/errors/whatsapp.errors';
+
+vi.mock('./conversation-claim', () => ({
+  claimForReply: vi.fn().mockResolvedValue({ changed: false }),
+}));
 
 const conv = {
   id: 'c1',

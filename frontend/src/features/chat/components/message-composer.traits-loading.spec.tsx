@@ -8,6 +8,9 @@ vi.mock('../api', () => ({
   useSendReply: () => ({ mutateAsync: sendMutate, isPending: false, isError: false }),
   useTyping: () => ({ mutate: typingMutate }),
   useSendMedia: () => ({ mutateAsync: sendMediaMutate, isPending: false, isError: false }),
+  // Trava por outro atendente (K1): sem conversa carregada o compositor fica livre.
+  useConversation: () => ({ data: undefined, dataUpdatedAt: 0 }),
+  useAssignConversation: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 // O ESTADO SEM COBERTURA até aqui: `provider` DEFINIDO e `info === undefined`.

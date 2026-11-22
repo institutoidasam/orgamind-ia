@@ -9,6 +9,10 @@ import { ConsentAction, ConsentSource, Prisma } from '@prisma/client';
 import { ConsentService } from '../consent/consent.service';
 import { OptInLinkService } from '../consent/optin-link.service';
 
+vi.mock('./conversation-inbound', () =>
+  vi.importActual('./conversation-inbound.test-fixtures'),
+);
+
 const inbound = (over: Partial<InboundChatMessage> = {}): InboundChatMessage => ({
   providerMessageId: 'IN1', remoteJid: '5592999999999@s.whatsapp.net', phoneE164: '+5592999999999',
   isGroup: false, fromMe: false, pushName: 'Maria', kind: 'TEXT', text: 'Olá', receivedAt: new Date(), transcript: null, ...over,

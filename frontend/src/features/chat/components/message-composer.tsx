@@ -5,10 +5,13 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import type { ChannelProvider } from '@/features/whatsapp/api';
 import { useProviderInfo } from '@/features/whatsapp/api';
-import { DISABLED_PROVIDER_LABEL, isEnabledProvider } from '@/features/whatsapp/disabled-provider';
-import { PROVIDER_LABEL } from '@/features/whatsapp/provider-scope';
+import { isEnabledProvider } from '@/features/whatsapp/disabled-provider';
 import { readApiErrorBody } from '@/lib/api-error';
 import { useSendReply, useTyping, useSendMedia } from '../api';
+import { AssigneeLockBanner } from './assignee-lock-banner';
+import { providerDisabledNotice } from './provider-notice-text';
+import { ProviderNotices } from './provider-notices';
+import { useAssigneeLock, type AssigneeLock } from './use-assignee-lock';
 
 export type ReplyTarget = { waMessageId: string; preview: string } | null;
 
@@ -22,11 +25,6 @@ export function formatWindowRemaining(ms: number): string {
   const h = Math.floor(totalMin / 60);
   const m = totalMin % 60;
   return h > 0 ? `${h}h ${m}min` : `${m}min`;
-}
-
-/** Aviso de canal de integração desligada (GC11). */
-function providerDisabledNotice(provider: ChannelProvider): string {
-  return `Este número usa uma integração desligada (${DISABLED_PROVIDER_LABEL[provider]}). Para responder, conecte um número Evolution em Conexões.`;
 }
 
 /**
@@ -122,20 +120,88 @@ function useProviderGate(provider: ChannelProvider | undefined, twilioWindowExpi
   };
 }
 
+type SendKind = 'send' | 'media';
+
+/**
+ * Falhas de envio do composer. Toda falha é classificada antes de ser exibida
+ * (o corpo do erro só se lê de forma assíncrona, GK10): o 409
+ * `chat.assigned_to_other` trava o composer (K1-6) e o 409 de canal desligado
+ * tem texto próprio. Enquanto `checking[kind]` está ligado o aviso genérico
+ * "Falha ao enviar" espera, então nenhum dos dois o mostra, nem por um frame.
+ */
+function useSendFailures(lock: AssigneeLock, disabledProvider: ChannelProvider | null) {
+  const [blockedMessage, setBlockedMessage] = useState<string | null>(null);
+  const [checking, setChecking] = useState<Record<SendKind, boolean>>({ send: false, media: false });
+  const mark = (kind: SendKind, on: boolean) => setChecking((c) => ({ ...c, [kind]: on }));
+
+  /** Roda o envio; true = deu certo. A falha fica no estado da mutação, sem rejeitar. */
+  async function attempt(kind: SendKind, mutation: { reset: () => void }, run: () => Promise<unknown>): Promise<boolean> {
+    setBlockedMessage(null);
+    mark(kind, true);
+    try {
+      await run();
+      return true;
+    } catch (err) {
+      if (!(await lock.trap(err, mutation))) {
+        setBlockedMessage(await providerDisabledMessage(err, providerDisabledFallback(disabledProvider)));
+      }
+      return false;
+    } finally {
+      mark(kind, false);
+    }
+  }
+  return { blockedMessage, checking, attempt };
+}
+
+/**
+ * Indicador "digitando" para o contato. Com o composer travado (`quiet`:
+ * conversa de outro atendente ou 409 local, K1-6) não sai "composing": quem
+ * não pode responder não aparece digitando. "paused" continua saindo para
+ * derrubar um "composing" que já estava no ar.
+ */
+function useTypingIndicator(conversationId: string, quiet: boolean) {
+  const typing = useTyping(conversationId);
+  const lastTyping = useRef(0);
+  // Tracks whether a 'composing' indicator is currently outstanding so we only
+  // emit 'paused' when there's something to pause (avoids spamming the wire).
+  const composing = useRef(false);
+
+  function paused() {
+    if (!composing.current) return;
+    composing.current = false;
+    lastTyping.current = 0;
+    typing.mutate('paused');
+  }
+
+  function typed(v: string) {
+    const now = Date.now();
+    if (v && !quiet && now - lastTyping.current > 2500) {
+      lastTyping.current = now;
+      composing.current = true;
+      typing.mutate('composing');
+    }
+    // Clearing the box stops typing — let the contact's "typing…" indicator drop.
+    if (!v) paused();
+  }
+  return { typed, paused };
+}
+
 /**
  * Linhas de estado abaixo da caixa de texto. O texto do 409 de canal desligado
- * (`blockedMessage`) substitui os avisos genéricos de falha.
+ * (`blockedMessage`) substitui os avisos genéricos de falha; falha ainda em
+ * classificação (`checking`) não mostra o genérico.
  */
-function SendStatus({ mediaPending, mediaError, sendError, blockedMessage }: {
+function SendStatus({ mediaPending, mediaError, sendError, blockedMessage, checking }: {
   mediaPending: boolean; mediaError: boolean; sendError: boolean; blockedMessage: string | null;
+  checking: Record<SendKind, boolean>;
 }) {
   const failedColor = { color: 'var(--st-failed-fg)' };
   return (
     <>
       {mediaPending ? <p className="px-4 pb-2 text-xs" style={{ color: 'var(--foreground-muted)' }}>Enviando arquivo…</p> : null}
       {blockedMessage ? <p data-testid="provider-disabled-send-error" role="alert" className="px-4 pb-2 text-xs" style={failedColor}>{blockedMessage}</p> : null}
-      {mediaError && !blockedMessage ? <p className="px-4 pb-2 text-xs" style={failedColor}>Falha ao enviar o arquivo. Tente novamente.</p> : null}
-      {sendError && !blockedMessage ? <p className="px-4 pb-2 text-xs" style={failedColor}>Falha ao enviar. Tente novamente.</p> : null}
+      {mediaError && !checking.media && !blockedMessage ? <p className="px-4 pb-2 text-xs" style={failedColor}>Falha ao enviar o arquivo. Tente novamente.</p> : null}
+      {sendError && !checking.send && !blockedMessage ? <p className="px-4 pb-2 text-xs" style={failedColor}>Falha ao enviar. Tente novamente.</p> : null}
     </>
   );
 }
@@ -169,9 +235,7 @@ export function MessageComposer({ conversationId, reply, onClearReply, provider,
 }) {
   const [text, setText] = useState('');
   const send = useSendReply(conversationId);
-  const typing = useTyping(conversationId);
   const sendMedia = useSendMedia(conversationId);
-  const lastTyping = useRef(0);
   const fileRef = useRef<HTMLInputElement>(null);
   const disabledNoticeId = useId();
 
@@ -179,49 +243,29 @@ export function MessageComposer({ conversationId, reply, onClearReply, provider,
     disabledProvider, providerInfoUnknown, providerRestricted, hasSessionWindow,
     windowOpen, windowExpiry, now, sessionWindowClosed, restricted, attachRestricted,
   } = useProviderGate(provider, twilioWindowExpiresAt);
-  const [blockedMessage, setBlockedMessage] = useState<string | null>(null);
-
-  // Tracks whether a 'composing' indicator is currently outstanding so we only
-  // emit 'paused' when there's something to pause (avoids spamming the wire).
-  const composing = useRef(false);
-
-  function emitPaused() {
-    if (!composing.current) return;
-    composing.current = false;
-    lastTyping.current = 0;
-    typing.mutate('paused');
-  }
+  const lock = useAssigneeLock(conversationId);
+  const attachOff = attachRestricted || lock.locked;
+  const typing = useTypingIndicator(conversationId, lock.locked);
+  const failures = useSendFailures(lock, disabledProvider);
 
   function onChange(v: string) {
     if (restricted) return;
     setText(v);
-    const now = Date.now();
-    if (v && now - lastTyping.current > 2500) {
-      lastTyping.current = now;
-      composing.current = true;
-      typing.mutate('composing');
-    }
-    // Clearing the box stops typing — let the contact's "typing…" indicator drop.
-    if (!v) emitPaused();
+    typing.typed(v);
   }
 
   async function submit() {
-    if (restricted) return;
+    if (restricted || lock.locked) return;
     const t = text.trim();
     if (!t || send.isPending) return;
-    setBlockedMessage(null);
-    try {
-      await send.mutateAsync({ text: t, quotedWaMessageId: reply?.waMessageId, quotedPreview: reply?.preview });
-    } catch (err) {
-      // Falha já exibida: erro inline via send.isError (ou o texto do 409 de
-      // canal desligado) e, no 409 de janela fechada, toast + refetch da
-      // conversa (useSendReply.onError). Mantém o texto digitado para o
-      // operador não perdê-lo.
-      setBlockedMessage(await providerDisabledMessage(err, providerDisabledFallback(disabledProvider)));
-      return;
-    }
+    // Falha exibida só depois de classificada (useSendFailures): erro inline
+    // via send.isError, o texto do 409 de canal desligado ou a trava do 409 de
+    // conversa de outro; no 409 de janela fechada, toast + refetch da conversa
+    // (useSendReply.onError). Mantém o texto digitado para o operador não perdê-lo.
+    const sent = await failures.attempt('send', send, () => send.mutateAsync({ text: t, quotedWaMessageId: reply?.waMessageId, quotedPreview: reply?.preview }));
+    if (!sent) return;
     setText('');
-    emitPaused();
+    typing.paused();
     onClearReply();
   }
 
@@ -233,21 +277,8 @@ export function MessageComposer({ conversationId, reply, onClearReply, provider,
           <button type="button" onClick={onClearReply} aria-label="Cancelar resposta"><X className="size-3.5" /></button>
         </div>
       ) : null}
-      {disabledProvider ? (
-        <p id={disabledNoticeId} data-testid="provider-disabled-banner" className="px-4 pt-2 text-xs" style={{ color: 'var(--foreground-muted)' }}>
-          {providerDisabledNotice(disabledProvider)}
-        </p>
-      ) : null}
-      {providerInfoUnknown ? (
-        <p data-testid="provider-traits-loading" className="px-4 pt-2 text-xs" style={{ color: 'var(--foreground-muted)' }}>
-          Carregando…
-        </p>
-      ) : null}
-      {providerRestricted ? (
-        <p data-testid="provider-not-supported-banner" className="px-4 pt-2 text-xs" style={{ color: 'var(--foreground-muted)' }}>
-          Respostas por este canal ainda não estão disponíveis — o envio de texto livre por {PROVIDER_LABEL[provider!]} será liberado em breve.
-        </p>
-      ) : null}
+      <ProviderNotices provider={provider} disabledProvider={disabledProvider} noticeId={disabledNoticeId}
+        infoUnknown={providerInfoUnknown} restricted={providerRestricted} />
       {hasSessionWindow && windowOpen && windowExpiry !== null ? (
         <p data-testid="twilio-window-badge" className="px-4 pt-2 text-xs" style={{ color: 'var(--foreground-muted)' }}>
           Janela fecha em {formatWindowRemaining(windowExpiry - now)}
@@ -263,34 +294,30 @@ export function MessageComposer({ conversationId, reply, onClearReply, provider,
           </Link>
         </div>
       ) : null}
+      {lock.locked ? <AssigneeLockBanner name={lock.name} onAssume={lock.assume} pending={lock.pending} /> : null}
       <div className="flex items-end gap-2 px-4 py-3">
         <input ref={fileRef} type="file" hidden data-testid="chat-file-input"
           onChange={async (e) => {
             const input = e.target;
             const file = input.files?.[0];
-            if (!file || attachRestricted) return;
-            setBlockedMessage(null);
+            if (!file || attachOff) return;
             try {
-              await sendMedia.mutateAsync({ file, caption: text.trim() || undefined });
-              setText('');
-            } catch (err) {
-              // The rejection surfaces via sendMedia.isError below (or the
-              // 409 de canal desligado); swallow it here so it isn't an
-              // unhandled promise rejection.
-              setBlockedMessage(await providerDisabledMessage(err, providerDisabledFallback(disabledProvider)));
+              // The failure surfaces via sendMedia.isError below (or the 409 de
+              // canal desligado, or the lock) — useSendFailures swallows the rejection.
+              if (await failures.attempt('media', sendMedia, () => sendMedia.mutateAsync({ file, caption: text.trim() || undefined }))) setText('');
             } finally {
               // Always reset so the SAME file can be re-selected after a failure
               // (the browser won't re-fire onChange for an unchanged value).
               input.value = '';
             }
           }} />
-        <button type="button" onClick={() => { if (!attachRestricted) fileRef.current?.click(); }} disabled={sendMedia.isPending || attachRestricted} aria-label="Anexar" className="shrink-0" style={{ color: 'var(--foreground-muted)' }}>
+        <button type="button" onClick={() => { if (!attachOff) fileRef.current?.click(); }} disabled={sendMedia.isPending || attachOff} aria-label="Anexar" className="shrink-0" style={{ color: 'var(--foreground-muted)' }}>
           <Paperclip className="size-5" />
         </button>
         <Textarea
           value={text}
           onChange={(e) => onChange(e.target.value)}
-          onBlur={emitPaused}
+          onBlur={typing.paused}
           onPaste={(e) => { if (restricted) e.preventDefault(); }}
           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submit(); } }}
           placeholder="Escreva uma mensagem…"
@@ -299,7 +326,7 @@ export function MessageComposer({ conversationId, reply, onClearReply, provider,
           aria-describedby={disabledProvider ? disabledNoticeId : undefined}
           className="max-h-32 min-h-9 flex-1 resize-none"
         />
-        <Button type="button" onClick={() => void submit()} disabled={!text.trim() || send.isPending || restricted} aria-label="Enviar" aria-describedby={disabledProvider ? disabledNoticeId : undefined}>
+        <Button type="button" onClick={() => void submit()} disabled={!text.trim() || send.isPending || restricted || lock.locked} aria-label="Enviar" aria-describedby={disabledProvider ? disabledNoticeId : undefined}>
           <Send className="size-4" />
         </Button>
       </div>
@@ -307,7 +334,8 @@ export function MessageComposer({ conversationId, reply, onClearReply, provider,
         mediaPending={sendMedia.isPending}
         mediaError={sendMedia.isError}
         sendError={send.isError && !sessionWindowClosed}
-        blockedMessage={blockedMessage}
+        blockedMessage={failures.blockedMessage}
+        checking={failures.checking}
       />
     </div>
   );

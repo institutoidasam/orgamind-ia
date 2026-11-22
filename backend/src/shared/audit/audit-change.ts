@@ -13,7 +13,7 @@ export type AuditChange = {
   action: string;
   entity: string;
   entityId: string | null;
-  category: AuditCategory;
+  category: AuditCategory | null;
   subjectUserId?: string | null;
   reason?: string | null;
   changes: FieldChange[];

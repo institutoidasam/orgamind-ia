@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import type { ConversationSummary } from '../schemas';
 
-// Captura os args com que useConversations é chamado a cada render, para
+// Captura os params com que useConversationList é chamado a cada render, para
 // asserir debounce/filtros. `provider` (5º arg) existe só para provar que a
 // lista NÃO o envia mais (R14: sem filtro de provedor na query).
 const conversationsCalls: Array<{ filter: string; search: string; instanceId?: string; assignee?: string; provider?: string }> = [];
@@ -16,7 +16,7 @@ const fetchNextPageMock = vi.fn();
 vi.mock('../api', () => ({
   // O hook real (query infinita) entrega `data` já achatado via select:
   // { items, total } — o mock devolve a mesma forma.
-  useConversations: (filter: string, search: string, instanceId?: string, assignee?: string, provider?: string) => {
+  useConversationList: ({ filter, search, instanceId, assignee, provider }: { filter: string; search: string; instanceId?: string; assignee?: string; provider?: string }) => {
     conversationsCalls.push({ filter, search, instanceId, assignee, provider });
     return {
       data: { items: conversationsData.items, total: conversationsData.total },

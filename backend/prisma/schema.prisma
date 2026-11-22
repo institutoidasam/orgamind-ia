@@ -1708,12 +1708,14 @@ enum TeamWhatsappTargetType {
 }
 
 // Envio imediato nasce DISPATCHED. Agendado (T8) nasce SCHEDULED e sai daí uma
-// única vez: para DISPATCHED no disparo (T9) ou CANCELLED no cancelamento, ambos
-// por updateMany condicional em state = SCHEDULED.
+// única vez: para DISPATCHED no disparo (T9), CANCELLED no cancelamento ou
+// EXPIRED quando o horário passou sem disparo (Lote G), todos por updateMany
+// condicional em state = SCHEDULED.
 enum TeamWhatsappDispatchState {
   DISPATCHED
   SCHEDULED
   CANCELLED
+  EXPIRED
 }
 
 // SCHEDULED = aguardando o disparo do envio agendado; CANCELLED = o envio foi
@@ -1733,11 +1735,19 @@ enum TeamWhatsappRecipientStatus {
 
 // INACTIVE = usuário inativo ou apagado na hora do disparo agendado (T9).
 // NOT_AUTHORIZED = pessoa sem autorização de contato na montagem ou no disparo.
+// Reconferência do agendado (Lote G): VACATION = de férias no dia; DAY_OFF = de
+// folga no dia; LEFT_SECTOR = saiu do setor do envio; PHONE_CHANGED = o telefone
+// mudou desde a criação; EXPIRED = o horário do envio passou sem disparo.
 enum TeamWhatsappSkipReason {
   NO_PHONE
   SUPPRESSED
   INACTIVE
   NOT_AUTHORIZED
+  VACATION
+  DAY_OFF
+  LEFT_SECTOR
+  PHONE_CHANGED
+  EXPIRED
 }
 
 // Finalidade do envio à equipe (Lote F, CF8). Dispatch sem finalidade
@@ -1818,14 +1828,20 @@ model TeamWhatsappDispatch {
   urgencyReason    String?
   // Regra do público ao enviar (setores, turnos, funções etc.); null = envio antigo.
   audienceRule     Json?
-  // Pessoas tiradas do público pelo autor, só id e motivo, sem nome nem telefone; null = nenhuma ou envio antigo.
+  // Pessoas que ficaram fora do público na criação (id, nome, setor, turno, nível e motivo; sem telefone); null = envio antigo.
   audienceExcluded Json?
   // Política do agendado (Lote G); o F não escreve. null = agendado pela regra antiga.
   schedulePolicy   TeamSchedulePolicy?
+  // Hora em que o agendado foi reconferido no disparo; null = não reconferido (imediato ou envio antigo).
+  recheckedAt        DateTime?
+  // "Entraram depois" do agendado reconferido (id, nome, setor, turno e nível; sem telefone); [] = ninguém; null = não reconferido ou envio antigo.
+  audienceLateJoined Json?
 
   @@index([createdAt])
   @@index([authorId, createdAt])
   @@index([state, scheduledFor])
+  @@index([state, createdAt])
+  @@index([purpose, createdAt])
 }
 
 /// Setor de um envio da equipe (C6/D5). `sectorId` sem FK, como `targetId`: o
@@ -1858,6 +1874,8 @@ model TeamWhatsappRecipient {
   levelName  String?
   status     TeamWhatsappRecipientStatus @default(QUEUED)
   skipReason TeamWhatsappSkipReason?
+  // Telefone da pessoa gravado na criação do envio, para o agendado detectar troca; null = envio antigo.
+  phoneE164  String?
   // Gravado ANTES do envio (fase 1 do processor); a retentativa reaproveita a mesma Message.
   messageId  String?
   errorCode  String?

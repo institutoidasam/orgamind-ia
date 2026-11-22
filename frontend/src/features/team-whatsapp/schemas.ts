@@ -93,6 +93,12 @@ export const teamExclusionReasonSchema = z.enum([
   'not_selected', 'day_off', 'vacation', 'other_sector', 'other_shift', 'no_phone', 'not_authorized', 'suppressed',
 ]);
 
+/**
+ * Situação gravada do envio: DISPATCHED = imediato ou agendado já disparado; SCHEDULED = aguardando;
+ * CANCELLED = cancelado; EXPIRED = agendado que passou da hora (mais de 2 h) e nunca saiu (G5).
+ */
+export const teamDispatchStateSchema = z.enum(['DISPATCHED', 'SCHEDULED', 'CANCELLED', 'EXPIRED']);
+
 /** Política do agendado; nula no F (agendado sem política = regra antiga), o G a preenche. */
 export const teamSchedulePolicySchema = z.enum(['immediate', 'frozen_recheck']);
 
@@ -119,7 +125,8 @@ export const teamAudienceRuleViewSchema = z.object({
   selectedCount: z.number().int().nullable(),
   activity: teamActivitySchema.nullable(),
   urgencyReason: z.string().nullable(),
-  when: z.enum(['now', 'shift_start']),
+  // 'at' = data e hora livres (G1). Envio anterior ao G não grava o momento: o servidor o infere.
+  when: z.enum(['now', 'shift_start', 'at']),
   scheduledFor: z.string().nullable(),
   schedulePolicy: teamSchedulePolicySchema.nullable(),
 });
@@ -221,8 +228,7 @@ export const dispatchListSchema = z.object({
       counts: dispatchCountsSchema,
       // Data da escala; null = envio anterior à foto da escala.
       rosterDate: civilDateSchema.nullable(),
-      // DISPATCHED = imediato ou agendado já disparado; SCHEDULED = aguardando; CANCELLED = cancelado.
-      state: z.enum(['DISPATCHED', 'SCHEDULED', 'CANCELLED']),
+      state: teamDispatchStateSchema,
       // Início do turno do agendado (ISO); null = envio imediato.
       scheduledFor: z.string().nullable(),
       // Hora real do disparo do agendado (ISO); null = imediato ou não disparado.
@@ -237,8 +243,6 @@ export const dispatchListSchema = z.object({
     .array(),
   ...pageMetaShape,
 });
-
-const dispatchStateSchema = z.enum(['DISPATCHED', 'SCHEDULED', 'CANCELLED']);
 
 const channelRefShape = { name: z.string().nullable(), phoneE164: z.string().nullable() };
 
@@ -261,7 +265,7 @@ export const dispatchDetailSchema = z.object({
   id: z.string(),
   targetLabel: z.string(),
   text: z.string(),
-  state: dispatchStateSchema,
+  state: teamDispatchStateSchema,
   createdAt: z.string(),
   scheduledFor: z.string().nullable(),
   firedAt: z.string().nullable(),
@@ -276,6 +280,12 @@ export const dispatchDetailSchema = z.object({
   base: teamAudienceBaseSchema.nullable(),
   rule: teamAudienceRuleViewSchema.nullable(),
   excluded: teamExcludedPersonSchema.array().default([]),
+  // Reconferência do disparo (G3): `at` = hora (ISO), `skipped` = pulados na reconferência, `lateJoined` = quem entrou
+  // no público depois do agendamento e não recebeu (sem telefone). Nulo/ausente = envio não reconferido (imediato,
+  // antigo, cancelado, vencido ou ainda agendado): o servidor antigo não manda a chave.
+  recheck: z
+    .object({ at: z.string(), skipped: z.number().int(), lateJoined: teamAudiencePersonSchema.array() })
+    .nullish(),
 });
 
 /** `GET /internal/team-whatsapp/dispatches/:id/recipients` (C5): uma página de destinatários. */
@@ -288,8 +298,11 @@ export const dispatchRecipientPageSchema = z.object({
       levelName: z.string().nullable(),
       shiftName: z.string().nullable(),
       status: recipientStatusSchema,
-      // `skipReason ?? errorCode`: 'NO_PHONE' | 'SUPPRESSED' | 'INACTIVE' | 'NOT_AUTHORIZED' ou o código da falha.
+      // `skipReason ?? errorCode`: 'NO_PHONE' | 'SUPPRESSED' | 'INACTIVE' | 'NOT_AUTHORIZED' | 'VACATION' | 'DAY_OFF' |
+      // 'LEFT_SECTOR' | 'PHONE_CHANGED' | 'EXPIRED' ou o código da falha.
       reason: z.string().nullable(),
+      // Telefone gravado na criação, conforme `telefone.ver_completo`; nulo/ausente = não gravado (envio antigo).
+      phone: z.string().nullish(),
       attempts: z.number().int().nonnegative(),
       // null = sem número (pulado antes de escolher o canal).
       channel: z.object(channelRefShape).nullable(),
@@ -314,7 +327,8 @@ export const scheduledListSchema = z.object({
       id: z.string(),
       scheduledFor: z.string(),
       rosterDate: civilDateSchema,
-      shift: shiftSnapshotSchema,
+      // null = agendado em data e hora com vários ou todos os turnos (G1): só `scheduledFor` diz quando sai.
+      shift: shiftSnapshotSchema.nullable(),
       label: z.string(),
       recipientCount: z.number().int(),
       channel: z.object({ id: z.string(), name: z.string() }).nullable(),
@@ -341,6 +355,7 @@ export type DispatchList = z.infer<typeof dispatchListSchema>;
 export type RecipientStatus = z.infer<typeof recipientStatusSchema>;
 export type DispatchCounts = z.infer<typeof dispatchCountsSchema>;
 export type DispatchDetail = z.infer<typeof dispatchDetailSchema>;
+export type TeamDispatchState = z.infer<typeof teamDispatchStateSchema>;
 export type TeamPurpose = z.infer<typeof teamPurposeSchema>;
 export type TeamAudienceBase = z.infer<typeof teamAudienceBaseSchema>;
 export type TeamExclusionReason = z.infer<typeof teamExclusionReasonSchema>;
@@ -353,6 +368,13 @@ export type TeamAudiencePreview = z.infer<typeof teamAudiencePreviewSchema>;
 export type DispatchRecipientPage = z.infer<typeof dispatchRecipientPageSchema>;
 export type DispatchRecipient = DispatchRecipientPage['items'][number];
 export type LeftOutRosterPerson = z.infer<typeof leftOutPersonSchema>;
+/** Filtros do histórico (G5); campo ausente ou vazio não vai na consulta. */
+export type DispatchListFilters = {
+  from?: string;
+  to?: string;
+  purpose?: TeamPurpose;
+  state?: TeamDispatchState;
+};
 /** Corpo do POST retry: algumas pessoas (1..100) ou todas as falhas certas. */
 export type RetryInput = { recipientIds: string[] } | { all: true };
 
@@ -402,8 +424,13 @@ export type SectorTargetInput = {
 /** Campos da finalidade, comuns à prévia e ao envio a setor (CF2). */
 type AudienceFields = {
   text: string;
-  /** Padrão 'now'; 'shift_start' só no Aviso de turno com exatamente um turno (D9). */
-  when?: 'now' | 'shift_start';
+  /**
+   * Padrão 'now'; 'shift_start' só no Aviso de turno com exatamente um turno (D9); 'at' = data e hora livres
+   * (todas as finalidades menos Urgência, só alvo setor), com `at`.
+   */
+  when?: 'now' | 'shift_start' | 'at';
+  /** Obrigatório com `when: 'at'` e proibido sem ele (400): `time` em HH:mm, no fuso de Manaus. */
+  at?: { date: string; time: string };
   /** Obrigatória com alvo setor; proibida com alvo pessoa (400). */
   purpose?: TeamPurpose;
   /** Ausente = a fixa ou padrão da finalidade. */

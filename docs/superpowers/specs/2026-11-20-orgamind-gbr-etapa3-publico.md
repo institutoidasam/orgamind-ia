@@ -197,9 +197,24 @@ Lista fixa (matriz do caderno, C184-217):
 - **Turno noturno:** continua pertencendo à data em que começa (C728).
 - **Urgência:** só "agora", base em serviço, sem folga, uma data por envio (turno noturno de ontem e turno de dia de hoje são dois envios); lista de motivos é texto livre (o caderno não traz lista).
 - **Agendamento:** até 30 dias à frente; mensagem de atividade precisa sair antes do início dela.
-- **Rascunho:** só na tela, não fica guardado.
+- **Rascunho:** só na tela, não fica guardado. Fechar a janela de envio não perde o texto; sair da página perde; envio aceito limpa (Lote G).
 - **Envio direto a uma pessoa sem finalidade** (fechamento do Lote F): continua sem finalidade e sem base, e o histórico o mostra como antes; vale decidir se a finalidade também deve ser pedida nesse envio.
 - **Marcado que ficou de fora** (fechamento do Lote F): aparece em "Marcados que ficam de fora", só para desmarcar, e também no grupo do motivo em "Ficam de fora".
+
+- **Decisões do Lote G que mudam o que a GBR vê** (tomadas na implementação, provisórias):
+  - **Autor desativado ou sem permissão antes do disparo:** o agendado sai mesmo assim, como antes. Cancelar os agendados de quem foi desativado seria outra funcionalidade.
+  - **Troca de nível depois do agendamento:** quem saiu do nível escolhido é pulado como "Saiu do setor ou turno" (a lista tem só quatro motivos).
+  - **Telefone apagado depois da criação:** a pessoa é pulada como "Sem telefone", não como "Telefone mudou depois da criação do envio". O efeito é o mesmo: não recebe e o "Repetir" não a pega.
+  - **"Ninguém recebeu"** aparece na lista e no detalhe, mas não é opção do filtro "Situação", que filtra o estado gravado (Agendado, Enviado, Cancelado, Não enviado: passou da hora).
+  - **"Repetir" não reconfere a regra, só o telefone.** Tensão com o anti-objetivo de férias: **"Repetir" dias depois pode chegar a quem entrou de férias depois do disparo.** Vale decidir se o "Repetir" também deve reconferir férias e folga.
+  - **Agendado vencido com o sistema de envio parado:** a tela já mostra "Não enviado: passou da hora" quando passam 2 horas da hora marcada; o filtro "Situação" só o mostra em "Não enviado" quando o sistema volta e grava o vencimento.
+  - **Textos novos:** "A data e a hora do envio já passaram."; "O envio pode ser agendado para até 30 dias à frente."; "A mensagem precisa sair antes do início da atividade."; motivos "Férias", "Folga", "Saiu do setor ou turno", "Inativa", "Telefone mudou depois da criação do envio", "Não enviado: passou da hora"; política "Lista conferida agora; no disparo, quem deixar de se enquadrar é pulado e ninguém é acrescentado" e, para agendados antigos, "Regra anterior: sai para a lista da criação, sem reconferência".
+
+## Requisito de ambiente de produção (Lote G)
+
+- O disparo de um agendado reconferido segura **duas conexões** do banco ao mesmo tempo (a transação do disparo e a leitura das pessoas). O worker divide o pool do Prisma com o envio da equipe (concorrência 2) e com os demais processadores. O pool padrão do Prisma é 2×vCPU+1 (5 num servidor de 2 vCPU). Requisito: `connection_limit` da `DATABASE_URL` do worker **≥ 2 (scheduler) + 2 (envio da equipe) + a concorrência efetiva dos demais processadores ativos**. Com o pool esgotado nada é enviado errado: o disparo desfaz tudo e tenta de novo no minuto seguinte, até o teto de 2 horas. Conferir o valor efetivo no ambiente novo antes do deploy, sem expor a credencial.
+
+- **Ordem do deploy:** a migração só acrescenta (valores de enum, colunas que aceitam nulo e dois índices) e é compatível com o código anterior. Mesmo assim, o **worker antigo deve parar antes** de a API nova começar a criar agendados: um worker antigo dispararia um agendado novo sem reconferir e sem conferir o telefone gravado. A tela antiga em cache não conhece a situação "Não enviado: passou da hora" (EXPIRED) e falharia ao ler o histórico até o navegador recarregar; publicar API, worker e tela juntos e, se possível, avisar a equipe para recarregar a página.
 
 ## Aceite
 

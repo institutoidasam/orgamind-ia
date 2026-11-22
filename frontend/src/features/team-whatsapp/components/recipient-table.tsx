@@ -10,8 +10,10 @@ import { Pagination } from '@/features/internal-communications/components/pagina
 import { usePermission } from '@/features/permissions/use-permission';
 import { useDispatchRecipients, useRetryRecipients } from '../api';
 import {
-  apiErrorText, channelLabel, RECIPIENT_STATUS_LABEL, recipientStatusLabel, retryErrorMessage, UNCERTAIN_EXPLANATION,
+  apiErrorText, channelLabel, RECIPIENT_STATUS_LABEL, recipientStatusLabel, retryErrorMessage, SKIP_REASON_LABEL,
+  UNCERTAIN_EXPLANATION,
 } from '../error-messages';
+import { NO_NAME_MATCH_TEXT } from '../name-search';
 import type { DispatchRecipient, RecipientStatus, RetryInput } from '../schemas';
 import { useBackToLastPage } from '../use-back-to-last-page';
 import { PagedError } from './paged-error';
@@ -19,10 +21,23 @@ import { PagedError } from './paged-error';
 const ALL = 'all';
 const STATUSES = Object.keys(RECIPIENT_STATUS_LABEL) as RecipientStatus[];
 
-/** Detalhe além do rótulo: a explicação da incerta e o código da falha (auditoria); o resto não tem. */
+/** Pulado porque o telefone mudou (G4): não é repetível, o caminho é um envio novo. */
+const PHONE_CHANGED_HINT = 'Para avisar essa pessoa, crie um envio novo.';
+
+/** Detalhe além do rótulo: a explicação da incerta, o código da falha (auditoria) e a dica do telefone trocado. */
 function reasonText({ status, reason }: DispatchRecipient): string {
   if (status === 'UNCERTAIN') return UNCERTAIN_EXPLANATION;
+  if (status === 'SKIPPED' && reason === 'PHONE_CHANGED') return PHONE_CHANGED_HINT;
   return (status === 'FAILED' && reason) || '—';
+}
+
+/**
+ * Situação da linha. O pulado por vencimento já diz tudo no motivo ("Não enviado: passou da hora"): sem o prefixo
+ * "Pulado: ", que repetiria a frase.
+ */
+function statusText({ status, reason }: DispatchRecipient): string {
+  if (status === 'SKIPPED' && reason === 'EXPIRED') return SKIP_REASON_LABEL.EXPIRED;
+  return recipientStatusLabel(status, reason);
 }
 
 type RowProps = { item: DispatchRecipient; busy: boolean; onRetry: (item: DispatchRecipient) => void };
@@ -33,7 +48,8 @@ function RecipientRow({ item, busy, onRetry }: RowProps) {
   return (
     <TableRow>
       <TableCell>{item.userName}</TableCell>
-      <TableCell>{recipientStatusLabel(item.status, item.reason)}</TableCell>
+      <TableCell>{item.phone ?? '—'}</TableCell>
+      <TableCell>{statusText(item)}</TableCell>
       <TableCell>{item.channel ? channelLabel(item.channel) : '—'}</TableCell>
       <TableCell>{item.attempts > 0 ? item.attempts : '—'}</TableCell>
       <TableCell className="text-sm">{reasonText(item)}</TableCell>
@@ -75,13 +91,19 @@ function useRetryAction(dispatchId: string) {
   return { run, busy: retry.isPending };
 }
 
-type Props = { dispatchId: string; failedCount: number };
+/** `query` = busca por nome da tela (já com debounce): o servidor filtra pelo nome exibido (DG13). */
+type Props = { dispatchId: string; failedCount: number; query?: string };
 
-/** Destinatários do envio, por nome, com filtro de situação, paginação e `Repetir` nas falhas certas. */
-export function RecipientTable({ dispatchId, failedCount }: Props) {
+/** Destinatários do envio, por nome, com filtro de situação, busca, paginação e `Repetir` nas falhas certas. */
+export function RecipientTable({ dispatchId, failedCount, query }: Props) {
   const [status, setStatus] = useState<RecipientStatus | undefined>(undefined);
   const [page, setPage] = useState(1);
-  const recipients = useDispatchRecipients(dispatchId, { status, page });
+  const [seenQuery, setSeenQuery] = useState(query);
+  if (seenQuery !== query) {
+    setSeenQuery(query);
+    setPage(1);
+  }
+  const recipients = useDispatchRecipients(dispatchId, { status, page, q: query });
   const { run, busy } = useRetryAction(dispatchId);
   const canRetry = usePermission('equipe.enviar');
   const { data } = recipients;
@@ -104,6 +126,7 @@ export function RecipientTable({ dispatchId, failedCount }: Props) {
         <RecipientRows
           items={data.items}
           busy={busy}
+          searching={(query ?? '').trim() !== ''}
           onRetry={(item) => run({ recipientIds: [item.id] })}
           paging={{ page, pageSize: data.pageSize, total: data.total, onPageChange: setPage }}
         />
@@ -115,13 +138,15 @@ export function RecipientTable({ dispatchId, failedCount }: Props) {
 type RowsProps = {
   items: DispatchRecipient[];
   busy: boolean;
+  searching: boolean;
   onRetry: (item: DispatchRecipient) => void;
   paging: { page: number; pageSize: number; total: number; onPageChange: (page: number) => void };
 };
 
-function RecipientRows({ items, busy, onRetry, paging }: RowsProps) {
+function RecipientRows({ items, busy, searching, onRetry, paging }: RowsProps) {
   if (items.length === 0) {
-    return <p className="text-sm text-muted-foreground">Nenhum destinatário nesta situação.</p>;
+    const emptyText = searching ? NO_NAME_MATCH_TEXT : 'Nenhum destinatário nesta situação.';
+    return <p className="text-sm text-muted-foreground">{emptyText}</p>;
   }
   return (
     <div className="space-y-3">
@@ -129,8 +154,8 @@ function RecipientRows({ items, busy, onRetry, paging }: RowsProps) {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Nome</TableHead><TableHead>Situação</TableHead><TableHead>Número</TableHead>
-              <TableHead>Tentativas</TableHead><TableHead>Motivo</TableHead>
+              <TableHead>Nome</TableHead><TableHead>Telefone usado</TableHead><TableHead>Situação</TableHead>
+              <TableHead>Número</TableHead><TableHead>Tentativas</TableHead><TableHead>Motivo</TableHead>
               <TableHead><span className="sr-only">Ações</span></TableHead>
             </TableRow>
           </TableHeader>

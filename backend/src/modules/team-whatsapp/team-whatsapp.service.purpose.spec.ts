@@ -289,15 +289,15 @@ describe('envio com finalidade — área do destinatário e agendamento', () => 
     },
   );
 
-  it('início do turno grava schedulePolicy nulo e destinatários SCHEDULED', async () => {
+  it('início do turno grava FROZEN_RECHECK e destinatários SCHEDULED (DG6)', async () => {
     await send(body({ when: 'shift_start' }, { shiftIds: [NOITE.id] }));
     expect(created()).toMatchObject({
       state: 'SCHEDULED',
       scheduledFor: new Date('2026-10-22T02:00:00.000Z'),
       purpose: 'SHIFT_NOTICE',
       roster: null,
+      schedulePolicy: 'FROZEN_RECHECK',
     });
-    expect(created()).not.toHaveProperty('schedulePolicy');
     expect(created().recipients.map((r) => r.status)).toEqual([
       'SCHEDULED',
       'SCHEDULED',

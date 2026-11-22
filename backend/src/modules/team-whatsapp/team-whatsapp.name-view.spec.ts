@@ -271,6 +271,8 @@ const detailRow = (
   audienceRule: null,
   audienceExcluded: null,
   schedulePolicy: null,
+  recheckedAt: null,
+  audienceLateJoined: null,
   author: { id: 'sk', name: NUM },
   sectors: [],
 });

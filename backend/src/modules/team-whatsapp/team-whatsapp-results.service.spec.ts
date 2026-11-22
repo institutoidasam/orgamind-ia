@@ -51,6 +51,8 @@ const detailRow = (
   audienceRule: null,
   audienceExcluded: null,
   schedulePolicy: null,
+  recheckedAt: null,
+  audienceLateJoined: null,
   author: { id: 'm', name: 'Gestor' },
   sectors: [
     { sectorId: 's2', sectorName: 'Vendas' },
@@ -202,6 +204,7 @@ const TOP_DETAIL = {
   base: null,
   rule: null,
   excluded: [],
+  recheck: null,
 };
 
 function primeTopOfScreen(): void {

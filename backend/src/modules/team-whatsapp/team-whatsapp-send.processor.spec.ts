@@ -66,6 +66,7 @@ function makeRecipient(over: Record<string, unknown> = {}) {
     id: 'r1',
     status: 'QUEUED',
     messageId: null,
+    phoneE164: null,
     user: {
       phoneE164: PHONE,
       contact: { id: 'c1', phoneE164: PHONE },
@@ -836,5 +837,115 @@ describe('TeamWhatsappSendProcessor — número do destinatário (D3)', () => {
     ).toEqual(['chA', 'chB']);
     expect(liveState.check.mock.calls).toEqual([[chA], [chB]]);
     expect(repo.countAttempt.mock.calls).toEqual([['r1'], ['r2']]);
+  });
+});
+
+const OLD_PHONE = '+5592991110001';
+/** Destinatário com o telefone gravado na criação do envio (DG7); `user` troca campos do usuário atual. */
+const frozenAt = (
+  phoneE164: string | null,
+  user: Record<string, unknown> = {},
+) =>
+  prisma.teamWhatsappRecipient.findUnique.mockResolvedValue(
+    makeRecipient({
+      phoneE164,
+      user: { ...makeRecipient().user, ...user },
+    }) as never,
+  );
+const skippedAs = (skipReason: string) => ({ status: 'SKIPPED', skipReason });
+const toPhone = (phoneE164: string) =>
+  expect.objectContaining({ phoneE164 }) as unknown;
+
+describe('TeamWhatsappSendProcessor — telefone congelado (pré-checagem)', () => {
+  it('LoadedRecipient traz phoneE164', async () => {
+    await proc.process(makeJob());
+    const [arg] = prisma.teamWhatsappRecipient.findUnique.mock.calls[0];
+    expect((arg as { select: object }).select).toMatchObject({
+      phoneE164: true,
+    });
+  });
+
+  it.each([
+    ['limpo', false, 'AUTORIZADO'],
+    ['suprimido', true, 'AUTORIZADO'],
+    ['sem autorização', false, 'NAO_AUTORIZADO'],
+  ])(
+    'gravado diferente do atual (%s): SKIPPED PHONE_CHANGED, sem Message nem provedor',
+    async (_n, suppressed, contactAuthorization) => {
+      frozenAt(OLD_PHONE, { contactAuthorization });
+      consent.isSuppressed.mockResolvedValue(suppressed);
+      await proc.process(makeJob());
+      expect(lastData()).toEqual(skippedAs('PHONE_CHANGED'));
+      expect(consent.isSuppressed.mock.calls).toHaveLength(0);
+      expect(chat.prepareTeamMessage.mock.calls).toHaveLength(0);
+      expect(chat.sendTeamMessage.mock.calls).toHaveLength(0);
+      expect(acquirePacingLock).not.toHaveBeenCalled();
+    },
+  );
+
+  it('telefone apagado depois da criação: NO_PHONE antes de PHONE_CHANGED', async () => {
+    frozenAt(OLD_PHONE, { phoneE164: null, contact: null });
+    await proc.process(makeJob());
+    expect(lastData()).toEqual(skippedAs('NO_PHONE'));
+    expect(consent.isSuppressed.mock.calls).toHaveLength(0);
+    expect(chat.prepareTeamMessage.mock.calls).toHaveLength(0);
+    expect(chat.sendTeamMessage.mock.calls).toHaveLength(0);
+  });
+});
+
+describe('TeamWhatsappSendProcessor — telefone congelado (destino do envio)', () => {
+  it('gravado igual ao atual: envia para o gravado', async () => {
+    frozenAt(PHONE);
+    await proc.process(makeJob());
+    expect(chat.prepareTeamMessage.mock.calls).toEqual([[toPhone(PHONE)]]);
+    expect(chat.sendTeamMessage.mock.calls).toHaveLength(1);
+    expect(lastData()).toMatchObject({ status: 'SENT' });
+  });
+
+  it('gravado nulo (envio antigo): usa o telefone atual', async () => {
+    frozenAt(null);
+    await proc.process(makeJob());
+    expect(chat.prepareTeamMessage.mock.calls).toEqual([[toPhone(PHONE)]]);
+    expect(lastData()).toMatchObject({ status: 'SENT' });
+  });
+
+  it('usa o sendPhoneOf de recipient-skip: o contato ligado vale por cima do usuário', async () => {
+    frozenAt(PHONE, { phoneE164: OLD_PHONE });
+    await proc.process(makeJob());
+    expect(chat.prepareTeamMessage.mock.calls).toEqual([[toPhone(PHONE)]]);
+    expect(lastData()).toMatchObject({ status: 'SENT' });
+  });
+});
+
+describe('TeamWhatsappSendProcessor — telefone congelado (log)', () => {
+  const spies: MockInstance[] = [];
+  beforeEach(() => {
+    for (const m of ['log', 'warn', 'error', 'debug', 'verbose'] as const) {
+      spies.push(
+        vi.spyOn(Logger.prototype, m).mockImplementation(() => undefined),
+      );
+    }
+  });
+  afterEach(() => spies.splice(0).forEach((s) => s.mockRestore()));
+
+  it('nenhum log, escrita ou erro leva o telefone gravado nem o atual', async () => {
+    frozenAt(OLD_PHONE);
+    await proc.process(makeJob());
+    frozenAt(PHONE);
+    chat.prepareTeamMessage.mockRejectedValue(
+      new Error(`falhou ${OLD_PHONE} ${PHONE}`),
+    );
+    const err = (await proc
+      .process(makeJob(2))
+      .catch((e: unknown) => e)) as Error;
+    expect(err).toBeInstanceOf(Error);
+    expect(spies.some((s) => s.mock.calls.length > 0)).toBe(true);
+    const seen = JSON.stringify([
+      spies.flatMap((s) => s.mock.calls),
+      writes(),
+      [err.name, err.message, err.stack],
+    ]);
+    expect(seen).not.toContain(OLD_PHONE);
+    expect(seen).not.toContain(PHONE);
   });
 });

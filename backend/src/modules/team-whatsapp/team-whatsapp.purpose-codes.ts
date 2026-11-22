@@ -27,10 +27,10 @@ const BASE_TO_DB = {
   assigned: 'ASSIGNED',
 } as const satisfies Record<TeamAudienceBase, DbAudienceBase>;
 
-const POLICY_FROM_DB = {
-  IMMEDIATE: 'immediate',
-  FROZEN_RECHECK: 'frozen_recheck',
-} as const satisfies Record<DbSchedulePolicy, TeamSchedulePolicy>;
+const POLICY_TO_DB = {
+  immediate: 'IMMEDIATE',
+  frozen_recheck: 'FROZEN_RECHECK',
+} as const satisfies Record<TeamSchedulePolicy, DbSchedulePolicy>;
 
 function invert<K extends string, V extends string>(
   map: Record<K, V>,
@@ -42,6 +42,9 @@ function invert<K extends string, V extends string>(
 
 const PURPOSE_FROM_DB = invert<TeamPurpose, DbPurpose>(PURPOSE_TO_DB);
 const BASE_FROM_DB = invert<TeamAudienceBase, DbAudienceBase>(BASE_TO_DB);
+const POLICY_FROM_DB = invert<TeamSchedulePolicy, DbSchedulePolicy>(
+  POLICY_TO_DB,
+);
 
 /**
  * Valor do banco sem entrada no mapa (enum novo sem conversão, dado corrompido):
@@ -76,7 +79,10 @@ export function fromDbBase(db: DbAudienceBase | null): TeamAudienceBase | null {
   return db === null ? null : fromMap(BASE_FROM_DB, db, 'base');
 }
 
-/** Só leitura: o F não escreve `schedulePolicy` (GF13); a ida chega no Lote G. */
+/** Ida da política do agendado (Lote G, DG6): o envio grava a do momento. */
+export const toDbPolicy = (policy: TeamSchedulePolicy): DbSchedulePolicy =>
+  POLICY_TO_DB[policy];
+
 export function fromDbPolicy(db: DbSchedulePolicy): TeamSchedulePolicy;
 export function fromDbPolicy(
   db: DbSchedulePolicy | null,

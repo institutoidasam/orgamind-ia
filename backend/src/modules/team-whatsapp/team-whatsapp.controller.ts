@@ -18,6 +18,7 @@ import {
   CreateTeamDispatchDto,
   PreviewTeamDispatchDto,
 } from './dto/create-team-dispatch.dto';
+import { DispatchListQueryDto } from './dto/dispatch-list-query.dto';
 import { DispatchRecipientsQueryDto } from './dto/dispatch-recipients-query.dto';
 import { PageQueryDto } from './dto/page-query.dto';
 import { PersonRouteQueryDto } from './dto/person-route-query.dto';
@@ -117,10 +118,13 @@ export class TeamWhatsappController {
   @Roles('ADMIN', 'SUPERVISOR', 'OPERATOR')
   @ApiOperation({
     summary:
-      'Histórico de envios, paginado (ADMIN vê todos; os demais, os próprios)',
+      'Histórico de envios, paginado, com filtros de período, finalidade e situação (ADMIN vê todos; os demais, os próprios)',
   })
-  listDispatches(@Query() page: PageQueryDto, @Req() req: AuthRequest) {
-    return this.team.listDispatches(req.user.sub, page);
+  listDispatches(
+    @Query() query: DispatchListQueryDto,
+    @Req() req: AuthRequest,
+  ) {
+    return this.team.listDispatches(req.user.sub, query);
   }
 
   @Get('dispatches/:id')
@@ -137,7 +141,7 @@ export class TeamWhatsappController {
   @Roles('ADMIN', 'SUPERVISOR', 'OPERATOR')
   @ApiOperation({
     summary:
-      'Destinatários de um envio, por nome e paginados, com filtro por situação (mesma visibilidade do detalhe)',
+      'Destinatários de um envio, por nome e paginados, com filtro por situação e busca pelo nome exibido (mesma visibilidade do detalhe)',
   })
   dispatchRecipients(
     @Param('id') id: string,

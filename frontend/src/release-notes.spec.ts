@@ -17,12 +17,24 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+describe('novidade: agendamento do WhatsApp da equipe (Lote G)', () => {
+  it('abre a lista com a entrada 2026.11.20.1 e cobre agendamento, prévia de atividade e envio atrasado', () => {
+    const note = RELEASE_NOTES.find((n) => n.version === '2026.11.20.1');
+    const texts = (note?.items ?? []).map((item) => item.text);
+    expect(RELEASE_NOTES[0]).toBe(note);
+    expect(note?.items.some((item) => item.where === '/whatsapp-equipe')).toBe(true);
+    expect(texts.some((t) => t.includes('30 dias'))).toBe(true);
+    expect(texts.some((t) => t.includes('Preencher com os dados da atividade'))).toBe(true);
+    expect(texts.some((t) => t.includes('passou da hora'))).toBe(true);
+  });
+});
+
 describe('novidade: finalidade do WhatsApp da equipe', () => {
   const note = RELEASE_NOTES.find((n) => n.version === '2026.11.20');
   const texts = (note?.items ?? []).map((item) => item.text);
 
   it('abre a lista, linka a tela de WhatsApp da equipe e diz que férias nunca recebem (sentença 1)', () => {
-    expect(RELEASE_NOTES[0]).toBe(note);
+    expect(note).toBeDefined();
     expect(note?.items.some((item) => item.where === '/whatsapp-equipe')).toBe(true);
     expect(texts.some((t) => t.includes('"Incluir quem está de folga"') && t.includes('não inclui mais quem está de férias'))).toBe(true);
     expect(texts.some((t) => t.includes('Férias nunca recebem'))).toBe(true);

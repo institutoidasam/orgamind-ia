@@ -8,6 +8,26 @@ import {
 const httpError = (status: number, body: object) =>
   new HTTPError(new Response(JSON.stringify(body), { status }), new Request('https://x'), {} as never);
 
+describe('lote G: motivos da reconferência e travas do agendamento livre (CG4, CG9)', () => {
+  it('rótulos dos cinco motivos novos', () => {
+    expect(recipientStatusLabel('SKIPPED', 'VACATION')).toBe('Pulado: Férias');
+    expect(recipientStatusLabel('SKIPPED', 'DAY_OFF')).toBe('Pulado: Folga');
+    expect(recipientStatusLabel('SKIPPED', 'LEFT_SECTOR')).toBe('Pulado: Saiu do setor ou turno');
+    expect(recipientStatusLabel('SKIPPED', 'PHONE_CHANGED'))
+      .toBe('Pulado: Telefone mudou depois da criação do envio');
+    expect(recipientStatusLabel('SKIPPED', 'EXPIRED')).toBe('Pulado: Não enviado: passou da hora');
+  });
+
+  it('schedule_too_far tem texto; schedule_in_past mostra o do servidor (turno ou data e hora), com o fixo de reserva', async () => {
+    expect(teamErrorMessage('team_whatsapp.schedule_too_far')).toBe('O envio pode ser agendado para até 30 dias à frente.');
+    const code = 'team_whatsapp.schedule_in_past';
+    const detail = 'A data e a hora do envio já passaram.';
+    expect(await apiErrorText(httpError(422, { code, detail }), teamErrorMessage)).toBe(detail);
+    expect(await apiErrorText(httpError(422, { code }), teamErrorMessage))
+      .toBe('O início deste turno já passou. Escolha Enviar agora ou outra data.');
+  });
+});
+
 describe('regra do público e travas (CF4)', () => {
   it('audience_changed e as travas têm texto', () => {
     expect(teamErrorMessage('team_whatsapp.audience_changed'))
@@ -134,8 +154,10 @@ describe('contagens e número do resultado', () => {
 describe('rótulos de envio', () => {
   it('traduz o motivo de pulo e fixa a frase de demora', () => {
     expect(SKIP_REASON_LABEL).toEqual({
-      NO_PHONE: 'sem telefone', SUPPRESSED: 'pediu para não receber (SAIR)', INACTIVE: 'Usuário inativo',
-      NOT_AUTHORIZED: 'Contato não autorizado',
+      NO_PHONE: 'sem telefone', SUPPRESSED: 'pediu para não receber (SAIR)', INACTIVE: 'Inativa',
+      NOT_AUTHORIZED: 'Contato não autorizado', VACATION: 'Férias', DAY_OFF: 'Folga',
+      LEFT_SECTOR: 'Saiu do setor ou turno', PHONE_CHANGED: 'Telefone mudou depois da criação do envio',
+      EXPIRED: 'Não enviado: passou da hora',
     });
     expect(PACING_HINT).toMatch(/^Os envios saem aos poucos, no ritmo do canal;/);
   });
@@ -180,7 +202,7 @@ describe('recipientStatusLabel', () => {
     ['CANCELLED', null, 'Cancelado'],
     ['FAILED', 'team_whatsapp.channel_disconnected', 'Falhou: Número desconectado'],
     ['FAILED', 'team_whatsapp.channel_invalid', 'Falhou: Número removido ou inválido'],
-    ['SKIPPED', 'INACTIVE', 'Pulado: Usuário inativo'],
+    ['SKIPPED', 'INACTIVE', 'Pulado: Inativa'],
     ['SKIPPED', 'NO_PHONE', 'Pulado: sem telefone'],
     ['SKIPPED', null, 'Pulado'],
   ] as const)('%s %s', (status, reason, label) => expect(recipientStatusLabel(status, reason)).toBe(label));

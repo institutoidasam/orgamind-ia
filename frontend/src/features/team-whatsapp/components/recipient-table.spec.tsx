@@ -12,13 +12,14 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('@/features/team-whatsapp/api', () => ({
-  useDispatchRecipients: (id: string, args: { status?: string; page: number }) => mocks.recipients(id, args),
+  useDispatchRecipients: (id: string, args: { status?: string; page: number; q?: string }) => mocks.recipients(id, args),
   useRetryRecipients: () => ({ mutateAsync: mocks.retry, isPending: false }),
 }));
 vi.mock('sonner', () => ({ toast: { success: mocks.success, info: mocks.info, error: mocks.error } }));
 
 import { useAuthStore, type AuthUser } from '@/stores/auth.store';
 import type { DispatchRecipient } from '../schemas';
+import { NO_NAME_MATCH_TEXT } from '../name-search';
 import { RecipientTable } from './recipient-table';
 
 // Radix Select (shadcn) usa PointerEvents/scrollIntoView, que o jsdom não tem.
@@ -62,6 +63,44 @@ beforeEach(() => {
   useAuthStore.setState({ user: OPERATOR });
 });
 
+describe('RecipientTable: telefone, pulados da reconferência e busca', () => {
+  it('Telefone usado mostra o gravado ou — quando o envio é antigo', () => {
+    loaded([row({ id: 'a', userName: 'Lia', phone: '+5592991110001' }), row({ id: 'b', userName: 'Teo', phone: null })]);
+    render(<RecipientTable dispatchId="d1" failedCount={0} />);
+    expect(within(rowOf('Lia')).getAllByRole('cell')[1]).toHaveTextContent('+5592991110001');
+    expect(within(rowOf('Teo')).getAllByRole('cell')[1]).toHaveTextContent('—');
+  });
+
+  it('aceite 28: PHONE_CHANGED com a dica de envio novo e sem Repetir (mesmo com permissão)', () => {
+    useAuthStore.setState({ user: { ...OPERATOR, permissions: ['equipe.enviar'] } });
+    loaded([row({ id: 'p', userName: 'Pia', status: 'SKIPPED', reason: 'PHONE_CHANGED', attempts: 0, channel: null })]);
+    render(<RecipientTable dispatchId="d1" failedCount={0} />);
+    expect(rowOf('Pia')).toHaveTextContent('Pulado: Telefone mudou depois da criação do envio');
+    expect(rowOf('Pia')).toHaveTextContent('Para avisar essa pessoa, crie um envio novo.');
+    expect(screen.queryByRole('button', { name: 'Repetir' })).not.toBeInTheDocument();
+  });
+
+  it('pulado da reconferência mostra o motivo; vencido não repete o prefixo "Pulado:"', () => {
+    loaded([
+      row({ id: 'f', userName: 'Fia', status: 'SKIPPED', reason: 'VACATION', attempts: 0, channel: null }),
+      row({ id: 'e', userName: 'Eli', status: 'SKIPPED', reason: 'EXPIRED', attempts: 0, channel: null }),
+    ]);
+    render(<RecipientTable dispatchId="d1" failedCount={0} />);
+    expect(rowOf('Fia')).toHaveTextContent('Pulado: Férias');
+    expect(within(rowOf('Eli')).getAllByRole('cell')[2]).toHaveTextContent(/^Não enviado: passou da hora$/);
+  });
+
+  it('aceite 31: a busca vai como q ao servidor e volta para a página 1', async () => {
+    loaded([ana], 120);
+    const user = userEvent.setup();
+    const { rerender } = render(<RecipientTable dispatchId="d1" failedCount={0} />);
+    await user.click(screen.getByRole('button', { name: 'Próxima' }));
+    expect(mocks.recipients).toHaveBeenLastCalledWith('d1', { status: undefined, page: 2 });
+    rerender(<RecipientTable dispatchId="d1" failedCount={0} query="jose" />);
+    expect(mocks.recipients).toHaveBeenLastCalledWith('d1', { status: undefined, page: 1, q: 'jose' });
+  });
+});
+
 describe('RecipientTable: permissão (DB6, DB10)', () => {
   it('sem equipe.enviar some o Repetir da linha e o Repetir todas, e a falha continua visível', () => {
     useAuthStore.setState({ user: { ...OPERATOR, permissions: ['trilha.consultar'] } });
@@ -81,16 +120,16 @@ describe('RecipientTable: permissão (DB6, DB10)', () => {
 });
 
 describe('RecipientTable: colunas', () => {
-  it('mostra Nome, Situação, Número, Tentativas e Motivo; sem tentativa vira —', () => {
+  it('mostra Nome, Telefone usado, Situação, Número, Tentativas e Motivo; sem tentativa vira —', () => {
     render(<RecipientTable dispatchId="d1" failedCount={2} />);
     const headers = screen.getAllByRole('columnheader').map((h) => h.textContent);
-    expect(headers).toEqual(['Nome', 'Situação', 'Número', 'Tentativas', 'Motivo', 'Ações']);
+    expect(headers).toEqual(['Nome', 'Telefone usado', 'Situação', 'Número', 'Tentativas', 'Motivo', 'Ações']);
     const cells = (name: string) => within(rowOf(name)).getAllByRole('cell').map((c) => c.textContent);
-    expect(cells('Ana').slice(0, 4)).toEqual(['Ana', 'Lido', '+5592999990000', '1']);
-    expect(cells('Bia').slice(0, 5)).toEqual([
-      'Bia', 'Falhou: Número desconectado', '+5592999990000', '3', 'team_whatsapp.channel_disconnected',
+    expect(cells('Ana').slice(0, 5)).toEqual(['Ana', '—', 'Lido', '+5592999990000', '1']);
+    expect(cells('Bia').slice(0, 6)).toEqual([
+      'Bia', '—', 'Falhou: Número desconectado', '+5592999990000', '3', 'team_whatsapp.channel_disconnected',
     ]);
-    expect(cells('Caio').slice(0, 5)).toEqual(['Caio', 'Pulado: sem telefone', '—', '—', '—']);
+    expect(cells('Caio').slice(0, 6)).toEqual(['Caio', '—', 'Pulado: sem telefone', '—', '—', '—']);
   });
 
   it('número removido depois do envio mostra o nome do canal ou Número removido', () => {
@@ -176,5 +215,14 @@ describe('RecipientTable: filtro e páginas', () => {
     rerender(<RecipientTable dispatchId="d1" failedCount={0} />);
     await userEvent.click(await screen.findByRole('button', { name: 'Tentar novamente' }));
     expect(refetch).toHaveBeenCalled();
+  });
+});
+
+describe('RecipientTable: busca por nome sem resultado', () => {
+  it('com termo de busca e lista vazia mostra o vazio da busca, não o do filtro de situação', () => {
+    loaded([]);
+    render(<RecipientTable dispatchId="d1" failedCount={0} query="zzz" />);
+    expect(screen.getByText(NO_NAME_MATCH_TEXT)).toBeInTheDocument();
+    expect(screen.queryByText('Nenhum destinatário nesta situação.')).not.toBeInTheDocument();
   });
 });

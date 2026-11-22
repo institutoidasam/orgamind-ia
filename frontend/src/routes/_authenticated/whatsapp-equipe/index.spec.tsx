@@ -27,14 +27,18 @@ vi.mock('@/features/team-whatsapp/api', () => ({
   useCancelDispatch: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
 vi.mock('@/features/team-whatsapp/components/send-whatsapp-dialog', () => ({
-  SendWhatsappDialog: ({ target, audience, onOpenChange }: {
+  SendWhatsappDialog: ({ target, audience, moment, draft, onOpenChange }: {
     target: unknown; audience: { preview: { audienceKey: string }; isFresh: boolean }; onOpenChange: (open: boolean) => void;
+    moment: { onChange: (moment: unknown) => void }; draft: { text: string; setText: (text: string) => void };
   }) => (
     <>
       <div role="dialog" data-audience-key={audience.preview.audienceKey} data-fresh={String(audience.isFresh)}>
         Diálogo {JSON.stringify(target)}
       </div>
+      <p>Rascunho: {draft.text}</p>
+      <button onClick={() => draft.setText('Oi equipe')}>Escrever no rascunho</button>
       <button onClick={() => onOpenChange(false)}>Fechar diálogo</button>
+      <button onClick={() => moment.onChange({ when: 'at', at: { date: '2026-10-25', time: '09:00' } })}>Escolher data e hora</button>
     </>
   ),
 }));
@@ -496,6 +500,21 @@ describe('WhatsApp da equipe: diálogo com a prévia vista', () => {
   });
 });
 
+describe('WhatsApp da equipe: rascunho do texto no diálogo', () => {
+  it('DG12: a página passa o rascunho ao diálogo; o texto escrito sobrevive a fechar e abrir de novo', async () => {
+    const user = await openProducao('Noite');
+    const sendAll = await screen.findByRole('button', { name: 'Enviar para todos (3)' });
+    await waitFor(() => expect(sendAll).toBeEnabled());
+    await user.click(sendAll);
+    expect(screen.getByText('Rascunho:')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Escrever no rascunho' }));
+    expect(screen.getByText('Rascunho: Oi equipe')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Fechar diálogo' }));
+    await user.click(await screen.findByRole('button', { name: 'Enviar para todos (3)' }));
+    expect(screen.getByText('Rascunho: Oi equipe')).toBeInTheDocument();
+  });
+});
+
 describe('WhatsApp da equipe: seleção limpa com o público', () => {
   it('trocar a data, o turno ou o setor limpa a seleção', async () => {
     const user = await openProducao('Noite');
@@ -652,5 +671,19 @@ describe('WhatsApp da equipe: agendamento', () => {
     expect(screen.getByRole('heading', { name: 'Agendados' })).toBeInTheDocument();
     expect(screen.getByText('21/10 22:00')).toBeInTheDocument();
     expect(screen.getByText(/Agendado 2/)).toBeInTheDocument();
+  });
+});
+
+describe('WhatsApp da equipe: momento ao fechar o diálogo', () => {
+  it('fechar o diálogo volta o momento para Agora: a prévia da lista sai sem when nem at', async () => {
+    const user = await openProducao('Noite');
+    const sendAll = await screen.findByRole('button', { name: 'Enviar para todos (3)' });
+    await waitFor(() => expect(sendAll).toBeEnabled());
+    await user.click(sendAll);
+    await user.click(screen.getByRole('button', { name: 'Escolher data e hora' }));
+    await waitFor(() => expect(lastBody()).toMatchObject({ when: 'at', at: { date: '2026-10-25', time: '09:00' } }));
+    await user.click(screen.getByRole('button', { name: 'Fechar diálogo' }));
+    await waitFor(() => expect(lastBody()).not.toHaveProperty('when'));
+    expect(lastBody()).not.toHaveProperty('at');
   });
 });

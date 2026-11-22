@@ -3,6 +3,7 @@ import { DomainError } from '../../shared/errors/domain.error';
 import {
   BLOCK_TEXT,
   MISSING_ACTIVITY_DATE_TIME_TEXT,
+  SCHEDULE_AT_IN_PAST_TEXT,
   audienceBlock,
   audienceChanged,
   blocked,
@@ -19,6 +20,41 @@ const view = (e: DomainError) => ({
   code: e.code,
   status: e.status,
   message: e.message,
+});
+
+// CF4 + CG4: textos das travas na ordem fixa em que saem.
+const ORDERED_BLOCK_TEXTS = [
+  ['empty_text', 'Escreva a mensagem.'],
+  ['missing_activity', 'Informe a data, a hora e o local da atividade.'],
+  ['missing_urgency_reason', 'Informe o motivo da urgência.'],
+  [
+    'overtime_without_selection',
+    'Marque pelo menos uma pessoa para a hora extra.',
+  ],
+  ['schedule_in_past', 'O início deste turno já passou'],
+  ['schedule_too_far', 'O envio pode ser agendado para até 30 dias à frente.'],
+  [
+    'after_activity_start',
+    'A mensagem precisa sair antes do início da atividade.',
+  ],
+  ['no_recipients', 'Nenhum destinatário válido'],
+  ['sector_without_number', 'Há área sem número neste envio'],
+];
+
+describe('travas de data e hora (CG4)', () => {
+  it('BLOCK_TEXT tem schedule_too_far e o texto de data e hora já passadas', () => {
+    expect(view(blocked(audienceBlock('schedule_too_far')))).toEqual({
+      code: 'team_whatsapp.schedule_too_far',
+      status: 422,
+      message: 'O envio pode ser agendado para até 30 dias à frente.',
+    });
+    expect(audienceBlock('schedule_in_past', SCHEDULE_AT_IN_PAST_TEXT)).toEqual(
+      {
+        code: 'team_whatsapp.schedule_in_past',
+        message: 'A data e a hora do envio já passaram.',
+      },
+    );
+  });
 });
 
 describe('erros da finalidade (CF4)', () => {
@@ -71,22 +107,7 @@ describe('erros da finalidade (CF4)', () => {
 
 describe('textos das travas (CF4), na ordem fixa', () => {
   it('BLOCK_TEXT traz os textos da spec na ordem das travas', () => {
-    expect(Object.entries(BLOCK_TEXT)).toEqual([
-      ['empty_text', 'Escreva a mensagem.'],
-      ['missing_activity', 'Informe a data, a hora e o local da atividade.'],
-      ['missing_urgency_reason', 'Informe o motivo da urgência.'],
-      [
-        'overtime_without_selection',
-        'Marque pelo menos uma pessoa para a hora extra.',
-      ],
-      ['schedule_in_past', 'O início deste turno já passou'],
-      [
-        'after_activity_start',
-        'A mensagem precisa sair antes do início da atividade.',
-      ],
-      ['no_recipients', 'Nenhum destinatário válido'],
-      ['sector_without_number', 'Há área sem número neste envio'],
-    ]);
+    expect(Object.entries(BLOCK_TEXT)).toEqual(ORDERED_BLOCK_TEXTS);
   });
 
   it('as travas que já existiam continuam 422 com o código e o texto de hoje', () => {

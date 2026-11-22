@@ -31,6 +31,41 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.11.20.1',
+    date: '2026-11-20',
+    title: 'WhatsApp da equipe: agendamento, histórico e envio conferido',
+    items: [
+      {
+        text: 'Agora você pode agendar o envio para uma data e hora (até 30 dias à frente). Agendamento não vale para Urgência, e a mensagem da atividade sai antes do início dela.',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'O botão "Preencher com os dados da atividade" copia os dados da atividade para a mensagem. Se os dados da atividade mudarem depois, um aviso aparece para você conferir.',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'O texto que você digitou não se perde se você fechar a janela de envio.',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'Envios agendados saem para a lista que você conferiu. No momento do disparo, quem entrou de férias, de folga, saiu do setor ou do turno, ou foi desativado é pulado, e ninguém é acrescentado. Quando o envio era para todos os aptos, quem passou a se enquadrar depois aparece no histórico do envio, sem receber. Quem você incluiu pela opção "Incluir quem está de folga" continua recebendo, mesmo que a folga seja lançada depois. Envios agendados antes desta versão seguem a regra anterior: saem para a lista da criação.',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'Um envio agendado que não saiu até 2 horas depois da hora marcada não é mais enviado e aparece como "Não enviado: passou da hora".',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'Se a pessoa trocou de telefone depois que o envio foi criado, a mensagem não sai para ela: nem para o número antigo, nem para o novo. Ela aparece como pulada, com "Telefone mudou depois da criação do envio", e o botão "Repetir" também não reenvia.',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'O histórico ganhou filtros por período, finalidade e situação. No detalhe do envio você busca por nome, e a lista mostra a data de referência de cada envio.',
+        where: '/whatsapp-equipe',
+      },
+    ],
+  },
+  {
     version: '2026.11.20',
     date: '2026-11-20',
     title: 'WhatsApp da equipe com finalidade e prévia do público',

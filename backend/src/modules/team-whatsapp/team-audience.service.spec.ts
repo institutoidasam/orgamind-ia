@@ -326,7 +326,8 @@ describe('TeamAudienceService.preview — impressão e painel da regra (CF3, CF7
       urgencyReason: null,
       when: 'now',
       scheduledFor: null,
-      schedulePolicy: null,
+      // DG6: a prévia "agora" mostra a política imediata.
+      schedulePolicy: 'immediate',
     });
   });
 });

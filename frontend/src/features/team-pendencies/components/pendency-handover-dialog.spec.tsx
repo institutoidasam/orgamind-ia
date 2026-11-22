@@ -37,12 +37,16 @@ function mine(id: string, name: string): TeamPendencyItem {
 const label = (name: string) =>
   `${name} · Alerta de 21/11 09:00 · Em tratativa`;
 
-function mockApi(items: TeamPendencyItem[], total = items.length) {
+function mockApi(
+  items: TeamPendencyItem[],
+  total = items.length,
+  truncated = false,
+) {
   get.mockImplementation((url: string) =>
     json(
       url.endsWith("/targets")
         ? TARGETS
-        : { items, total, page: 1, pageSize: 50, sectors: [] },
+        : { items, total, page: 1, pageSize: 50, sectors: [], truncated },
     ),
   );
 }
@@ -213,6 +217,32 @@ describe("PendencyHandoverDialog: lista", () => {
       }),
     ).toBeInTheDocument();
     expect(confirm()).toBeDisabled();
+  });
+});
+
+const TRUNCATED_TEXT =
+  "A lista pode estar incompleta porque há mais de 2.000 pendências abertas. Confira depois se ficou alguma com esta pessoa.";
+
+describe("PendencyHandoverDialog: lista incompleta (truncated)", () => {
+  it("truncated true — avisa que a lista pode estar incompleta", async () => {
+    mockApi([mine("t1", "Pessoa A")], 1, true);
+    open();
+    await screen.findByRole("checkbox", { name: label("Pessoa A") });
+    expect(screen.getByText(TRUNCATED_TEXT)).toBeInTheDocument();
+  });
+
+  it("truncated true sem pendência na lista — o aviso aparece junto do vazio", async () => {
+    mockApi([], 0, true);
+    open();
+    await screen.findByText("Nenhuma pendência em tratativa.");
+    expect(screen.getByText(TRUNCATED_TEXT)).toBeInTheDocument();
+  });
+
+  it("truncated false — sem o aviso", async () => {
+    mockApi([mine("t1", "Pessoa A")], 1, false);
+    open();
+    await screen.findByRole("checkbox", { name: label("Pessoa A") });
+    expect(screen.queryByText(TRUNCATED_TEXT)).not.toBeInTheDocument();
   });
 });
 

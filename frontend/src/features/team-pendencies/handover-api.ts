@@ -102,11 +102,15 @@ export function pendencyHandoverSkipText(
   return text ? text(targetName) : "não foi passada";
 }
 
+const NO_PERMISSION_TEXT =
+  "Você não tem permissão para passar pendências. Fale com um administrador.";
 const ERROR_TEXT: Record<string, string> = {
   "user.not_found":
     "Esta pessoa não pode receber as pendências. Escolha outra.",
   "team_whatsapp.not_handler":
     "Só um administrador pode passar as pendências de outra pessoa.",
+  "team_whatsapp.forbidden": NO_PERMISSION_TEXT,
+  "auth.permission_denied": NO_PERMISSION_TEXT,
 };
 const GENERIC_ERROR_TEXT = "Não foi possível passar o turno. Tente de novo.";
 

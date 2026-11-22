@@ -31,6 +31,33 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.11.20.2',
+    date: '2026-11-20',
+    title: 'WhatsApp da equipe: resultado do envio com hora, conexão e repetições',
+    items: [
+      {
+        text: 'No resultado do envio, cada pessoa mostra a hora em que a situação aconteceu, na coluna "Quando" (dia/mês e hora, no horário de Manaus). Onde não há hora (Na fila, Falhou, Situação incerta, Pulado, Agendado e Cancelado), aparece "—".',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'Embaixo do número, o resultado mostra a hora em que a conexão foi conferida antes de mandar ("conexão conferida às HH:mm:ss"). Envios antigos mostram só o número.',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'A coluna "Tentativas" também diz quantas vezes a pessoa foi repetida pelo botão "Repetir", por exemplo "2 · repetido 1×".',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'Quem fica "Na fila" sem envio em andamento passa sozinho, entre 30 e 35 minutos depois, para "Falhou" (por exemplo "Saiu da fila sem envio"; na maioria dos casos dá para usar o "Repetir"), "Aceito pelo WhatsApp" (se a mensagem saiu) ou "Situação incerta" (se ela pode ter saído). Envio grande que ainda está saindo aos poucos continua "Na fila". O sistema nunca reenvia sozinho.',
+        where: '/whatsapp-equipe',
+      },
+      {
+        text: 'A mensagem que não saiu porque a pessoa foi pulada deixa de aparecer "na fila" no chat.',
+        where: '/whatsapp-equipe',
+      },
+    ],
+  },
+  {
     version: '2026.11.20.1',
     date: '2026-11-20',
     title: 'WhatsApp da equipe: agendamento, histórico e envio conferido',

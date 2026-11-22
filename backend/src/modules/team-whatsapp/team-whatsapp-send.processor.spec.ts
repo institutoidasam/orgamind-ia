@@ -125,6 +125,9 @@ beforeEach(() => {
   prisma.teamWhatsappRecipient.updateMany.mockResolvedValue({
     count: 1,
   });
+  // O pulo (finishSkipped, DH3) grava numa transação sobre este mesmo prisma.
+  prisma.$transaction.mockImplementation(((fn: (tx: unknown) => unknown) =>
+    fn(prisma)) as never);
   chat.prepareTeamMessage.mockResolvedValue({
     messageId: 'm1',
     contactId: 'c1',
@@ -182,7 +185,11 @@ describe('TeamWhatsappSendProcessor — autorização de contato', () => {
     expect(prisma.teamWhatsappRecipient.updateMany.mock.calls).toContainEqual([
       {
         where: { id: 'r1', status: 'QUEUED' },
-        data: { status: 'SKIPPED', skipReason: 'NOT_AUTHORIZED' },
+        data: {
+          status: 'SKIPPED',
+          skipReason: 'NOT_AUTHORIZED',
+          channelCheckedAt: null,
+        },
       },
     ]);
     expect(chat.prepareTeamMessage.mock.calls).toHaveLength(0);
@@ -199,7 +206,11 @@ describe('TeamWhatsappSendProcessor — autorização de contato', () => {
       asUser({ ...user, contactAuthorization: 'NAO_AUTORIZADO' });
       consent.isSuppressed.mockResolvedValue(suppressed);
       await proc.process(makeJob());
-      expect(lastData()).toEqual({ status: 'SKIPPED', skipReason: reason });
+      expect(lastData()).toEqual({
+        status: 'SKIPPED',
+        skipReason: reason,
+        channelCheckedAt: null,
+      });
     },
   );
 });
@@ -221,7 +232,11 @@ describe('TeamWhatsappSendProcessor — pré-checagens', () => {
     expect(prisma.teamWhatsappRecipient.updateMany.mock.calls).toContainEqual([
       {
         where: { id: 'r1', status: 'QUEUED' },
-        data: { status: 'SKIPPED', skipReason: 'SUPPRESSED' },
+        data: {
+          status: 'SKIPPED',
+          skipReason: 'SUPPRESSED',
+          channelCheckedAt: null,
+        },
       },
     ]);
     expect(consent.isSuppressed.mock.calls).toContainEqual([PHONE]);
@@ -242,7 +257,11 @@ describe('TeamWhatsappSendProcessor — pré-checagens (telefone)', () => {
         makeRecipient({ user }) as never,
       );
       await proc.process(makeJob());
-      expect(lastData()).toEqual({ status: 'SKIPPED', skipReason: 'NO_PHONE' });
+      expect(lastData()).toEqual({
+        status: 'SKIPPED',
+        skipReason: 'NO_PHONE',
+        channelCheckedAt: null,
+      });
       expect(chat.prepareTeamMessage.mock.calls).toHaveLength(0);
     },
   );
@@ -276,6 +295,7 @@ describe('TeamWhatsappSendProcessor — pré-checagens (canal)', () => {
     expect(lastData()).toEqual({
       status: 'FAILED',
       errorCode: 'team_whatsapp.channel_invalid',
+      channelCheckedAt: null,
     });
     expectNothingSent();
   });
@@ -288,6 +308,7 @@ describe('TeamWhatsappSendProcessor — pré-checagens (canal)', () => {
       expect(lastData()).toEqual({
         status: 'FAILED',
         errorCode: 'channel.provider_disabled',
+        channelCheckedAt: null,
       });
       expectNothingSent();
     },
@@ -723,6 +744,7 @@ describe('TeamWhatsappSendProcessor — conferência do número (D7)', () => {
       expect(lastData()).toEqual({
         status: 'FAILED',
         errorCode: 'team_whatsapp.channel_disconnected',
+        channelCheckedAt: null,
       });
       expect(chat.prepareTeamMessage.mock.calls).toHaveLength(0);
       expect(repo.countAttempt.mock.calls).toHaveLength(0);
@@ -747,6 +769,7 @@ describe('TeamWhatsappSendProcessor — conferência do número (D7)', () => {
     expect(lastData()).toEqual({
       status: 'FAILED',
       errorCode: 'team_whatsapp.channel_unverified',
+      channelCheckedAt: null,
     });
     expect(chat.prepareTeamMessage.mock.calls).toHaveLength(0);
     expect(chat.sendTeamMessage.mock.calls).toHaveLength(0);
@@ -764,7 +787,7 @@ describe('TeamWhatsappSendProcessor — tentativas (D6)', () => {
       chat.sendTeamMessage.mock.invocationCallOrder[0],
     ];
     expect(order).toEqual([...order].sort((a, b) => a - b));
-    expect(repo.countAttempt.mock.calls).toEqual([['r1']]);
+    expect(repo.countAttempt.mock.calls).toEqual([['r1', ANY_DATE]]);
     expect(lastData()).toEqual({
       status: 'SENT',
       messageId: 'm1',
@@ -779,7 +802,10 @@ describe('TeamWhatsappSendProcessor — tentativas (D6)', () => {
     await expect(proc.process(makeJob(0))).rejects.toThrow();
     withPrior({ status: 'FAILED', errorCode: 'evolution.not_connected' });
     await expect(proc.process(makeJob(1))).rejects.toThrow();
-    expect(repo.countAttempt.mock.calls).toEqual([['r1'], ['r1']]);
+    expect(repo.countAttempt.mock.calls).toEqual([
+      ['r1', ANY_DATE],
+      ['r1', ANY_DATE],
+    ]);
   });
 
   it('prepare grava o contactId devolvido junto com o messageId', async () => {
@@ -836,7 +862,10 @@ describe('TeamWhatsappSendProcessor — número do destinatário (D3)', () => {
       chat.prepareTeamMessage.mock.calls.map(([a]) => a.instanceId),
     ).toEqual(['chA', 'chB']);
     expect(liveState.check.mock.calls).toEqual([[chA], [chB]]);
-    expect(repo.countAttempt.mock.calls).toEqual([['r1'], ['r2']]);
+    expect(repo.countAttempt.mock.calls).toEqual([
+      ['r1', ANY_DATE],
+      ['r2', ANY_DATE],
+    ]);
   });
 });
 
@@ -852,7 +881,11 @@ const frozenAt = (
       user: { ...makeRecipient().user, ...user },
     }) as never,
   );
-const skippedAs = (skipReason: string) => ({ status: 'SKIPPED', skipReason });
+const skippedAs = (skipReason: string) => ({
+  status: 'SKIPPED',
+  skipReason,
+  channelCheckedAt: null,
+});
 const toPhone = (phoneE164: string) =>
   expect.objectContaining({ phoneE164 }) as unknown;
 

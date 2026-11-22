@@ -14,6 +14,7 @@ import {
   UNCERTAIN_EXPLANATION,
 } from '../error-messages';
 import { NO_NAME_MATCH_TEXT } from '../name-search';
+import { attemptsText, connectionCheckedText, recipientWhenText } from '../recipient-tracking';
 import type { DispatchRecipient, RecipientStatus, RetryInput } from '../schemas';
 import { useBackToLastPage } from '../use-back-to-last-page';
 import { PagedError } from './paged-error';
@@ -40,6 +41,17 @@ function statusText({ status, reason }: DispatchRecipient): string {
   return recipientStatusLabel(status, reason);
 }
 
+/** Número e, embaixo, a hora em que a conexão foi conferida antes de mandar (H1); sem a hora, só o número. */
+function ChannelCell({ channel, channelCheckedAt }: Pick<DispatchRecipient, 'channel' | 'channelCheckedAt'>) {
+  if (!channel) return <>—</>;
+  return (
+    <>
+      {channelLabel(channel)}
+      {channelCheckedAt && <span className="block text-xs text-muted-foreground">{connectionCheckedText(channelCheckedAt)}</span>}
+    </>
+  );
+}
+
 type RowProps = { item: DispatchRecipient; busy: boolean; onRetry: (item: DispatchRecipient) => void };
 
 /** Repetir é ação de envio (DB6): sem `equipe.enviar` a linha só informa. */
@@ -50,8 +62,9 @@ function RecipientRow({ item, busy, onRetry }: RowProps) {
       <TableCell>{item.userName}</TableCell>
       <TableCell>{item.phone ?? '—'}</TableCell>
       <TableCell>{statusText(item)}</TableCell>
-      <TableCell>{item.channel ? channelLabel(item.channel) : '—'}</TableCell>
-      <TableCell>{item.attempts > 0 ? item.attempts : '—'}</TableCell>
+      <TableCell>{recipientWhenText(item)}</TableCell>
+      <TableCell><ChannelCell channel={item.channel} channelCheckedAt={item.channelCheckedAt} /></TableCell>
+      <TableCell>{attemptsText(item.attempts, item.manualRetries)}</TableCell>
       <TableCell className="text-sm">{reasonText(item)}</TableCell>
       <TableCell>
         {item.repeatable && canRetry && (
@@ -155,7 +168,8 @@ function RecipientRows({ items, busy, searching, onRetry, paging }: RowsProps) {
           <TableHeader>
             <TableRow>
               <TableHead>Nome</TableHead><TableHead>Telefone usado</TableHead><TableHead>Situação</TableHead>
-              <TableHead>Número</TableHead><TableHead>Tentativas</TableHead><TableHead>Motivo</TableHead>
+              <TableHead>Quando</TableHead><TableHead>Número</TableHead><TableHead>Tentativas</TableHead>
+              <TableHead>Motivo</TableHead>
               <TableHead><span className="sr-only">Ações</span></TableHead>
             </TableRow>
           </TableHeader>

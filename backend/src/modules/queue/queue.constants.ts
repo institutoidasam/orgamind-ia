@@ -73,6 +73,9 @@ export const QUEUE_NAMES = {
   TEAM_WHATSAPP_SEND: 'team-whatsapp.send',
   // Tick de minuto do envio agendado da equipe (T9): dispara os SCHEDULED vencidos.
   TEAM_WHATSAPP_SCHEDULER: 'team-whatsapp.scheduler',
+  // Verificador de destinatários presos da equipe (Lote H): a cada 5 min. Fila
+  // própria para um ciclo lento não atrasar o tick do agendado.
+  TEAM_WHATSAPP_STUCK_RECONCILER: 'team-whatsapp.stuck-reconciler',
 } as const;
 
 /** ZB — um lote de mensagens do orgamind para virar UM broadcast no Zernio. */

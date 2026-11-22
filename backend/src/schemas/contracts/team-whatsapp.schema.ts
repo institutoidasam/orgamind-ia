@@ -512,6 +512,11 @@ export const teamDispatchRecipientPageSchema = z.object({
       // null = não gravado (envio antigo). Opcional só até a T11; a API devolve
       // sempre, nulo quando não há.
       phone: z.string().nullable().optional(),
+      // channelCheckedAt = hora da conferência de conexão (`open`) que liberou
+      // a mensagem (H1); null = sem conferência. manualRetries = repetições
+      // pedidas na tela (H4).
+      channelCheckedAt: z.string().nullable(),
+      manualRetries: countSchema,
     })
     .array(),
   ...pageMetaShape,

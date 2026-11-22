@@ -78,6 +78,8 @@ const recipientRow = (
   deliveredAt: null,
   readAt: null,
   repliedAt: null,
+  channelCheckedAt: null,
+  manualRetries: 0,
   ...over,
 });
 

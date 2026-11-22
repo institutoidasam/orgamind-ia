@@ -310,6 +310,10 @@ export const dispatchRecipientPageSchema = z.object({
       deliveredAt: z.string().nullable(),
       readAt: z.string().nullable(),
       repliedAt: z.string().nullable(),
+      // Hora (ISO) em que a conexão foi conferida antes de mandar (H1); nulo/ausente = sem conferência ou API antiga.
+      channelCheckedAt: z.string().nullish(),
+      // Repetições pedidas na tela (H4); a API antiga não manda a chave.
+      manualRetries: z.number().int().nonnegative().default(0),
       // Decisão do servidor (`isRepeatable`): só falha certa; o front não decide.
       repeatable: z.boolean(),
     })

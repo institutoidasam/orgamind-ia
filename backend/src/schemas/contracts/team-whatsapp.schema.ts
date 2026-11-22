@@ -626,6 +626,14 @@ export const teamAlertPanelSchema = z.object({
       lastReply: alertMessageSchema.nullable(),
       eligible: z.boolean(),
       mayHaveReceived: z.boolean(),
+      // K2-2 (CK9): tratativa encerrada sem mudar o grupo; `byName` nulo = usuário removido.
+      closure: z
+        .object({
+          at: z.string(),
+          byName: z.string().nullable(),
+          reason: z.string(),
+        })
+        .nullable(),
     }),
   ),
   reminders: z.object({

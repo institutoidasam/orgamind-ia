@@ -26,6 +26,7 @@ import { StaffScheduleController } from '../staff-schedule/staff-schedule.contro
 import { TeamWhatsappController } from '../team-whatsapp/team-whatsapp.controller';
 import { TeamAlertController } from '../team-whatsapp/team-alert.controller';
 import { TeamPanoramaController } from '../team-whatsapp/team-panorama.controller';
+import { TeamPendencyController } from '../team-whatsapp/team-pendency.controller';
 import { ShiftsController } from '../shifts/shifts.controller';
 import { LevelsController } from '../levels/levels.controller';
 import { InternalSectorsController } from '../internal-sectors/internal-sectors.controller';
@@ -110,6 +111,20 @@ const PARITY: ParityRow[] = [
     ],
   },
   { controller: TeamPanoramaController, routes: [['GET /panorama', ASO]] },
+  {
+    controller: TeamPendencyController,
+    routes: [
+      ['GET /pendencies', ASO],
+      ['GET /pendency-count', ASO],
+      ['GET /pendencies/:id', ASO],
+      ['GET /pendencies/:id/handlers', ASO],
+      ['POST /pendencies/:id/assume', ASO],
+      ['POST /pendencies/:id/transfer', ASO],
+      ['POST /pendencies/:id/notes', ASO],
+      ['POST /pendencies/:id/close', ASO],
+      ['POST /pendencies/:id/reopen', ASO],
+    ],
+  },
   { controller: ShiftsController, routes: CRUD_A },
   { controller: LevelsController, routes: CRUD_A },
   {

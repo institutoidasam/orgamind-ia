@@ -31,6 +31,24 @@ export type ReleaseNote = {
 
 export const RELEASE_NOTES: readonly ReleaseNote[] = [
   {
+    version: '2026.11.21.3',
+    date: '2026-11-21',
+    title: 'Pendências da equipe',
+    items: [
+      {
+        text: 'Nova tela de pendências da equipe: cada pendência mostra o responsável, o prazo de 60 minutos, as anotações e o encerramento.',
+        where: '/pendencias-equipe',
+      },
+      {
+        text: 'O menu de pendências mostra o número de pendências sem responsável com o prazo de ciência vencido.',
+        where: '/pendencias-equipe',
+      },
+      {
+        text: 'No resultado do alerta, a pessoa cuja tratativa foi encerrada mostra quem encerrou e o motivo, sem mudar de grupo.',
+      },
+    ],
+  },
+  {
     version: '2026.11.21.2',
     date: '2026-11-21',
     title: 'Caixa: situação da conversa e um atendente por vez',
